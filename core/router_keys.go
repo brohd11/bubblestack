@@ -43,7 +43,8 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	}
 
 	// When the output pane holds focus, navigation keys scroll it; everything
-	// else either toggles back or clears.
+	// else either toggles back or clears. Top/Bottom are matched here rather than
+	// left to the viewport's own keymap, which binds neither.
 	if outputOn && ch.outputFocused {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput), MatchKey(k, Keys.Back):
@@ -58,6 +59,12 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 			return Action{}, true
 		case MatchKey(k, Keys.Quit):
 			return Async(tea.Quit), true
+		case MatchKey(k, Keys.Top):
+			ch.Output.GotoTop()
+			return Action{}, true
+		case MatchKey(k, Keys.Bottom):
+			ch.Output.GotoBottom()
+			return Action{}, true
 		}
 		return Async(ch.Output.Update(msg)), true
 	}

@@ -158,6 +158,7 @@ type Output interface {
 	View(focused bool) string          // render (focused ⇒ scroll affordance)
 	Update(msg tea.Msg) tea.Cmd        // handle a key while focused (scrolling)
 	GotoBottom()                       // pin to the newest content
+	GotoTop()                          // pin to the oldest content
 	Log(line string, forceShow bool)
 }
 

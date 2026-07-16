@@ -91,6 +91,7 @@ func (p *LogPane) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (p *LogPane) GotoBottom() { p.vp.GotoBottom() }
+func (p *LogPane) GotoTop()    { p.vp.GotoTop() }
 
 // innerWidth is the text width inside the box (full width minus header-margin parity,
 // side borders, and the 1-col padding on each side).

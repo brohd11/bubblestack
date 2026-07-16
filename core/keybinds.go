@@ -23,10 +23,12 @@ import (
 // since they operate on the reusable list.Model / Item pieces.
 type KeyMap struct {
 	// navigation
-	Up    key.Binding
-	Down  key.Binding
-	Left  key.Binding
-	Right key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Left   key.Binding
+	Right  key.Binding
+	Top    key.Binding // jump to the oldest content (output pane)
+	Bottom key.Binding // jump to the newest content (output pane)
 
 	// actions
 	Select key.Binding
@@ -61,10 +63,12 @@ type KeyMap struct {
 // Up/Down) to rebind everywhere at once. ctrl+c stays a hard-coded hard-quit in
 // the router and is intentionally not represented here.
 var Keys = KeyMap{
-	Up:    key.NewBinding(key.WithKeys("up", "k")),
-	Down:  key.NewBinding(key.WithKeys("down", "j")),
-	Left:  key.NewBinding(key.WithKeys("left", "h")),
-	Right: key.NewBinding(key.WithKeys("right", "l")),
+	Up:     key.NewBinding(key.WithKeys("up", "k")),
+	Down:   key.NewBinding(key.WithKeys("down", "j")),
+	Left:   key.NewBinding(key.WithKeys("left", "h")),
+	Right:  key.NewBinding(key.WithKeys("right", "l")),
+	Top:    key.NewBinding(key.WithKeys("g", "home")),
+	Bottom: key.NewBinding(key.WithKeys("G", "end")),
 
 	Select: key.NewBinding(key.WithKeys("enter", "e")),
 	Back:   key.NewBinding(key.WithKeys("esc", "backspace", "c")),

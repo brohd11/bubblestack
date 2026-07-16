@@ -29,9 +29,11 @@ func (filterScreen) Filtering() bool { return true }
 // exercising the router's output key/layout plumbing without importing components
 // (core ← components forbids it).
 type fakeOutput struct {
-	logs  []string
-	shown bool
-	wrap  bool
+	logs    []string
+	shown   bool
+	wrap    bool
+	tops    int // GotoTop calls
+	bottoms int // GotoBottom calls
 }
 
 func (f *fakeOutput) Log(s string, show bool) { f.logs = append(f.logs, s); f.shown = show }
@@ -43,7 +45,8 @@ func (f *fakeOutput) SetSize(_, _ int)        {}
 func (f *fakeOutput) Height() int             { return 0 }
 func (f *fakeOutput) View(bool) string        { return "OUT" }
 func (f *fakeOutput) Update(tea.Msg) tea.Cmd  { return nil }
-func (f *fakeOutput) GotoBottom()             {}
+func (f *fakeOutput) GotoBottom()             { f.bottoms++ }
+func (f *fakeOutput) GotoTop()                { f.tops++ }
 func (f *fakeOutput) ToggleWrap()             { f.wrap = !f.wrap }
 func (f *fakeOutput) Wrapped() bool           { return f.wrap }
 
@@ -63,6 +66,7 @@ func (p *plainOutput) Height() int             { return 0 }
 func (p *plainOutput) View(bool) string        { return "OUT" }
 func (p *plainOutput) Update(tea.Msg) tea.Cmd  { return nil }
 func (p *plainOutput) GotoBottom()             {}
+func (p *plainOutput) GotoTop()                {}
 
 // fakeStatus is a minimal core.Status for exercising the router's status rendering and
 // auto-clear plumbing without importing components.
@@ -233,6 +237,48 @@ func TestWrapKeyPassesThrough(t *testing.T) {
 	})
 }
 
+// TestOutputJumpKeys checks that every Top/Bottom keycode jumps the focused output pane
+// to the corresponding end. The router matches these itself because the viewport's own
+// keymap binds neither — hence the per-keycode loop rather than one representative key.
+func TestOutputJumpKeys(t *testing.T) {
+	tm := sized(newCoreTestRouter())
+	r := tm.(Router)
+	r.sh.Log("hello") // reveal the pane
+	out := r.sh.Chrome.Output.(*fakeOutput)
+
+	tm = pump(tm, keyMsg(Keys.ToggleOutput.Keys()[0])) // focus it (and pin to bottom)
+
+	for _, k := range Keys.Top.Keys() {
+		out.tops = 0
+		tm = pump(tm, keyMsg(k))
+		if out.tops != 1 {
+			t.Fatalf("%q should jump the focused pane to the top, got %d GotoTop calls", k, out.tops)
+		}
+	}
+	for _, k := range Keys.Bottom.Keys() {
+		out.bottoms = 0
+		tm = pump(tm, keyMsg(k))
+		if out.bottoms != 1 {
+			t.Fatalf("%q should jump the focused pane to the bottom, got %d GotoBottom calls", k, out.bottoms)
+		}
+	}
+}
+
+// TestOutputJumpKeysNeedFocus: the jump keys belong to the focused pane only. Unfocused,
+// the pane is already pinned to the newest line by resize, and g must stay available to
+// the screen below.
+func TestOutputJumpKeysNeedFocus(t *testing.T) {
+	tm := sized(newCoreTestRouter())
+	r := tm.(Router)
+	r.sh.Log("hello") // shown, but not focused
+	out := r.sh.Chrome.Output.(*fakeOutput)
+
+	pump(tm, keyMsg(Keys.Top.Keys()[0]))
+	if out.tops != 0 {
+		t.Fatalf("g must pass through to the screen while the pane is unfocused, got %d GotoTop calls", out.tops)
+	}
+}
+
 // maskScreen is a stub screen that claims the whole canvas via ChromeMasker.
 type maskScreen struct{ stubScreen }
 
@@ -276,6 +322,10 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "home":
+		return tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		return tea.KeyMsg{Type: tea.KeyEnd}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
