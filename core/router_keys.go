@@ -42,6 +42,25 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		}
 	}
 
+	// Mouse capture costs the terminal's own drag-select, which is the only way to copy
+	// a path back out of the log, so it toggles from any screen — like Output/Wrap, and
+	// above the focused branch, whose fall-through would otherwise swallow the key. The
+	// status line reports the trade rather than just the state, since reclaiming
+	// selection is the whole reason to press it.
+	if MatchKey(k, Keys.Mouse) {
+		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
+			r.mouseOn = !r.mouseOn
+			if r.mouseOn {
+				act := SetStatus("mouse on · wheel scrolls")
+				act.Cmd = tea.EnableMouseCellMotion
+				return act, true
+			}
+			act := SetStatus("mouse off · text selection on")
+			act.Cmd = tea.DisableMouse
+			return act, true
+		}
+	}
+
 	// When the output pane holds focus, navigation keys scroll it; everything
 	// else either toggles back or clears. Top/Bottom are matched here rather than
 	// left to the viewport's own keymap, which binds neither.
@@ -118,6 +137,45 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		}
 	}
 	return Action{}, false
+}
+
+// mouse claims a wheel over the output pane — router-owned chrome no screen can see —
+// and leaves every other mouse event to the active screen, which is how a DocScreen's
+// viewport receives it. It returns (act, true) only when it consumed the event.
+//
+// Scrolling the pane also focuses it. That isn't incidental: resize re-pins an
+// unfocused pane to the bottom on every message, so a wheel that scrolled without
+// focusing would snap straight back. Focus already means "the user is reading rather
+// than tailing" here, so the wheel just says so — and the pane's border and legend
+// announce it, with tab/esc returning as they do from a keyboard focus.
+func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
+	if msg.Action != tea.MouseActionPress {
+		return Action{}, false
+	}
+	if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
+		return Action{}, false
+	}
+	if !r.outputVisible() || r.currentMask().Output || !r.inOutput(msg.Y) {
+		return Action{}, false
+	}
+	ch := r.sh.Chrome
+	ch.outputFocused = true
+	return Async(ch.Output.Update(msg)), true
+}
+
+// inOutput reports whether terminal row y falls inside the output box. The box is
+// bottom-anchored chrome — frame stacks the status line, the output box, then the help
+// bar against the bottom edge — so its rows are the Height() sitting above the help.
+// Clamped at 0 because frame pads a short body but doesn't clamp an overflowing one,
+// which would otherwise drift the range negative on a very short terminal.
+func (r Router) inOutput(y int) bool {
+	top := r.Top()
+	last := r.sh.height - r.helpHeightFor(top, r.maskOf(top)) - 1
+	first := last - r.sh.Chrome.Output.Height() + 1
+	if first < 0 {
+		first = 0
+	}
+	return y >= first && y <= last
 }
 
 // switchTab moves the active tab by delta (wrapping), but only at the root — when

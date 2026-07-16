@@ -46,6 +46,7 @@ type KeyMap struct {
 	ToggleOutput key.Binding // focus/unfocus the output pane for scrolling
 	Output       key.Binding // show/hide the output box
 	Wrap         key.Binding // toggle the output pane's wrap render mode (optional Wrapper)
+	Mouse        key.Binding // toggle mouse capture; off restores terminal text selection
 	Clear        key.Binding
 	Unwind       key.Binding
 	Refresh      key.Binding // reload all views; action is consumer-supplied
@@ -82,6 +83,7 @@ var Keys = KeyMap{
 	ToggleOutput: key.NewBinding(key.WithKeys("tab")),
 	Output:       key.NewBinding(key.WithKeys("o")),
 	Wrap:         key.NewBinding(key.WithKeys("w")),
+	Mouse:        key.NewBinding(key.WithKeys("m")),
 	Clear:        key.NewBinding(key.WithKeys("C")),
 	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
 	Refresh:      key.NewBinding(key.WithKeys("r")),

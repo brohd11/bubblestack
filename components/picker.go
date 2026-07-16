@@ -88,6 +88,13 @@ func (s *PickerScreen) Init(*core.Shared) tea.Cmd { return nil }
 func (s *PickerScreen) Filtering() bool { return s.list.FilterState() == list.Filtering }
 
 func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
+	// Above the filter branch: the list already moves its cursor on up/down while
+	// filtering, so the wheel does too rather than going dead over a filtered list.
+	if m, ok := msg.(tea.MouseMsg); ok {
+		if WheelNav(&s.list, m) {
+			return s, core.Action{}
+		}
+	}
 	if s.Filtering() {
 		var cmd tea.Cmd
 		s.list, cmd = s.list.Update(msg)

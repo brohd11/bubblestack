@@ -69,6 +69,9 @@ func Run(cfg Config) error {
 	r := core.NewRouter(sh, cfg.Tabs)
 	r.SetRefreshAction(cfg.RefreshAction)
 	r.SetInit(cfg.Init)
-	_, err := tea.NewProgram(r, tea.WithAltScreen()).Run()
+	// Cell motion (not all motion) reports the wheel and clicks but only streams motion
+	// while a button is held, so there's no hover traffic through Update. It costs the
+	// terminal's own drag-select; the Mouse key (m) turns it back off to copy text out.
+	_, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }

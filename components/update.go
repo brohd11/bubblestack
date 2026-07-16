@@ -62,6 +62,13 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 // broadcast notifications keep doing so via core.Receiver.Receive, which the router
 // routes separately from Update. Returns the screen's Action.
 func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
+	// Above the filter branch: the list already moves its cursor on up/down while
+	// filtering, so the wheel does too rather than going dead over a filtered list.
+	if m, ok := msg.(tea.MouseMsg); ok {
+		if WheelNav(l, m) {
+			return core.Action{}
+		}
+	}
 	if l.FilterState() == list.Filtering {
 		var cmd tea.Cmd
 		*l, cmd = l.Update(msg)
@@ -111,6 +118,31 @@ func WrapNav(l *list.Model, k string) bool {
 		return true
 	case core.MatchKey(k, core.Keys.Down) && l.Index() == n-1:
 		l.Select(0)
+		return true
+	}
+	return false
+}
+
+// WheelNav moves the list cursor one row per wheel notch, reporting handled=true when
+// it consumed the event. bubbles' list binds no mouse events at all, so without this the
+// wheel would scroll a doc or the log but do nothing on a tab root or picker — the
+// screens a user is on most of the time, which reads as a broken wheel rather than a
+// keyboard-only list.
+//
+// One row per notch, not the viewport's three: three is right for a wall of text, but
+// on a list it skips items. Unlike WrapNav this clamps at the boundaries (CursorUp /
+// CursorDown do so unless InfiniteScrolling is set) — a wheel that teleported from the
+// last row back to the first would be a scroll that overshoots by the whole list.
+func WheelNav(l *list.Model, msg tea.MouseMsg) bool {
+	if msg.Action != tea.MouseActionPress {
+		return false
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		l.CursorUp()
+		return true
+	case tea.MouseButtonWheelDown:
+		l.CursorDown()
 		return true
 	}
 	return false

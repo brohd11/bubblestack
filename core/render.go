@@ -171,6 +171,7 @@ func ShortHelp(l list.Model, mode HelpMode) string {
 		full := l.FullHelp()
 		extra := []key.Binding{
 			FullHint("refresh", Keys.Refresh),
+			FullHint("mouse", Keys.Mouse),
 			FullHint("quit", Keys.Quit),
 		}
 		// Slot refresh/quit in just before the list's trailing "?" (close-help) column;

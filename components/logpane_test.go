@@ -1,9 +1,14 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/brohd11/bubblestack/core"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -119,3 +124,80 @@ func TestWrapNarrowPane(t *testing.T) {
 
 // collapse strips whitespace so a comparison ignores where the wrap fell.
 func collapse(s string) string { return strings.Join(strings.Fields(s), "") }
+
+// TestLogPaneWheelScrolls exercises the pane's real viewport, which is the half of the
+// wheel path the router's fake Output can't prove: the router forwards the event, and
+// the viewport is what turns it into a scroll.
+func TestLogPaneWheelScrolls(t *testing.T) {
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	p := paneAt(lines...)
+	p.GotoBottom()
+
+	bottom := p.vp.YOffset
+	if bottom == 0 {
+		t.Fatal("100 lines in a 24-row pane should scroll; the fixture is wrong")
+	}
+
+	p.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if p.vp.YOffset >= bottom {
+		t.Fatalf("a wheel-up should scroll the pane back from the bottom, offset stayed at %d", p.vp.YOffset)
+	}
+}
+
+// TestHeightMatchesRenderedRows guards the assumption the router's wheel hit-test rests
+// on: Height() is the rows the pane actually draws. The router locates the pane by
+// counting Height() rows up from the help bar, so if the two ever drift the wheel
+// silently targets the wrong rows — a failure no test of either side alone would catch.
+func TestHeightMatchesRenderedRows(t *testing.T) {
+	p := paneAt("one", "two", "three")
+	if got, want := lipgloss.Height(p.View(false)), p.Height(); got != want {
+		t.Fatalf("pane renders %d rows but reports Height() == %d", got, want)
+	}
+}
+
+// stubRootScreen is a minimal core.Screen (no help bar) so a router test can place the
+// output pane at a known row range.
+type stubRootScreen struct{}
+
+func (stubRootScreen) Init(*core.Shared) tea.Cmd { return nil }
+func (stubRootScreen) Update(*core.Shared, tea.Msg) (core.Screen, core.Action) {
+	return stubRootScreen{}, core.Action{}
+}
+func (stubRootScreen) View(*core.Shared) string       { return "body" }
+func (stubRootScreen) HelpView(*core.Shared) string   { return "" }
+func (stubRootScreen) SetSize(*core.Shared, int, int) {}
+
+// TestRouterWheelScrollsRealLogPane is the end-to-end check: a real router routing a
+// real wheel to a real LogPane, exercising the row math against the pane's true
+// Height() rather than a fake's. The router's own tests use a fake Output, so this is
+// what proves the two halves agree.
+func TestRouterWheelScrollsRealLogPane(t *testing.T) {
+	pane := NewLogPane()
+	for i := 0; i < 100; i++ {
+		pane.Log(fmt.Sprintf("line %d", i), true)
+	}
+	sh := core.NewShared(nil)
+	sh.Chrome = &core.Chrome{Output: pane}
+	r := core.NewRouter(sh, []core.TabEntry{{
+		Title: "T", New: func(*core.Shared) core.Screen { return stubRootScreen{} },
+	}})
+
+	var tm tea.Model = r
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) // pins the pane to the bottom
+	bottom := pane.vp.YOffset
+	if bottom == 0 {
+		t.Fatal("100 lines should leave the pane scrolled to a non-zero offset; fixture is wrong")
+	}
+
+	// At 24 rows with no help bar the pane's 8 rows are 16..23, so 20 is inside it.
+	if got := pane.Height(); got != 8 {
+		t.Fatalf("fixture assumes an 8-row pane at height 24, got %d", got)
+	}
+	tm.Update(tea.MouseMsg{Y: 20, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if pane.vp.YOffset >= bottom {
+		t.Fatalf("a wheel over the pane should scroll it through the router, offset stayed at %d", pane.vp.YOffset)
+	}
+}

@@ -2,6 +2,7 @@ package components
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
@@ -85,7 +86,110 @@ func TestRootUpdateFilteringRoutesToList(t *testing.T) {
 	}
 }
 
+// ---------- DocScreen wheel ----------
+
+// TestDocScreenWheelScrolls is the docs case the mouse support exists for. DocScreen
+// needed no change for it: its Update already forwards non-key messages to its
+// viewport, which handles the wheel itself — so this locks in that the router keeps
+// letting a wheel over the body through rather than claiming it as chrome.
+func TestDocScreenWheelScrolls(t *testing.T) {
+	body := strings.Repeat("a line of prose\n", 200)
+	d := NewDocScreen(DocOpts{Render: func(int) string { return body }})
+	sh := core.NewShared(nil)
+	d.SetSize(sh, 40, 10)
+
+	if d.vp.YOffset != 0 {
+		t.Fatalf("a fresh doc should start at the top, got %d", d.vp.YOffset)
+	}
+	d.Update(sh, wheelMsg(tea.MouseButtonWheelDown))
+	if d.vp.YOffset == 0 {
+		t.Fatal("a wheel-down over a doc page should scroll it")
+	}
+
+	at := d.vp.YOffset
+	d.Update(sh, wheelMsg(tea.MouseButtonWheelUp))
+	if d.vp.YOffset >= at {
+		t.Fatalf("a wheel-up should scroll back, offset stayed at %d", d.vp.YOffset)
+	}
+}
+
+// ---------- WheelNav ----------
+
+func wheelMsg(b tea.MouseButton) tea.MouseMsg {
+	return tea.MouseMsg{Button: b, Action: tea.MouseActionPress}
+}
+
+// TestWheelNavMovesCursor checks a notch moves the cursor exactly one row — not the
+// viewport's three, which would skip items on a list.
+func TestWheelNavMovesCursor(t *testing.T) {
+	l := newList(Item{Name: "A"}, Item{Name: "B"}, Item{Name: "C"})
+
+	if !WheelNav(&l, wheelMsg(tea.MouseButtonWheelDown)) {
+		t.Fatal("a wheel-down notch should be handled")
+	}
+	if l.Index() != 1 {
+		t.Fatalf("a wheel-down notch should move the cursor one row, got %d", l.Index())
+	}
+	if !WheelNav(&l, wheelMsg(tea.MouseButtonWheelUp)) {
+		t.Fatal("a wheel-up notch should be handled")
+	}
+	if l.Index() != 0 {
+		t.Fatalf("a wheel-up notch should move back one row, got %d", l.Index())
+	}
+}
+
+// TestWheelNavClamps checks the wheel stops at both ends rather than wrapping like
+// WrapNav does for the arrow keys: a scroll that teleported end→top would overshoot by
+// the whole list.
+func TestWheelNavClamps(t *testing.T) {
+	l := newList(Item{Name: "A"}, Item{Name: "B"})
+
+	WheelNav(&l, wheelMsg(tea.MouseButtonWheelUp)) // already at the top
+	if l.Index() != 0 {
+		t.Fatalf("a wheel-up at the first row should clamp, not wrap to the last, got %d", l.Index())
+	}
+
+	l.Select(1)
+	WheelNav(&l, wheelMsg(tea.MouseButtonWheelDown)) // already at the bottom
+	if l.Index() != 1 {
+		t.Fatalf("a wheel-down at the last row should clamp, not wrap to the first, got %d", l.Index())
+	}
+}
+
+// TestWheelNavIgnoresNonWheel checks a non-wheel mouse event is left unhandled, so the
+// wheel-only scope doesn't quietly turn clicks into cursor moves.
+func TestWheelNavIgnoresNonWheel(t *testing.T) {
+	l := newList(Item{Name: "A"}, Item{Name: "B"})
+	msg := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	if WheelNav(&l, msg) {
+		t.Fatal("a click is not a wheel event and must be left unhandled")
+	}
+	if l.Index() != 0 {
+		t.Fatal("a click must not move the cursor")
+	}
+}
+
+// TestRootUpdateWheelMovesCursor checks the wheel reaches the list through RootUpdate —
+// bubbles' list binds no mouse events itself, so without the wiring the wheel would do
+// nothing on a tab root.
+func TestRootUpdateWheelMovesCursor(t *testing.T) {
+	l := newList(Item{Name: "A"}, Item{Name: "B"})
+	RootUpdate(core.NewShared(nil), &l, wheelMsg(tea.MouseButtonWheelDown))
+	if l.Index() != 1 {
+		t.Fatalf("a wheel through RootUpdate should move the list cursor, got %d", l.Index())
+	}
+}
+
 // ---------- PickerScreen ----------
+
+// TestPickerWheelMovesCursor is the picker's half of the same wiring.
+func TestPickerWheelMovesCursor(t *testing.T) {
+	p := NewPicker([]list.Item{Item{Name: "A"}, Item{Name: "B"}}, PickerOpts{Title: "T"})
+	p.Update(core.NewShared(nil), wheelMsg(tea.MouseButtonWheelDown))
+	if p.list.Index() != 1 {
+		t.Fatalf("a wheel should move the picker's cursor, got %d", p.list.Index())
+	}
+}
 
 func TestPickerBackPops(t *testing.T) {
 	p := NewPicker([]list.Item{Item{Name: "A"}}, PickerOpts{Title: "T"})

@@ -34,6 +34,10 @@ type fakeOutput struct {
 	wrap    bool
 	tops    int // GotoTop calls
 	bottoms int // GotoBottom calls
+	// h is the rows the pane claims, so a test can place it on the canvas for the
+	// wheel's row hit-test; 0 (the default) keeps it out of the layout as before.
+	h       int
+	updates []tea.Msg // messages forwarded to the pane, for the wheel routing tests
 }
 
 func (f *fakeOutput) Log(s string, show bool) { f.logs = append(f.logs, s); f.shown = show }
@@ -42,13 +46,17 @@ func (f *fakeOutput) Toggle()                 { f.shown = !f.shown }
 func (f *fakeOutput) Hide()                   { f.shown = false }
 func (f *fakeOutput) Clear()                  { f.logs = nil; f.shown = false }
 func (f *fakeOutput) SetSize(_, _ int)        {}
-func (f *fakeOutput) Height() int             { return 0 }
+func (f *fakeOutput) Height() int             { return f.h }
 func (f *fakeOutput) View(bool) string        { return "OUT" }
-func (f *fakeOutput) Update(tea.Msg) tea.Cmd  { return nil }
 func (f *fakeOutput) GotoBottom()             { f.bottoms++ }
 func (f *fakeOutput) GotoTop()                { f.tops++ }
 func (f *fakeOutput) ToggleWrap()             { f.wrap = !f.wrap }
 func (f *fakeOutput) Wrapped() bool           { return f.wrap }
+
+func (f *fakeOutput) Update(msg tea.Msg) tea.Cmd {
+	f.updates = append(f.updates, msg)
+	return nil
+}
 
 // plainOutput is an Output that does NOT implement Wrapper (no embedding — promoted
 // methods would satisfy the interface): the Wrap key must pass through to the screen.
@@ -309,6 +317,159 @@ func TestChromeMaskSuppressesChrome(t *testing.T) {
 	r = tm.(Router)
 	if r.belowChrome(r.currentMask()) == "" {
 		t.Fatal("popping back to the unmasked screen should restore the chrome")
+	}
+}
+
+// ---------- mouse ----------
+
+// wheelScreen records what the router dispatches to the active screen, so a test can
+// assert a wheel outside the output pane reaches the body (where a DocScreen's viewport
+// would consume it) rather than being swallowed as chrome.
+type wheelScreen struct{ seen []tea.Msg }
+
+func (s *wheelScreen) Init(*Shared) tea.Cmd { return nil }
+func (s *wheelScreen) Update(_ *Shared, msg tea.Msg) (Screen, Action) {
+	s.seen = append(s.seen, msg)
+	return s, Action{}
+}
+func (s *wheelScreen) View(*Shared) string       { return "wheel" }
+func (s *wheelScreen) HelpView(*Shared) string   { return "" }
+func (s *wheelScreen) SetSize(*Shared, int, int) {}
+
+func wheelAt(y int, b tea.MouseButton) tea.MouseMsg {
+	return tea.MouseMsg{Y: y, Button: b, Action: tea.MouseActionPress}
+}
+
+// newWheelRouter is a router whose root records dispatched messages, with a 6-row
+// output pane revealed. sized() lays it out at 80x24 and wheelScreen draws no help bar,
+// so the pane's rows are 18..23 and anything above is body.
+func newWheelRouter() (Router, *wheelScreen, *fakeOutput) {
+	sh := NewShared(nil)
+	out := &fakeOutput{h: 6}
+	sh.Chrome = &Chrome{Output: out, Status: &fakeStatus{}}
+	scr := &wheelScreen{}
+	r := NewRouter(sh, []TabEntry{{Title: "Wheel", New: func(*Shared) Screen { return scr }}})
+	sh.Log("hello") // reveal the pane
+	return r, scr, out
+}
+
+// TestWheelOverOutputFocusesAndScrolls checks a wheel inside the output pane's rows is
+// forwarded to the pane AND focuses it. The focus is the load-bearing part: resize
+// re-pins an unfocused pane to the bottom on every message, so a wheel that scrolled
+// without focusing would snap straight back and appear to do nothing.
+func TestWheelOverOutputFocusesAndScrolls(t *testing.T) {
+	r, _, out := newWheelRouter()
+	tm := sized(r)
+	sh := tm.(Router).sh
+	// resize pins the unfocused pane during layout, so count re-pins across the wheel
+	// rather than from zero.
+	pinned := out.bottoms
+
+	tm = pump(tm, wheelAt(20, tea.MouseButtonWheelUp))
+	if !sh.Chrome.outputFocused {
+		t.Fatal("a wheel over the output pane should focus it, or resize re-pins it to the bottom")
+	}
+	if len(out.updates) == 0 {
+		t.Fatal("the wheel should be forwarded to the output pane")
+	}
+	if out.bottoms != pinned {
+		t.Fatal("once the wheel focuses the pane, resize must stop re-pinning it to the bottom")
+	}
+}
+
+// TestWheelOverBodyReachesScreen checks the router leaves a wheel outside the pane
+// alone: it must fall through to the active screen (the DocScreen path) and must not
+// steal focus into the output pane.
+func TestWheelOverBodyReachesScreen(t *testing.T) {
+	r, scr, _ := newWheelRouter()
+	tm := sized(r)
+	sh := tm.(Router).sh
+
+	pump(tm, wheelAt(5, tea.MouseButtonWheelDown))
+	if sh.Chrome.outputFocused {
+		t.Fatal("a wheel over the body must not focus the output pane")
+	}
+	var got bool
+	for _, m := range scr.seen {
+		if _, ok := m.(tea.MouseMsg); ok {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatal("a wheel over the body should reach the active screen")
+	}
+}
+
+// TestWheelBoundary pins the edges of the pane's row range: the row just above its top
+// border belongs to the body, its top border row belongs to the pane.
+func TestWheelBoundary(t *testing.T) {
+	r, _, _ := newWheelRouter()
+	tm := sized(r)
+	rr := tm.(Router)
+
+	if rr.inOutput(17) {
+		t.Fatal("row 17 is above the 6-row pane (18..23) and belongs to the body")
+	}
+	if !rr.inOutput(18) {
+		t.Fatal("row 18 is the pane's first row")
+	}
+	if !rr.inOutput(23) {
+		t.Fatal("row 23 is the pane's last row")
+	}
+}
+
+// TestWheelIgnoredWhenOutputHidden checks a hidden pane claims no rows, so a wheel
+// anywhere falls through to the screen instead of scrolling an invisible log.
+func TestWheelIgnoredWhenOutputHidden(t *testing.T) {
+	r, _, out := newWheelRouter()
+	out.Hide()
+	tm := sized(r)
+	sh := tm.(Router).sh
+
+	pump(tm, wheelAt(20, tea.MouseButtonWheelUp))
+	if sh.Chrome.outputFocused {
+		t.Fatal("a wheel must not focus a hidden output pane")
+	}
+	if len(out.updates) != 0 {
+		t.Fatal("a hidden pane should receive no wheel events")
+	}
+}
+
+// TestMouseToggleKey checks m flips mouse capture both ways and emits a command each
+// time (tea.DisableMouse / tea.EnableMouseCellMotion).
+func TestMouseToggleKey(t *testing.T) {
+	tm := sized(newCoreTestRouter())
+	if !tm.(Router).mouseOn {
+		t.Fatal("mouse should start enabled; the Run facade opens the program with cell motion")
+	}
+
+	tm, cmd := tm.Update(keyMsg(Keys.Mouse.Keys()[0]))
+	if tm.(Router).mouseOn {
+		t.Fatal("m should toggle mouse capture off")
+	}
+	if cmd == nil {
+		t.Fatal("toggling off should emit a command to stop mouse reporting")
+	}
+
+	tm, cmd = tm.Update(keyMsg(Keys.Mouse.Keys()[0]))
+	if !tm.(Router).mouseOn {
+		t.Fatal("m should toggle mouse capture back on")
+	}
+	if cmd == nil {
+		t.Fatal("toggling on should emit a command to resume mouse reporting")
+	}
+}
+
+// TestMouseKeyPassesThroughWhileFiltering checks m is not swallowed by a screen that is
+// capturing filter text — it is typing a literal m (mirrors the w case).
+func TestMouseKeyPassesThroughWhileFiltering(t *testing.T) {
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{Output: &fakeOutput{}}
+	r := NewRouter(sh, []TabEntry{{Title: "Filter", New: func(*Shared) Screen { return filterScreen{} }}})
+
+	tm := pump(sized(r), keyMsg(Keys.Mouse.Keys()[0]))
+	if !tm.(Router).mouseOn {
+		t.Fatal("m must reach a filtering screen as a literal key, not toggle mouse capture")
 	}
 }
 

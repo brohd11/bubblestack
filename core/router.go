@@ -49,6 +49,12 @@ type Router struct {
 	// appInit is an app-level startup command, batched with the initial screen's Init
 	// in Init(). Consumer-set via SetInit; nil ⇒ no app-level startup command.
 	appInit func(*Shared) tea.Cmd
+
+	// mouseOn tracks whether the terminal is currently reporting mouse events, so the
+	// Mouse key knows which way to toggle. The program starts with cell-motion tracking
+	// enabled (see the Run facade), which costs the terminal's own drag-select; turning
+	// it off hands selection back for a copy-paste, at the cost of the wheel.
+	mouseOn bool
 }
 
 // SetRefreshAction wires the consumer's "refresh everything" action to the global
@@ -65,7 +71,7 @@ func NewRouter(sh *Shared, tabs []TabEntry) Router {
 	for i := range tabs {
 		roots[i] = tabs[i].New(sh)
 	}
-	return Router{sh: sh, tabs: tabs, roots: roots, stack: []Screen{roots[0]}}
+	return Router{sh: sh, tabs: tabs, roots: roots, stack: []Screen{roots[0]}, mouseOn: true}
 }
 
 func (r Router) Top() Screen { return r.stack[len(r.stack)-1] }
@@ -87,6 +93,18 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// control message is resolved inline and whose async cmd (e.g. tea.Quit) is queued.
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if act, handled := r.globalKey(key); handled {
+			r.apply(act, &cmds)
+			r.resize()
+			return r, tea.Batch(cmds...)
+		}
+	}
+
+	// A wheel over the output pane is claimed here, for the same reason as a global
+	// key: the pane is router-owned chrome that no screen can see. Anything else —
+	// notably a wheel over the body — is left unhandled and falls through to the
+	// active screen below, which is how a DocScreen's viewport gets it.
+	if m, ok := msg.(tea.MouseMsg); ok {
+		if act, handled := r.mouse(m); handled {
 			r.apply(act, &cmds)
 			r.resize()
 			return r, tea.Batch(cmds...)
