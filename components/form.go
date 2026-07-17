@@ -6,8 +6,8 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // FormScreen is the reusable, item-driven form: a column of self-rendering fields
@@ -17,8 +17,9 @@ import (
 // self-dispatching Item list row (see internal/tui/doc.go). A tab/flow supplies the
 // fields and an OnSubmit closure; FormScreen names no domain type.
 //
-// The field types (FormField + TextField/ToggleField/PickField/StaticField) and the
-// optional interfaces (Toggler/Activator/editable) live in form_fields.go.
+// The field types (FormField + TextField/TextAreaField/ToggleField/PickField/
+// StaticField) and the optional interfaces (Toggler/Activator/Growable/editable/valued)
+// live in form_fields.go.
 
 type FormOpts struct {
 	Title      string // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
@@ -83,17 +84,25 @@ func (f *FormScreen) firstFocusable() int {
 
 func (f *FormScreen) current() FormField { return f.fields[f.focus] }
 
-// editable returns the focused field's text input, or nil if it isn't a text field.
-func (f *FormScreen) editable() *textinput.Model {
-	if e, ok := f.current().(editable); ok {
-		return e.Input()
+// editable returns the focused field's text capability, or nil if it isn't a text
+// field. The comma-ok discard matters: it yields the interface's zero value (a true
+// nil) on a failed assertion, where returning f.current().(editable) directly could
+// box a typed nil that compares != nil.
+func (f *FormScreen) editable() editable {
+	e, _ := f.current().(editable)
+	return e
+}
+
+// Typable: a free-text field has focus iff the current field owns a text model.
+func (f *FormScreen) Typing() bool { return f.editable() != nil }
+
+func (f *FormScreen) UpdateInput(msg tea.Msg) tea.Cmd {
+	if e := f.editable(); e != nil {
+		return e.UpdateInput(msg)
 	}
 	return nil
 }
 
-// Typable: a free-text field has focus iff the current field exposes an input.
-func (f *FormScreen) Typing() bool              { return f.editable() != nil }
-func (f *FormScreen) Input() *textinput.Model   { return f.editable() }
 func (f *FormScreen) Filtering() bool           { return true }
 func (f *FormScreen) Init(*core.Shared) tea.Cmd { return f.syncFocus() }
 
@@ -142,10 +151,8 @@ func (f *FormScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 		return f, core.Action{}
 	}
 	// Editing keys (backspace, cursor) fall through to the focused text field.
-	if in := f.editable(); in != nil {
-		var cmd tea.Cmd
-		*in, cmd = in.Update(msg)
-		return f, core.Async(cmd)
+	if e := f.editable(); e != nil {
+		return f, core.Async(e.UpdateInput(msg))
 	}
 	return f, core.Action{}
 }
@@ -188,7 +195,7 @@ func (f *FormScreen) field(key string) FormField {
 
 // Value reads a text field's value by key ("" if the key is absent or not text).
 func (f *FormScreen) Value(key string) string {
-	if t, ok := f.field(key).(*TextField); ok {
+	if t, ok := f.field(key).(valued); ok {
 		return t.Value()
 	}
 	return ""
@@ -196,7 +203,7 @@ func (f *FormScreen) Value(key string) string {
 
 // SetValue sets a text field's value by key (no-op if absent or not text).
 func (f *FormScreen) SetValue(key, v string) {
-	if t, ok := f.field(key).(*TextField); ok {
+	if t, ok := f.field(key).(valued); ok {
 		t.SetValue(v)
 	}
 }
@@ -226,11 +233,48 @@ func (f *FormScreen) View(sh *core.Shared) string {
 func (f *FormScreen) HelpView(sh *core.Shared) string { return sh.BindingHelp(f.help) }
 
 func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
-	w := sh.ConfirmWidth() - 12 // box room minus the label column
-	if w < 10 {
-		w = 10
-	}
+	// Every field gets the box's inner width and subtracts its own marker and label, so no
+	// constant here has to know the widest label in the form. Source it from sh rather than
+	// the width parameter: View renders through sh.Box, and taking both from the same place
+	// is what stops the sizing and the rendering from drifting apart.
+	//
+	// Widths for *all* fields before measuring any of them — a field's height is a function
+	// of its width, so a measurement taken before the last SetInnerWidth would budget
+	// against a stale layout.
+	inner := sh.BoxInnerWidth()
+	var growers []Growable
 	for _, fld := range f.fields {
-		fld.SetWidth(w)
+		fld.SetInnerWidth(inner)
+		if g, ok := fld.(Growable); ok {
+			growers = append(growers, g)
+		}
 	}
+	if len(growers) == 0 {
+		return
+	}
+	// What the form spends on everything but a grower's *extra* rows: its own frame, plus
+	// each field's real height — a grower counting as its first row only, since the rest is
+	// exactly what's being budgeted. Measured rather than assumed one-per-field: a toggle
+	// or a note can legitimately fold onto a second row, and a budget blind to that would
+	// hand the growers rows the box doesn't have.
+	fixed := f.chromeRows(sh)
+	for _, fld := range f.fields {
+		if _, ok := fld.(Growable); ok {
+			fixed++ // counted, never rendered: its height is the answer we're computing
+			continue
+		}
+		fixed += lipgloss.Height(fld.View(false)) // exact: fieldMarker is 2 cells either way
+	}
+	spare := (bodyHeight - fixed) / len(growers)
+	for _, g := range growers {
+		g.SetMaxHeight(1 + spare)
+	}
+}
+
+// chromeRows is what the form's frame costs: the box border/padding/margin plus the
+// optional title bar. Measured rather than hardcoded, so a change to boxStyle or
+// RenderTitleBar can't silently un-clamp a growable field. Box("") still carries one
+// content line, so subtract it.
+func (f *FormScreen) chromeRows(sh *core.Shared) int {
+	return lipgloss.Height(core.WithTitle(f.title, sh.Box(""))) - 1
 }

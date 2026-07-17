@@ -4,7 +4,6 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -17,11 +16,12 @@ import (
 // Typable is implemented by screens that hold a focused free-text field. When a
 // text field has focus, printable keys that alias a navigation binding (e.g. "c"
 // for Back, "e" for Select) must be typed, not dispatched. Typing reports whether
-// a text field currently holds focus; Input returns it so QueryUpdate can feed the
-// keystroke.
+// a text field currently holds focus; UpdateInput feeds it the keystroke, so the
+// screen (and under it the field) keeps ownership of whichever bubbles model it
+// holds — a textinput and a textarea both route through here.
 type Typable interface {
 	Typing() bool
-	Input() *textinput.Model
+	UpdateInput(tea.Msg) tea.Cmd
 }
 
 // QueryUpdate centralizes the typing-vs-navigation split for any Typable screen.
@@ -44,10 +44,7 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 	}
 	switch km.Type {
 	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace:
-		in := s.Input()
-		var cmd tea.Cmd
-		*in, cmd = in.Update(msg)
-		return cmd, true
+		return s.UpdateInput(msg), true
 	}
 	return nil, false
 }

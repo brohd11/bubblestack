@@ -82,6 +82,15 @@ func (s *Shared) Box(body string) string {
 	return boxStyle.Width(s.ConfirmWidth()).Render(body)
 }
 
+// BoxInnerWidth is the widest a line of body text can be before Box word-wraps it:
+// ConfirmWidth minus the padding lipgloss reserves out of it. Derived from boxStyle
+// rather than written as a literal, so a padding change can't silently desync a caller
+// that sizes its content to fit (a re-wrap by the box restarts the line at column 0,
+// which is where a form field's continuation collides with its label column).
+func (s *Shared) BoxInnerWidth() int {
+	return s.ConfirmWidth() - boxStyle.GetHorizontalPadding()
+}
+
 // ---------- help bars ----------
 
 // helpView renders a list's own help bar on its own, so it can be placed below

@@ -339,8 +339,13 @@ type fakeTypable struct {
 	in     textinput.Model
 }
 
-func (f *fakeTypable) Typing() bool            { return f.typing }
-func (f *fakeTypable) Input() *textinput.Model { return &f.in }
+func (f *fakeTypable) Typing() bool { return f.typing }
+
+func (f *fakeTypable) UpdateInput(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	f.in, cmd = f.in.Update(msg)
+	return cmd
+}
 
 func newTypable(typing bool) *fakeTypable {
 	ti := textinput.New()

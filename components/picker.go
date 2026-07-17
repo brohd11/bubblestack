@@ -30,12 +30,12 @@ type PickerScreen struct {
 // handled=true the key is consumed (and its command, if any, run), otherwise the
 // key falls through to the list.
 type PickerOpts struct {
-	Title        string
-	Crumb        string        // optional breadcrumb segment; defaults to Title
-	CrumbShort   string        // optional short breadcrumb segment; defaults to Crumb/Title
-	Help         []key.Binding // extra help/hint bindings shown in the list help
-	OnSelect     func(*core.Shared, list.Item) core.Action
-	OnKey        func(*core.Shared, string, list.Item) (core.Action, bool)
+	Title      string
+	Crumb      string        // optional breadcrumb segment; defaults to Title
+	CrumbShort string        // optional short breadcrumb segment; defaults to Crumb/Title
+	Help       []key.Binding // extra help/hint bindings shown in the list help
+	OnSelect   func(*core.Shared, list.Item) core.Action
+	OnKey      func(*core.Shared, string, list.Item) (core.Action, bool)
 	// Refresh, when set, makes the picker a Receiver: on a PropagateAll broadcast it
 	// is called with the payload; returning ok=true rebuilds the rows from items.
 	Refresh      func(sh *core.Shared, payload any) (items []list.Item, ok bool)
