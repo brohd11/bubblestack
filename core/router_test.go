@@ -25,6 +25,34 @@ type filterScreen struct{ stubScreen }
 
 func (filterScreen) Filtering() bool { return true }
 
+// wrapScreen is a stubScreen that owns a wrap mode of its own (core.Wrapper) — a diff
+// view, say. Pointer receiver: ToggleWrap mutates, and the router holds the screen.
+type wrapScreen struct {
+	stubScreen
+	wrap bool
+}
+
+func (s *wrapScreen) ToggleWrap()                              { s.wrap = !s.wrap }
+func (s *wrapScreen) Wrapped() bool                            { return s.wrap }
+func (s *wrapScreen) Update(*Shared, tea.Msg) (Screen, Action) { return s, Action{} }
+
+// wrapFilterScreen wraps *and* captures filter text, so w must be a literal key.
+type wrapFilterScreen struct{ wrapScreen }
+
+func (*wrapFilterScreen) Filtering() bool                            { return true }
+func (s *wrapFilterScreen) Update(*Shared, tea.Msg) (Screen, Action) { return s, Action{} }
+
+// wrapRouter is a router whose top screen wraps, alongside a wrappable output pane —
+// the contended case the Wrap key has to arbitrate.
+func wrapRouter() (Router, *wrapScreen, *fakeOutput) {
+	screen := &wrapScreen{}
+	out := &fakeOutput{}
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{Output: out, Status: &fakeStatus{}}
+	r := NewRouter(sh, []TabEntry{{Title: "Wrap", New: func(*Shared) Screen { return screen }}})
+	return r, screen, out
+}
+
 // fakeOutput is a minimal core.Output (plus the Log and Wrapper capabilities) for
 // exercising the router's output key/layout plumbing without importing components
 // (core ← components forbids it).
@@ -243,6 +271,71 @@ func TestWrapKeyPassesThrough(t *testing.T) {
 		// The key is simply not consumed; the run must not panic on the assertion.
 		pump(sized(r), keyMsg(Keys.Wrap.Keys()[0]))
 	})
+}
+
+// TestWrapKeyPrefersScreen checks the arbitration when both the top screen and the output
+// pane can wrap: focus decides. An unfocused pane means the user is looking at the screen,
+// so w is the screen's; focusing the pane (tab) points w back at the pane, which is what
+// keeps the log's own wrap reachable from a screen that wraps.
+func TestWrapKeyPrefersScreen(t *testing.T) {
+	r, screen, out := wrapRouter()
+	tm := sized(r)
+	r.sh.Log("hello")
+
+	tm = pump(tm, keyMsg(Keys.Wrap.Keys()[0]))
+	if !screen.Wrapped() {
+		t.Fatal("w should wrap the top screen when the output pane is unfocused")
+	}
+	if out.Wrapped() {
+		t.Fatal("w must not also wrap the output pane — the screen owns the key here")
+	}
+
+	tm = pump(tm, keyMsg(Keys.Wrap.Keys()[0]))
+	if screen.Wrapped() {
+		t.Fatal("w should toggle the screen's wrap back off")
+	}
+
+	tm = pump(tm, keyMsg(Keys.ToggleOutput.Keys()[0])) // tab: focus the pane
+	pump(tm, keyMsg(Keys.Wrap.Keys()[0]))
+	if !out.Wrapped() {
+		t.Fatal("w should wrap the output pane once it holds focus")
+	}
+	if screen.Wrapped() {
+		t.Fatal("w must not reach the screen while the pane holds focus")
+	}
+}
+
+// TestWrapKeyScreenWithoutOutput checks a wrapping screen still gets w when there is no
+// output pane at all — the branch used to be gated on the pane existing.
+func TestWrapKeyScreenWithoutOutput(t *testing.T) {
+	screen := &wrapScreen{}
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{} // no Output
+	r := NewRouter(sh, []TabEntry{{Title: "Wrap", New: func(*Shared) Screen { return screen }}})
+
+	pump(sized(r), keyMsg(Keys.Wrap.Keys()[0]))
+	if !screen.Wrapped() {
+		t.Fatal("w should wrap the screen even with no output pane present")
+	}
+}
+
+// TestWrapKeyFilteringScreenWins checks that a screen which both wraps and captures text
+// keeps w as a literal: typing must beat the toggle.
+func TestWrapKeyFilteringScreenWins(t *testing.T) {
+	screen := &wrapFilterScreen{}
+	out := &fakeOutput{}
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{Output: out, Status: &fakeStatus{}}
+	r := NewRouter(sh, []TabEntry{{Title: "Wrap", New: func(*Shared) Screen { return screen }}})
+	sh.Log("hello")
+
+	pump(sized(r), keyMsg(Keys.Wrap.Keys()[0]))
+	if screen.Wrapped() {
+		t.Fatal("w must reach a filtering screen as a literal key, not toggle its wrap")
+	}
+	if out.Wrapped() {
+		t.Fatal("w must not fall through to the output pane while a screen is filtering")
+	}
 }
 
 // TestOutputJumpKeys checks that every Top/Bottom keycode jumps the focused output pane

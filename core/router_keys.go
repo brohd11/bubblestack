@@ -4,6 +4,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// wrapperOutput reports the output pane when there is one and it can wrap.
+func wrapperOutput(ch *Chrome) (Wrapper, bool) {
+	if ch == nil || ch.Output == nil {
+		return nil, false
+	}
+	w, ok := ch.Output.(Wrapper)
+	return w, ok
+}
+
 // globalKey handles the keys available in any screen. It returns (act, true) when it
 // consumed the key — act carries a control message resolved inline and/or an async cmd
 // (e.g. tea.Quit or an output-scroll cmd) — or (Action{}, false) to let the active
@@ -28,14 +37,27 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	ch := r.sh.Chrome
 	outputOn := ch != nil && ch.Output != nil
 
-	// Wrap flips the output pane's render mode from any screen (like Output/Clear),
-	// whether or not the pane holds focus — hence its place above the focused branch.
-	// It is an optional capability (Wrapper), so an Output without it never consumes
-	// the key. Filtering screens keep a literal w; a focused pane means the screen
-	// isn't reading keys anyway, so the gate doesn't apply there.
-	if outputOn && MatchKey(k, Keys.Wrap) {
-		if w, ok := ch.Output.(Wrapper); ok {
-			if f, isFilterer := r.Top().(Filterer); ch.outputFocused || !isFilterer || !f.Filtering() {
+	// Wrap flips a render mode between truncated and folded. Two things can own that
+	// mode — the output pane and the top screen (a diff, say) — so focus decides which
+	// one the key means: the pane while it holds focus, otherwise the screen if it wraps
+	// at all, and the pane when it doesn't. That keeps w pointed at whatever the user is
+	// actually looking at, and leaves the pane reachable (tab, then w) from a screen that
+	// wraps.
+	//
+	// Both sides are optional capabilities (Wrapper), so neither an Output nor a screen
+	// without one ever consumes the key. Filtering screens keep a literal w; a focused
+	// pane means the screen isn't reading keys anyway, so the gate doesn't apply there.
+	if MatchKey(k, Keys.Wrap) {
+		f, isFilterer := r.Top().(Filterer)
+		filtering := isFilterer && f.Filtering()
+		paneFocused := outputOn && ch.outputFocused
+
+		if paneFocused || !filtering {
+			if w, ok := r.Top().(Wrapper); ok && !paneFocused {
+				w.ToggleWrap()
+				return Action{}, true
+			}
+			if w, ok := wrapperOutput(ch); ok {
 				w.ToggleWrap()
 				return Action{}, true
 			}
