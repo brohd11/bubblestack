@@ -34,6 +34,23 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		}
 	}
 
+	// Terminal opens a terminal at the top screen's directory from any depth — the whole
+	// point is that "t" works once you've drilled into a repo, not only on the list row.
+	// Gated on text capture exactly like Refresh so a filtering list or a focused form
+	// (FormScreen.Filtering()==true) can still type "t". Only the top screen is consulted:
+	// every in-repo screen carries the same repo, so "t" always means the repo on screen.
+	// When the top screen is not a DirLocator (the repo list, the Actions/all-repos menus),
+	// the key falls through so a screen that handles its own row-level "t" still gets it.
+	if r.terminalAction != nil && MatchKey(k, Keys.Terminal) {
+		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
+			if loc, ok := r.Top().(DirLocator); ok {
+				if dir, ok := loc.LocateDir(); ok {
+					return r.terminalAction(dir), true
+				}
+			}
+		}
+	}
+
 	ch := r.sh.Chrome
 	outputOn := ch != nil && ch.Output != nil
 

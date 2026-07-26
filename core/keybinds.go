@@ -50,6 +50,7 @@ type KeyMap struct {
 	Clear        key.Binding
 	Unwind       key.Binding
 	Refresh      key.Binding // reload all views; action is consumer-supplied
+	Terminal     key.Binding // open a terminal at the top screen's directory (DirLocator); action is consumer-supplied
 
 	// form
 	NextField key.Binding
@@ -87,6 +88,7 @@ var Keys = KeyMap{
 	Clear:        key.NewBinding(key.WithKeys("C")),
 	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
 	Refresh:      key.NewBinding(key.WithKeys("r")),
+	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
 
 	NextField: key.NewBinding(key.WithKeys("down", "tab")),
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),

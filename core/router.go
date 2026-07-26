@@ -46,6 +46,12 @@ type Router struct {
 	// is left to the active screen.
 	refreshAction func(*Shared) Action
 
+	// terminalAction supplies the Action for the global Terminal key (Keys.Terminal),
+	// given the directory resolved from the top screen's DirLocator. Consumer-set via
+	// SetTerminalAction so core names no launcher; nil ⇒ the key is left to the active
+	// screen (which is what preserves any row-level "t" a screen handles itself).
+	terminalAction func(dir string) Action
+
 	// appInit is an app-level startup command, batched with the initial screen's Init
 	// in Init(). Consumer-set via SetInit; nil ⇒ no app-level startup command.
 	appInit func(*Shared) tea.Cmd
@@ -61,6 +67,12 @@ type Router struct {
 // Refresh key. globalKey invokes it from any screen/depth except while text is being
 // captured. Called by the Run facade after NewRouter.
 func (r *Router) SetRefreshAction(f func(*Shared) Action) { r.refreshAction = f }
+
+// SetTerminalAction wires the consumer's "open a terminal at dir" action to the global
+// Terminal key. globalKey invokes it with the directory resolved from the top screen's
+// DirLocator, from any depth except while text is captured. Called by the Run facade after
+// NewRouter; nil leaves the key to the active screen.
+func (r *Router) SetTerminalAction(f func(dir string) Action) { r.terminalAction = f }
 
 // SetInit wires the consumer's app-level startup command, batched with the initial
 // screen's Init in Init(). Called by the Run facade after NewRouter.

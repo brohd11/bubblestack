@@ -28,6 +28,7 @@ type TaskScreen struct {
 	label, doneLabel string
 	Crumb            string
 	CrumbShort       string // optional short breadcrumb segment; defaults to label
+	Dir              string // directory this task concerns; enables the global Terminal key (DirLocator)
 	stay             bool
 	run              RunFunc
 	onDone           func(*core.Shared, core.TaskEvent) core.Action
@@ -38,11 +39,17 @@ type TaskScreen struct {
 }
 
 var _ core.Crumber = (*TaskScreen)(nil)
+var _ core.DirLocator = (*TaskScreen)(nil)
 
 // CrumbLabel contributes the task's label as its breadcrumb segment.
 func (s *TaskScreen) CrumbLabel(short bool) string {
 	return crumbSeg(short, s.CrumbShort, "Task", "Task")
 }
+
+// LocateDir reports the directory this task concerns (Dir), so the global Terminal key
+// opens a terminal there — the point where a failed git op tells the user to resolve it in a
+// terminal. Empty dir ⇒ no locator (the key falls through).
+func (s *TaskScreen) LocateDir() (string, bool) { return s.Dir, s.Dir != "" }
 
 // NewTask builds a task that navigates away as soon as it finishes (install,
 // install-all): onDone returns the navigation Action for the terminating event.

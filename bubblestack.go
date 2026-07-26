@@ -48,6 +48,12 @@ type Config struct {
 	// left to the active screen.
 	RefreshAction func(*core.Shared) core.Action
 
+	// TerminalAction is the Action returned by the global Terminal key (Keys.Terminal),
+	// given the directory resolved from the top screen's core.DirLocator, fired from any
+	// screen/depth except while text is captured. Wire it to a launcher (e.g.
+	// sysopen.Terminal). nil ⇒ the key is left to the active screen.
+	TerminalAction func(dir string) core.Action
+
 	// Init is an app-level startup command, batched with the initial screen's Init
 	// when the program starts (run once, asynchronously). Use it for app-wide
 	// background work that isn't tied to any one tab (e.g. a self-update check whose
@@ -68,6 +74,7 @@ func Run(cfg Config) error {
 	}
 	r := core.NewRouter(sh, cfg.Tabs)
 	r.SetRefreshAction(cfg.RefreshAction)
+	r.SetTerminalAction(cfg.TerminalAction)
 	r.SetInit(cfg.Init)
 	// Cell motion (not all motion) reports the wheel and clicks but only streams motion
 	// while a button is held, so there's no hover traffic through Update. It costs the

@@ -20,6 +20,7 @@ type PickerScreen struct {
 	list       list.Model
 	crumb      string // breadcrumb segment; defaults to the list title when ""
 	crumbShort string
+	dir        string // directory this picker concerns; enables the global Terminal key (DirLocator)
 	OnSelect   func(*core.Shared, list.Item) core.Action
 	OnKey      func(*core.Shared, string, list.Item) (core.Action, bool)
 	refresh    func(*core.Shared, any) ([]list.Item, bool)
@@ -39,20 +40,23 @@ type PickerOpts struct {
 	// Refresh, when set, makes the picker a Receiver: on a PropagateAll broadcast it
 	// is called with the payload; returning ok=true rebuilds the rows from items.
 	Refresh      func(sh *core.Shared, payload any) (items []list.Item, ok bool)
-	PopStop      bool // mark this picker as a PopTo boundary (a command hub)
-	InitialIndex int  // cursor starts here; 0 = first item (default)
+	PopStop      bool   // mark this picker as a PopTo boundary (a command hub)
+	InitialIndex int    // cursor starts here; 0 = first item (default)
+	Dir          string // directory this picker concerns; enables the global Terminal key (DirLocator)
 }
 
 var _ core.Filterer = (*PickerScreen)(nil)
 var _ core.PopStopper = (*PickerScreen)(nil)
 var _ core.Crumber = (*PickerScreen)(nil)
 var _ core.Receiver = (*PickerScreen)(nil)
+var _ core.DirLocator = (*PickerScreen)(nil)
 
 func NewPicker(items []list.Item, opts PickerOpts) *PickerScreen {
 	s := &PickerScreen{
 		list:       core.NewSelectList(items, opts.Title, opts.Help...),
 		crumb:      opts.Crumb,
 		crumbShort: opts.CrumbShort,
+		dir:        opts.Dir,
 		OnSelect:   opts.OnSelect,
 		OnKey:      opts.OnKey,
 		refresh:    opts.Refresh,
@@ -65,6 +69,10 @@ func NewPicker(items []list.Item, opts PickerOpts) *PickerScreen {
 }
 
 func (s *PickerScreen) PopStop() bool { return s.popStop }
+
+// LocateDir reports the directory this picker concerns (PickerOpts.Dir), so the global
+// Terminal key opens a terminal there. Empty dir ⇒ no locator (the key falls through).
+func (s *PickerScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 
 // Receive lets a picker rebuild its rows on a PropagateAll broadcast when a Refresh
 // closure is configured; without one it's a no-op (the common case).

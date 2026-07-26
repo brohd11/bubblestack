@@ -82,6 +82,14 @@ func FullscreenMask() ChromeMask {
 // restores the chrome automatically — no shared state to reset.
 type ChromeMasker interface{ ChromeMask() ChromeMask }
 
+// DirLocator is implemented by a screen that concerns one filesystem directory (a repo
+// checkout). The router queries the top screen for it to resolve where the global Terminal
+// key opens a terminal (and, later, a filesystem-open key — the interface names the
+// directory, not the terminal). Optional — a screen opts in by implementing it. Names no
+// domain type (a directory path is not domain state), matching the other optional screen
+// capabilities. Return ("", false) to advertise no directory.
+type DirLocator interface{ LocateDir() (string, bool) }
+
 // Crumber lets a screen contribute one segment to the router-drawn breadcrumb bar
 // (rendered under the tab strip). The router walks the active stack root→top and
 // asks every screen that implements this for its segment: CrumbLabel(false) for the
