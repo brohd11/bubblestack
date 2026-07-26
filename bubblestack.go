@@ -10,6 +10,7 @@
 package bubblestack
 
 import (
+	"github.com/brohd11/bubblestack/config"
 	"github.com/brohd11/bubblestack/core"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +42,11 @@ type Config struct {
 	Output core.Output               // below-body pane (nil ⇒ none)
 	Status core.Status               // transient status line (nil ⇒ none)
 	Tabs   []core.TabEntry           // top-level tabs
-	Theme  string                    // named theme; empty ⇒ leave the default
+	// Theme names a startup theme. Empty ⇒ the framework loads the shared
+	// ~/.bubblestack/config.yml theme (what the theme picker persists), falling back to
+	// the built-in default when that too is unset. Set it only to force a theme and
+	// bypass the user's saved choice.
+	Theme string
 
 	// RefreshAction is the Action returned by the global Refresh key (Keys.Refresh),
 	// fired from any screen/depth except while text is captured. nil ⇒ the key is
@@ -75,8 +80,15 @@ func Run(cfg Config) error {
 	if cfg.Header != nil {
 		sh.Chrome.Header = core.NewHeaderPane(cfg.Header)
 	}
-	if cfg.Theme != "" {
-		core.SetTheme(cfg.Theme)
+	// An explicit Config.Theme wins; otherwise fall back to the shared store (the picker's
+	// persisted choice, applied across every bubblestack app). An empty result leaves the
+	// built-in default.
+	theme := cfg.Theme
+	if theme == "" {
+		theme = config.Theme()
+	}
+	if theme != "" {
+		core.SetTheme(theme)
 	}
 	r := core.NewRouter(sh, cfg.Tabs)
 	r.SetRefreshAction(cfg.RefreshAction)
