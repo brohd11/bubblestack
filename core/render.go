@@ -169,29 +169,42 @@ const (
 	HelpTabbed
 )
 
-// ShortHelp renders a tab root's decluttered short help for the given preset; the
-// full (?) help still lists everything via the list's own FullHelp, plus the global
-// refresh/quit keys inserted here (they're router-owned, so they don't appear in the
-// list's own FullHelp). The insert lands just before FullHelp's trailing "?" column so
-// that close-help entry stays furthest right. Tab roots use this instead of helpView so
-// secondary keys (filter, output, clear) stay out of the short bar.
+// ShortHelp renders a tab root's decluttered short help for the given preset. The full
+// (?) help is laid out here as four purpose-built columns — nav · actions · filter ·
+// chrome — rather than bubbles' default, which crams the list-level filter keys and every
+// AdditionalFullHelpKey into a single column that grows unreadably tall as a tab adds keys.
+// The chrome column (output/refresh/mouse/quit — all router-owned, so absent from the list's
+// own FullHelp) is built centrally and shown uniformly on every list/picker; a tab's own key
+// list needn't enumerate it, and any entry that duplicates a chrome key is dropped from the
+// actions column (excludeKeys) so it appears once. Tab roots use this instead of helpView so
+// secondary keys stay out of the short bar.
 func ShortHelp(l list.Model, mode HelpMode) string {
 	if l.Help.ShowAll {
-		full := l.FullHelp()
-		extra := []key.Binding{
+		nav := []key.Binding{
+			l.KeyMap.CursorUp, l.KeyMap.CursorDown,
+			l.KeyMap.NextPage, l.KeyMap.PrevPage,
+			l.KeyMap.GoToStart, l.KeyMap.GoToEnd,
+		}
+		filter := []key.Binding{
+			l.KeyMap.Filter, l.KeyMap.ClearFilter,
+			l.KeyMap.AcceptWhileFiltering, l.KeyMap.CancelWhileFiltering,
+		}
+		chrome := []key.Binding{
+			FullHint("focus log", Keys.ToggleOutput),
+			FullHint("toggle log", Keys.Output),
+			FullHint("wrap", Keys.Wrap),
+			FullHint("clear log", Keys.Clear),
 			FullHint("refresh", Keys.Refresh),
 			FullHint("mouse", Keys.Mouse),
 			FullHint("quit", Keys.Quit),
+			l.KeyMap.CloseFullHelp,
 		}
-		// Slot refresh/quit in just before the list's trailing "?" (close-help) column;
-		// the three-index slice caps capacity so append can't clobber full[n-1] before
-		// it's re-appended.
-		if n := len(full); n > 0 {
-			full = append(full[:n-1:n-1], extra, full[n-1])
-		} else {
-			full = append(full, extra)
+		var actions []key.Binding
+		if l.AdditionalFullHelpKeys != nil {
+			actions = excludeKeys(l.AdditionalFullHelpKeys(), chrome)
 		}
-		return l.Styles.HelpStyle.Render(l.Help.FullHelpView(full))
+		cols := [][]key.Binding{nav, actions, filter, chrome}
+		return l.Styles.HelpStyle.Render(l.Help.FullHelpView(cols))
 	}
 	short := []key.Binding{
 		Hint("up", Keys.Up),
@@ -206,6 +219,32 @@ func ShortHelp(l list.Model, mode HelpMode) string {
 	}
 	short = append(short, l.KeyMap.ShowFullHelp)
 	return l.Styles.HelpStyle.Render(l.Help.ShortHelpView(short))
+}
+
+// excludeKeys returns binds with any entry dropped whose keycodes overlap one of exclude's —
+// used by the full-help layout so a tab that still lists a chrome key (e.g. "clear log") in
+// its AdditionalFullHelpKeys doesn't render it twice once the chrome column adds it centrally.
+func excludeKeys(binds, exclude []key.Binding) []key.Binding {
+	skip := map[string]bool{}
+	for _, b := range exclude {
+		for _, k := range b.Keys() {
+			skip[k] = true
+		}
+	}
+	out := make([]key.Binding, 0, len(binds))
+	for _, b := range binds {
+		drop := false
+		for _, k := range b.Keys() {
+			if skip[k] {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // styleHelp re-styles the static help model from the live MutedColor so static help

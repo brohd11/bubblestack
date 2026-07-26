@@ -52,8 +52,14 @@ var _ core.Receiver = (*PickerScreen)(nil)
 var _ core.DirLocator = (*PickerScreen)(nil)
 
 func NewPicker(items []list.Item, opts PickerOpts) *PickerScreen {
+	help := opts.Help
+	if opts.Dir != "" {
+		// A picker with a directory is a DirLocator, so the global terminal/open-dir keys fire
+		// on it — advertise them in its (?) help alongside any caller-supplied bindings.
+		help = append(append([]key.Binding{}, opts.Help...), core.DirKeyHints()...)
+	}
 	s := &PickerScreen{
-		list:       core.NewSelectList(items, opts.Title, opts.Help...),
+		list:       core.NewSelectList(items, opts.Title, help...),
 		crumb:      opts.Crumb,
 		crumbShort: opts.CrumbShort,
 		dir:        opts.Dir,

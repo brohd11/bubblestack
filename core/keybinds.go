@@ -51,6 +51,7 @@ type KeyMap struct {
 	Unwind       key.Binding
 	Refresh      key.Binding // reload all views; action is consumer-supplied
 	Terminal     key.Binding // open a terminal at the top screen's directory (DirLocator); action is consumer-supplied
+	OpenDir      key.Binding // open the top screen's directory in the OS file manager (DirLocator); action is consumer-supplied
 
 	// form
 	NextField key.Binding
@@ -89,6 +90,7 @@ var Keys = KeyMap{
 	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
 	Refresh:      key.NewBinding(key.WithKeys("r")),
 	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
+	OpenDir:      key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "open dir")),
 
 	NextField: key.NewBinding(key.WithKeys("down", "tab")),
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),
@@ -151,6 +153,17 @@ func FullHint(desc string, binds ...key.Binding) key.Binding {
 		}
 	}
 	return key.NewBinding(key.WithKeys(keys...), key.WithHelp(strings.Join(labels, "/"), desc))
+}
+
+// DirKeyHints returns the help entries for the DirLocator-based global keys — the terminal
+// ("t") and open-directory ("T") keys the router fires on any screen advertising a directory.
+// A DirLocator screen includes these in its help so the keys are discoverable; a screen with
+// no directory omits them, so non-repo menus don't advertise keys that wouldn't fire.
+func DirKeyHints() []key.Binding {
+	return []key.Binding{
+		Hint("terminal", Keys.Terminal),
+		Hint("open dir", Keys.OpenDir),
+	}
 }
 
 // tabHint is the combined "[ ]" tab-switch hint shown by ShortHelp (the two tab

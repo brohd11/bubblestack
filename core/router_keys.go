@@ -1,6 +1,7 @@
 package core
 
 import (
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -11,6 +12,25 @@ func wrapperOutput(ch *Chrome) (Wrapper, bool) {
 	}
 	w, ok := ch.Output.(Wrapper)
 	return w, ok
+}
+
+// dirKeyAction resolves a DirLocator-based global key (Terminal, OpenDir): when action is
+// wired, k matches b, the top screen isn't capturing text, and it advertises a directory,
+// it returns (action(dir), true). Otherwise (Action{}, false) so the key falls through to
+// the active screen — preserving any row-level handling it does itself.
+func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Action) (Action, bool) {
+	if action == nil || !MatchKey(k, b) {
+		return Action{}, false
+	}
+	if f, ok := r.Top().(Filterer); ok && f.Filtering() {
+		return Action{}, false
+	}
+	if loc, ok := r.Top().(DirLocator); ok {
+		if dir, ok := loc.LocateDir(); ok {
+			return action(dir), true
+		}
+	}
+	return Action{}, false
 }
 
 // globalKey handles the keys available in any screen. It returns (act, true) when it
@@ -34,21 +54,17 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		}
 	}
 
-	// Terminal opens a terminal at the top screen's directory from any depth — the whole
-	// point is that "t" works once you've drilled into a repo, not only on the list row.
-	// Gated on text capture exactly like Refresh so a filtering list or a focused form
-	// (FormScreen.Filtering()==true) can still type "t". Only the top screen is consulted:
-	// every in-repo screen carries the same repo, so "t" always means the repo on screen.
-	// When the top screen is not a DirLocator (the repo list, the Actions/all-repos menus),
-	// the key falls through so a screen that handles its own row-level "t" still gets it.
-	if r.terminalAction != nil && MatchKey(k, Keys.Terminal) {
-		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
-			if loc, ok := r.Top().(DirLocator); ok {
-				if dir, ok := loc.LocateDir(); ok {
-					return r.terminalAction(dir), true
-				}
-			}
-		}
+	// Terminal ("t") opens a terminal and OpenDir ("T") opens the file manager, both at the
+	// top screen's directory from any depth — the whole point is that they work once you've
+	// drilled into a repo, not only on the list row. dirKeyAction gates each on text capture
+	// (a filtering list / focused form can still type the letter) and resolves the directory
+	// from the top screen's DirLocator; a screen that isn't one lets the key fall through so
+	// its own row-level handling still gets it.
+	if act, ok := r.dirKeyAction(k, Keys.Terminal, r.terminalAction); ok {
+		return act, true
+	}
+	if act, ok := r.dirKeyAction(k, Keys.OpenDir, r.openDirAction); ok {
+		return act, true
 	}
 
 	ch := r.sh.Chrome

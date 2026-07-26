@@ -52,6 +52,12 @@ type Router struct {
 	// screen (which is what preserves any row-level "t" a screen handles itself).
 	terminalAction func(dir string) Action
 
+	// openDirAction supplies the Action for the global OpenDir key (Keys.OpenDir), given the
+	// directory resolved from the top screen's DirLocator — the file-manager sibling of
+	// terminalAction. Consumer-set via SetOpenDirAction; nil ⇒ the key is left to the active
+	// screen.
+	openDirAction func(dir string) Action
+
 	// appInit is an app-level startup command, batched with the initial screen's Init
 	// in Init(). Consumer-set via SetInit; nil ⇒ no app-level startup command.
 	appInit func(*Shared) tea.Cmd
@@ -73,6 +79,11 @@ func (r *Router) SetRefreshAction(f func(*Shared) Action) { r.refreshAction = f 
 // DirLocator, from any depth except while text is captured. Called by the Run facade after
 // NewRouter; nil leaves the key to the active screen.
 func (r *Router) SetTerminalAction(f func(dir string) Action) { r.terminalAction = f }
+
+// SetOpenDirAction wires the consumer's "open dir in the file manager" action to the global
+// OpenDir key, resolved from the top screen's DirLocator the same way as SetTerminalAction.
+// Called by the Run facade after NewRouter; nil leaves the key to the active screen.
+func (r *Router) SetOpenDirAction(f func(dir string) Action) { r.openDirAction = f }
 
 // SetInit wires the consumer's app-level startup command, batched with the initial
 // screen's Init in Init(). Called by the Run facade after NewRouter.

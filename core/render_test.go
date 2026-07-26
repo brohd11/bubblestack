@@ -3,6 +3,8 @@ package core
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/bubbles/key"
 )
 
 func TestTruncLeft(t *testing.T) {
@@ -130,5 +132,28 @@ func TestPopupBox(t *testing.T) {
 	noTitle := PopupBox("", "Body", 0)
 	if strings.Count(withTitle, "\n") <= strings.Count(noTitle, "\n") {
 		t.Errorf("titled popup should be taller than untitled")
+	}
+}
+
+// TestShortHelpFullColumns checks the full (?) help renders the central chrome column
+// (output/refresh/mouse/quit) alongside a tab's own action keys, and that an action key
+// duplicating a chrome key (a "clear log" a tab still lists) is shown once, not twice.
+func TestShortHelpFullColumns(t *testing.T) {
+	extra := []key.Binding{
+		FullHint("terminal", Keys.Terminal),
+		FullHint("open dir", Keys.OpenDir),
+		FullHint("clear log", Keys.Clear), // duplicates the chrome column's clear-log key
+	}
+	l := NewSelectList(nil, "T", extra...)
+	l.Help.ShowAll = true
+	out := ShortHelp(l, HelpMinimal)
+
+	for _, want := range []string{"focus log", "refresh", "mouse", "quit", "terminal", "open dir"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("full help missing %q:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "clear log"); n != 1 {
+		t.Errorf("clear log should render once (deduped from actions), got %d:\n%s", n, out)
 	}
 }
