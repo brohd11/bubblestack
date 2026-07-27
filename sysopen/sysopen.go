@@ -185,7 +185,7 @@ func darwinTerminal(dir string, command []string) *exec.Cmd {
 	if len(command) == 0 {
 		return exec.Command("open", "-a", "Terminal", dir)
 	}
-	script := "cd " + shellQuote(dir) + " && " + shellJoin(command)
+	script := "cd " + ShellQuote(dir) + " && " + ShellJoin(command)
 	return exec.Command("osascript", "-e", `tell application "Terminal" to do script `+appleScriptQuote(script))
 }
 
@@ -230,17 +230,20 @@ func urlCmd(target string) *exec.Cmd {
 	}
 }
 
-// shellQuote wraps s in single quotes for a POSIX shell, escaping any embedded single
-// quotes. Used to build the darwin `cd <dir>` fragment.
-func shellQuote(s string) string {
+// ShellQuote wraps s in single quotes for a POSIX shell as a single-quoted literal, so
+// nothing inside is expanded or word-split; embedded single quotes are closed, escaped, and
+// reopened. Used to build the darwin `cd <dir>` fragment, and shared with consumers that
+// cross a shell boundary (e.g. go-ssh's remote command lines).
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// shellJoin quotes each argument and joins them with spaces into a shell command line.
-func shellJoin(args []string) string {
+// ShellJoin quotes each argument (ShellQuote) and joins them with spaces into one shell
+// command line, so the shell that parses it splits the words back exactly where they started.
+func ShellJoin(args []string) string {
 	quoted := make([]string, len(args))
 	for i, a := range args {
-		quoted[i] = shellQuote(a)
+		quoted[i] = ShellQuote(a)
 	}
 	return strings.Join(quoted, " ")
 }

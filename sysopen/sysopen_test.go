@@ -156,8 +156,8 @@ func TestShellQuote(t *testing.T) {
 		"/tmp/a b/c": "'/tmp/a b/c'",
 	}
 	for in, want := range tests {
-		if got := shellQuote(in); got != want {
-			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		if got := ShellQuote(in); got != want {
+			t.Errorf("ShellQuote(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
