@@ -7,35 +7,52 @@ import (
 )
 
 // Theme is a named set of the framework's semantic colors. The derived styles in
-// shared.go are built from these four colors, so a Theme is the single knob that
-// repaints the whole TUI. SetTheme swaps the active Theme and rebuilds those
-// styles. Two presets ship below; consumers can add their own with RegisterTheme
-// (the hook a future config file will load presets through).
+// shared.go are built from these colors, so a Theme is the single knob that repaints
+// the whole TUI. SetTheme swaps the active Theme and rebuilds those styles. Presets
+// ship below; consumers can add their own with RegisterTheme (the hook a future config
+// file will load presets through).
+//
+// Each field is a lipgloss.TerminalColor, so a color can be a flat lipgloss.Color or a
+// lipgloss.AdaptiveColor{Light, Dark} that resolves against the terminal's detected
+// background (see bubblestack.Run, which primes that detection at startup). Every preset
+// below is adaptive: the neutrals share one light/dark pair, and each accent darkens on a
+// light terminal so it still reads as selected-item text — the fix for e.g. mono's
+// near-white accent vanishing on a white background.
 type Theme struct {
 	Name      string
-	Muted     lipgloss.Color // secondary text: labels, help, list descriptions
-	Log       lipgloss.Color // near-white output/log text
-	Border    lipgloss.Color // box/rule borders
-	Focused   lipgloss.Color // selection / active accent
-	OnFocused lipgloss.Color // text drawn on the accent (title bar); empty ⇒ defaultOnFocused
+	Muted     lipgloss.TerminalColor // secondary text: labels, help, list descriptions
+	Log       lipgloss.TerminalColor // near-white output/log text
+	Border    lipgloss.TerminalColor // box/rule borders
+	Focused   lipgloss.TerminalColor // selection / active accent
+	OnFocused lipgloss.TerminalColor // text drawn on the accent (title bar); nil ⇒ defaultOnFocused
 }
 
-// defaultOnFocused is the title-bar text color used when a theme leaves OnFocused
-// empty: near-black, readable on a light accent. Themes with a dark Focused should
-// set OnFocused to a light color instead.
-const defaultOnFocused = lipgloss.Color("232")
+// defaultOnFocused is the title-bar text color used when a theme leaves OnFocused unset.
+// The accent is light on a dark terminal and dark on a light terminal, so the text drawn
+// on it is always the inverse — one adaptive value serves every theme.
+var defaultOnFocused = lipgloss.AdaptiveColor{Light: "255", Dark: "232"}
 
-// themes is the preset registry, keyed by Theme.Name.
+// Shared neutral palette, identical across every preset. Values are ANSI-256 indices:
+// darker on a light terminal, lighter on a dark one, so borders/labels/log text keep
+// contrast either way.
+var (
+	neutralMuted  = lipgloss.AdaptiveColor{Light: "240", Dark: "247"}
+	neutralLog    = lipgloss.AdaptiveColor{Light: "236", Dark: "252"}
+	neutralBorder = lipgloss.AdaptiveColor{Light: "244", Dark: "243"}
+)
+
+// themes is the preset registry, keyed by Theme.Name. Only the accent (Focused) varies
+// per theme; the neutrals are shared and OnFocused falls back to defaultOnFocused.
 var themes = map[string]Theme{
-	"lipgloss": {Name: "lipgloss", Muted: "247", Log: "252", Border: "245", Focused: "212", OnFocused: "232"},
-	// mono is a monochrome black/white/grey palette: a bright-white accent in
-	// place of the default pink, greys for borders and secondary text, and the
-	// terminal's own background for black.
-	"mono":  {Name: "mono", Muted: "245", Log: "252", Border: "243", Focused: "255", OnFocused: "232"},
-	"godot": {Name: "godot", Muted: "247", Log: "252", Border: "245", Focused: "67", OnFocused: "232"},
-	"red":   {Name: "red", Muted: "247", Log: "252", Border: "245", Focused: "203", OnFocused: "232"},
-	"green": {Name: "green", Muted: "247", Log: "252", Border: "245", Focused: "114", OnFocused: "232"},
-	"amber": {Name: "amber", Muted: "247", Log: "252", Border: "245", Focused: "214", OnFocused: "232"},
+	"lipgloss": {Name: "lipgloss", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "162", Dark: "212"}},
+	// mono is a monochrome black/white/grey palette: the accent is the terminal's own
+	// extreme (black on a light background, white on a dark one), with greys for borders
+	// and secondary text.
+	"mono":  {Name: "mono", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "232", Dark: "255"}},
+	"godot": {Name: "godot", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "25", Dark: "67"}},
+	"red":   {Name: "red", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "160", Dark: "203"}},
+	"green": {Name: "green", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "28", Dark: "114"}},
+	"amber": {Name: "amber", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "130", Dark: "214"}},
 }
 
 // current is the active theme; applyTheme keeps it and the color vars in sync.
@@ -99,7 +116,7 @@ func applyTheme(t Theme) {
 	current = t
 	MutedColor, logColor, BorderColor, FocusedColor = t.Muted, t.Log, t.Border, t.Focused
 	OnFocusedColor = t.OnFocused
-	if OnFocusedColor == "" {
+	if t.OnFocused == nil {
 		OnFocusedColor = defaultOnFocused
 	}
 	rebuildStyles()

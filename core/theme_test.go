@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // restoreTheme snaps the active theme back after a test mutates the global palette.
@@ -30,7 +32,7 @@ func TestSetThemeKnownUnknown(t *testing.T) {
 
 func TestRegisterThemeAndNames(t *testing.T) {
 	restoreTheme(t)
-	RegisterTheme(Theme{Name: "zz-test", Muted: "1", Log: "2", Border: "3", Focused: "4", OnFocused: "5"})
+	RegisterTheme(Theme{Name: "zz-test", Muted: lipgloss.Color("1"), Log: lipgloss.Color("2"), Border: lipgloss.Color("3"), Focused: lipgloss.Color("4"), OnFocused: lipgloss.Color("5")})
 	if !SetTheme("zz-test") {
 		t.Fatal("a registered theme should be resolvable by SetTheme")
 	}
@@ -63,7 +65,7 @@ func TestApplyThemeBroadcasts(t *testing.T) {
 func TestApplyThemeOnFocusedFallback(t *testing.T) {
 	restoreTheme(t)
 	// A theme leaving OnFocused empty falls back to defaultOnFocused.
-	RegisterTheme(Theme{Name: "no-onfocused", Muted: "1", Log: "2", Border: "3", Focused: "4"})
+	RegisterTheme(Theme{Name: "no-onfocused", Muted: lipgloss.Color("1"), Log: lipgloss.Color("2"), Border: lipgloss.Color("3"), Focused: lipgloss.Color("4")})
 	SetTheme("no-onfocused")
 	if OnFocusedColor != defaultOnFocused {
 		t.Errorf("empty OnFocused should fall back to defaultOnFocused, got %q", OnFocusedColor)

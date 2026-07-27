@@ -14,6 +14,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Re-exported as aliases (not new types) so a consumer can build these at the call
@@ -95,6 +96,13 @@ func Run(cfg Config) error {
 	r.SetTerminalAction(cfg.TerminalAction)
 	r.SetOpenDirAction(cfg.OpenDirAction)
 	r.SetInit(cfg.Init)
+	// Prime terminal background detection while the terminal is still in normal mode: the
+	// adaptive palette (see core.Theme) resolves each color against this cached result. The
+	// query is an OSC 11 report; running it here rather than on the first alt-screen render
+	// keeps its response from racing bubbletea's input reader. Non-TTY runs fall back to the
+	// default (dark) gracefully. sync.Once inside lipgloss caches the answer for every later
+	// resolution.
+	_ = lipgloss.HasDarkBackground()
 	// Cell motion (not all motion) reports the wheel and clicks but only streams motion
 	// while a button is held, so there's no hover traffic through Update. It costs the
 	// terminal's own drag-select; the Mouse key (m) turns it back off to copy text out.

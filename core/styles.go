@@ -11,11 +11,11 @@ import (
 // selection accent. applyTheme reassigns the colors and rebuildStyles rebuilds
 // everything below from them; init applies the default theme at startup.
 var (
-	MutedColor     lipgloss.Color
-	logColor       lipgloss.Color
-	BorderColor    lipgloss.Color
-	FocusedColor   lipgloss.Color
-	OnFocusedColor lipgloss.Color // text drawn on the accent (title bar)
+	MutedColor     lipgloss.TerminalColor
+	logColor       lipgloss.TerminalColor
+	BorderColor    lipgloss.TerminalColor
+	FocusedColor   lipgloss.TerminalColor
+	OnFocusedColor lipgloss.TerminalColor // text drawn on the accent (title bar)
 
 	statusStyle lipgloss.Style
 	logStyle    lipgloss.Style
