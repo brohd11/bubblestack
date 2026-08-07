@@ -36,6 +36,7 @@ type TaskScreen struct {
 	done             bool
 	cancel           context.CancelFunc
 	aborting         bool
+	events           chan core.TaskEvent // the task's own event stream, created in Init
 }
 
 var _ core.Crumber = (*TaskScreen)(nil)
@@ -67,7 +68,8 @@ func NewStayTask(label, doneLabel string, run RunFunc,
 func (s *TaskScreen) Init(sh *core.Shared) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	return startTask(ctx, sh, s.run)
+	s.events = make(chan core.TaskEvent)
+	return startTask(ctx, sh, s.events, s.run)
 }
 
 func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
@@ -75,7 +77,7 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 	case core.TaskEvent:
 		if !msg.Done {
 			sh.Log(msg.Line)
-			return s, core.Async(waitForEvent(sh.Events))
+			return s, core.Async(waitForEvent(s.events))
 		}
 		s.done = true
 		if s.aborting {
@@ -159,18 +161,17 @@ func (s *TaskScreen) SetSize(sh *core.Shared, width, bodyHeight int) {}
 // ---------- streaming task pump ----------
 
 // startTask spawns run in the background, piping report() lines into the output
-// log via the shared events channel, and returns the spinner tick + the wait for
-// the first event.
-func startTask(ctx context.Context, sh *core.Shared, run RunFunc) tea.Cmd {
-	sh.Events = make(chan core.TaskEvent)
-	ch := sh.Events
+// log via the screen's own events channel, and returns the spinner tick + the wait
+// for the first event. The channel belongs to the TaskScreen (created in Init), not
+// to Shared: two tasks in flight at once must never retarget each other's stream.
+func startTask(ctx context.Context, sh *core.Shared, events chan core.TaskEvent, run RunFunc) tea.Cmd {
 	go func() {
 		report := func(format string, args ...any) {
-			ch <- core.TaskEvent{Line: fmt.Sprintf(format, args...)}
+			events <- core.TaskEvent{Line: fmt.Sprintf(format, args...)}
 		}
-		run(ctx, sh, report, ch)
+		run(ctx, sh, report, events)
 	}()
-	return tea.Batch(sh.Spinner.Tick, waitForEvent(ch))
+	return tea.Batch(sh.Spinner.Tick, waitForEvent(events))
 }
 
 func waitForEvent(events chan core.TaskEvent) tea.Cmd {

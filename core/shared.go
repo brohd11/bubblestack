@@ -7,11 +7,12 @@ import (
 
 // Shared holds the cross-cutting state owned by the router: the consumer's own
 // context (App), terminal size, the spinner, a help model for rendering static help
-// bars, the in-flight task channel, and the optional Chrome (header/status/output —
-// see chrome.go). A single instance is created in NewShared and pointed at by the
-// router; screens receive it as a method argument. The framework names no domain
-// type: App carries whatever struct the consumer wants (recover it typed with
-// App[T]); the header renderer and output pane ride on Chrome.
+// bars, and the optional Chrome (header/status/output — see chrome.go). A single
+// instance is created in NewShared and pointed at by the router; screens receive it
+// as a method argument. The framework names no domain type: App carries whatever
+// struct the consumer wants (recover it typed with App[T]); the header renderer and
+// output pane ride on Chrome. Per-screen streams (a task's event channel) belong to
+// the screen, not here — anything parked on Shared is shared with every screen.
 type Shared struct {
 	App    any     // consumer-owned context; recover it with App[T]
 	Chrome *Chrome // optional header/status/output furniture (nil ⇒ fullscreen)
@@ -21,8 +22,6 @@ type Shared struct {
 
 	Spinner spinner.Model
 	help    help.Model // renders static (non-list) help bars
-
-	Events chan TaskEvent // the in-flight streaming task channel
 }
 
 func NewShared(app any) *Shared {

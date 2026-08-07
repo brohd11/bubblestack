@@ -58,9 +58,38 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 // `return s, components.RootUpdate(sh, &s.list, msg)`; roots that also react to
 // broadcast notifications keep doing so via core.Receiver.Receive, which the router
 // routes separately from Update. Returns the screen's Action.
+//
+// The dispatch skeleton itself (wheel/filter/key order) is listDispatch; what makes
+// a root a root is only the two hooks below.
 func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
-	// Above the filter branch: the list already moves its cursor on up/down while
-	// filtering, so the wheel does too rather than going dead over a filtered list.
+	onSelect := func() core.Action {
+		if it, ok := l.SelectedItem().(Item); ok && it.Pick != nil {
+			sh.ClearStatus()
+			return it.Pick(sh)
+		}
+		return core.Action{}
+	}
+	onKey := func(k string) (core.Action, bool) {
+		// Let a self-dispatching Item handle its own row keys (e.g. an addon
+		// row's "t" → open terminal); unhandled keys fall through to WrapNav/list.
+		if it, ok := l.SelectedItem().(Item); ok && it.Keys != nil {
+			return it.Keys(sh, k)
+		}
+		return core.Action{}, false
+	}
+	return listDispatch(sh, l, msg, onSelect, onKey)
+}
+
+// listDispatch is the dispatch skeleton shared by RootUpdate and PickerScreen.Update:
+// wheel nav above the filter branch (the list already moves its cursor on up/down
+// while filtering, so the wheel does too rather than going dead over a filtered
+// list), every message straight to the list while filtering, then real keypresses
+// through the select hook (always consumed) or the key hook + WrapNav, and anything
+// left over to the list itself. What differs between screens — what Select runs,
+// which extra keys exist, whether Back pops — lives in the hooks; the order lives
+// here, so a dispatch-rule change (like the wheel-above-filter rule) is made once.
+func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg,
+	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
 	if m, ok := msg.(tea.MouseMsg); ok {
 		if WheelNav(l, m) {
 			return core.Action{}
@@ -75,18 +104,10 @@ func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 		k := key.String()
 		switch {
 		case core.MatchKey(k, core.Keys.Select):
-			if it, ok := l.SelectedItem().(Item); ok && it.Pick != nil {
-				sh.ClearStatus()
-				return it.Pick(sh)
-			}
-			return core.Action{}
+			return onSelect()
 		default:
-			// Let a self-dispatching Item handle its own row keys (e.g. an addon
-			// row's "t" → open terminal); unhandled keys fall through to the list.
-			if it, ok := l.SelectedItem().(Item); ok && it.Keys != nil {
-				if act, handled := it.Keys(sh, k); handled {
-					return act
-				}
+			if act, handled := onKey(k); handled {
+				return act
 			}
 			if WrapNav(l, k) {
 				return core.Action{}

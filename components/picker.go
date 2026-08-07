@@ -102,50 +102,31 @@ func (s *PickerScreen) Init(*core.Shared) tea.Cmd { return nil }
 func (s *PickerScreen) Filtering() bool { return s.list.FilterState() == list.Filtering }
 
 func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	// Above the filter branch: the list already moves its cursor on up/down while
-	// filtering, so the wheel does too rather than going dead over a filtered list.
-	if m, ok := msg.(tea.MouseMsg); ok {
-		if WheelNav(&s.list, m) {
-			return s, core.Action{}
+	onSelect := func() core.Action {
+		if s.OnSelect != nil {
+			return s.OnSelect(sh, s.list.SelectedItem())
 		}
-	}
-	if s.Filtering() {
-		var cmd tea.Cmd
-		s.list, cmd = s.list.Update(msg)
-		return s, core.Async(cmd)
-	}
-	if key, ok := msg.(tea.KeyMsg); ok {
-		k := key.String()
-		switch {
-		case core.MatchKey(k, core.Keys.Back):
-			return s, core.Pop()
-		case core.MatchKey(k, core.Keys.Select):
-			if s.OnSelect != nil {
-				return s, s.OnSelect(sh, s.list.SelectedItem())
-			}
-			// No screen-level handler: let a self-dispatching Item pick itself.
-			if it, ok := s.list.SelectedItem().(Item); ok && it.Pick != nil {
-				return s, it.Pick(sh)
-			}
-			return s, core.Action{}
-		default:
-			if s.OnKey != nil {
-				if act, handled := s.OnKey(sh, k, s.list.SelectedItem()); handled {
-					return s, act
-				}
-			} else if it, ok := s.list.SelectedItem().(Item); ok && it.Keys != nil {
-				if act, handled := it.Keys(sh, k); handled {
-					return s, act
-				}
-			}
-			if WrapNav(&s.list, k) {
-				return s, core.Action{}
-			}
+		// No screen-level handler: let a self-dispatching Item pick itself.
+		if it, ok := s.list.SelectedItem().(Item); ok && it.Pick != nil {
+			return it.Pick(sh)
 		}
+		return core.Action{}
 	}
-	var cmd tea.Cmd
-	s.list, cmd = s.list.Update(msg)
-	return s, core.Async(cmd)
+	onKey := func(k string) (core.Action, bool) {
+		if core.MatchKey(k, core.Keys.Back) {
+			return core.Pop(), true
+		}
+		if s.OnKey != nil {
+			// A screen-level OnKey owns the row's extra keys wholesale: when it
+			// doesn't handle one, the key falls to WrapNav, not to the Item's Keys.
+			return s.OnKey(sh, k, s.list.SelectedItem())
+		}
+		if it, ok := s.list.SelectedItem().(Item); ok && it.Keys != nil {
+			return it.Keys(sh, k)
+		}
+		return core.Action{}, false
+	}
+	return s, listDispatch(sh, &s.list, msg, onSelect, onKey)
 }
 
 func (s *PickerScreen) View(*core.Shared) string     { return s.list.View() }

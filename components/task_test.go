@@ -9,7 +9,7 @@ import (
 )
 
 // The task tests drive Update directly with TaskEvents and keys, skipping Init so no
-// goroutine/sh.Events channel is involved — the abort/done/dismiss branching is pure.
+// goroutine/events channel is involved — the abort/done/dismiss branching is pure.
 
 func noopRun(context.Context, *core.Shared, func(string, ...any), chan<- core.TaskEvent) {}
 
@@ -91,5 +91,23 @@ func TestTaskViewLabels(t *testing.T) {
 	s.Update(sh, core.TaskEvent{Done: true})
 	if !containsAll(s.View(sh), "archived") {
 		t.Errorf("a finished stay-task should show its doneLabel, got %q", s.View(sh))
+	}
+}
+
+func TestTaskInitStreamsOnOwnChannel(t *testing.T) {
+	// Init spawns the run and hands it the screen's own events channel — the stream
+	// no longer passes through Shared, so two tasks can't retarget each other.
+	run := func(ctx context.Context, sh *core.Shared, report func(string, ...any), done chan<- core.TaskEvent) {
+		report("working")
+		done <- core.TaskEvent{Done: true}
+	}
+	s := NewTask("install", run, func(*core.Shared, core.TaskEvent) core.Action { return core.Action{} })
+	s.Init(core.NewShared(nil)) // the returned cmd (spinner tick + wait) isn't run here
+
+	if ev := <-s.events; ev.Line != "working" {
+		t.Errorf("first event = %+v, want the report line", ev)
+	}
+	if ev := <-s.events; !ev.Done {
+		t.Errorf("second event = %+v, want the terminating event", ev)
 	}
 }
