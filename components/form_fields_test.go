@@ -150,6 +150,7 @@ func allFields() []FormField {
 	return []FormField{
 		tf, ta,
 		NewToggleField("g", stageLabel, stageOpts, "|"),
+		NewCheckField("c", "Include every descendant of the selected directory", true),
 		pick,
 		NewNote("addon_manifest.yml is created in this directory (blank ⇒ project root)."),
 	}
@@ -253,6 +254,45 @@ func TestRenderToggleIsUnfolded(t *testing.T) {
 	}
 	if got, want := ansi.Strip(RenderToggle(stageOpts, 0, "|")), strings.Join(stageOpts, " | "); got != want {
 		t.Errorf("RenderToggle should join the options unchanged:\n got %q\nwant %q", got, want)
+	}
+}
+
+// ---------- CheckField ----------
+
+func TestCheckFieldRendersItsBox(t *testing.T) {
+	c := NewCheckField("dirs", "Include dirs", false)
+	c.SetInnerWidth(40)
+
+	if got, want := ansi.Strip(c.View(false)), "  [ ] Include dirs"; got != want {
+		t.Errorf("an unchecked row should render an empty box:\n got %q\nwant %q", got, want)
+	}
+	c.OnToggle(true)
+	if !c.Checked() {
+		t.Fatal("OnToggle should flip the field")
+	}
+	if got, want := ansi.Strip(c.View(false)), "  [X] Include dirs"; got != want {
+		t.Errorf("a checked row should render a filled box:\n got %q\nwant %q", got, want)
+	}
+	// Backward is the same flip: with two states there is nowhere else to go.
+	c.OnToggle(false)
+	if c.Checked() {
+		t.Error("OnToggle should flip the field back regardless of direction")
+	}
+}
+
+// TestCheckFieldFoldsUnderItsLabel pins the one place this field departs from the others:
+// the label is the *content*, so a folded label hangs under the label rather than under the
+// box — which is also why SetInnerWidth can't use fieldBase.contentWidth.
+func TestCheckFieldFoldsUnderItsLabel(t *testing.T) {
+	c := NewCheckField("r", "Recurse into every descendant directory", false)
+	c.SetInnerWidth(30) // content column: 30 - 2 - 4 = 24, under the 38-cell label
+
+	lines := strings.Split(ansi.Strip(c.View(true)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("a label too wide for the row should fold, got %d lines:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	if indent := strings.Repeat(" ", markerWidth+checkWidth); !strings.HasPrefix(lines[1], indent) {
+		t.Errorf("the folded row should hang under the label column, got %q", lines[1])
 	}
 }
 

@@ -88,6 +88,47 @@ func TestFormToggleLeftRight(t *testing.T) {
 	}
 }
 
+func TestFormSpaceTogglesFocusedField(t *testing.T) {
+	check := NewCheckField("dirs", "Include dirs", false)
+	f := NewForm(FormOpts{Fields: []FormField{check}})
+	sh := core.NewShared(nil)
+
+	f.Update(sh, keyMsg(" "))
+	if !check.Checked() {
+		t.Fatal("space on a focused check field should check it")
+	}
+	f.Update(sh, keyMsg(" "))
+	if check.Checked() {
+		t.Fatal("space again should uncheck it")
+	}
+}
+
+// TestFormSpaceStepsAToggleForward pins the intended side effect of routing space to any
+// Toggler: on a multi-option switch it advances, the same as Right.
+func TestFormSpaceStepsAToggleForward(t *testing.T) {
+	f, scope := sampleForm(func(o *FormOpts) { o.Focus = "scope" })
+	f.Update(core.NewShared(nil), keyMsg(" "))
+	if scope.Index() != 1 {
+		t.Errorf("space on a focused toggle should advance the index, got %d", scope.Index())
+	}
+}
+
+// TestFormSpaceTypesIntoTextField guards the ordering the Toggle case depends on: a space
+// typed into a focused text field is claimed by QueryUpdate above the keybind switch, so it
+// reaches the input instead of being swallowed as a toggle key.
+func TestFormSpaceTypesIntoTextField(t *testing.T) {
+	f, _ := sampleForm() // focus starts on the "name" TextField
+	sh := core.NewShared(nil)
+	f.Init(sh)
+
+	f.Update(sh, keyMsg("a"))
+	f.Update(sh, keyMsg(" "))
+	f.Update(sh, keyMsg("b"))
+	if got := f.Value("name"); got != "a b" {
+		t.Errorf("space should type into a focused text field, got %q", got)
+	}
+}
+
 func TestFormSelectRunsOnSubmit(t *testing.T) {
 	submitted := false
 	f, _ := sampleForm(func(o *FormOpts) {

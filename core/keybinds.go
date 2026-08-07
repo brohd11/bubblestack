@@ -56,6 +56,7 @@ type KeyMap struct {
 	// form
 	NextField key.Binding
 	PrevField key.Binding
+	Toggle    key.Binding // flip the focused field in place (a checkbox, or a switch stepped forward)
 
 	// pagination
 	PageNext key.Binding
@@ -94,6 +95,11 @@ var Keys = KeyMap{
 
 	NextField: key.NewBinding(key.WithKeys("down", "tab")),
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),
+	// Space is " " as a key string: bubbletea normalizes a bare space rune to KeySpace,
+	// whose name is " " (key.go, keyNames). It only ever reaches a form's keybind switch
+	// on a non-text field — components.QueryUpdate diverts KeySpace into a focused text
+	// field before the switch runs.
+	Toggle: key.NewBinding(key.WithKeys(" ")),
 
 	PageNext: key.NewBinding(key.WithKeys("'", "3")),
 	PagePrev: key.NewBinding(key.WithKeys(";", "2")),
@@ -121,6 +127,8 @@ func prettyKey(k string) string {
 		return "→"
 	case "shift+tab":
 		return "⇧tab"
+	case " ":
+		return "space" // a literal blank would render as a help entry with no key
 	default:
 		return k
 	}

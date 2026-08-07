@@ -17,9 +17,9 @@ import (
 // self-dispatching Item list row (see internal/tui/doc.go). A tab/flow supplies the
 // fields and an OnSubmit closure; FormScreen names no domain type.
 //
-// The field types (FormField + TextField/TextAreaField/ToggleField/PickField/
-// StaticField) and the optional interfaces (Toggler/Activator/Growable/editable/valued)
-// live in form_fields.go.
+// The field types (FormField + TextField/TextAreaField/ToggleField/CheckField/
+// PickField/StaticField) and the optional interfaces (Toggler/Activator/Growable/
+// editable/valued) live in form_fields.go.
 
 type FormOpts struct {
 	Title      string // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
@@ -137,6 +137,14 @@ func (f *FormScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 		// to the input (cursor movement / literal characters).
 		if t, ok := f.current().(Toggler); ok {
 			t.OnToggle(core.MatchKey(k, core.Keys.Right))
+			return f, core.Action{}
+		}
+	case core.MatchKey(k, core.Keys.Toggle):
+		// Space flips the focused field in place — the checkbox key. On a multi-option
+		// ToggleField it steps forward, the same as Right. A focused *text* field never
+		// reaches here: QueryUpdate diverts space into it above the switch.
+		if t, ok := f.current().(Toggler); ok {
+			t.OnToggle(true)
 			return f, core.Action{}
 		}
 	case core.MatchKey(k, core.Keys.Select):

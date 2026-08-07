@@ -390,6 +390,72 @@ func packToggle(options []string, index int, delim string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
+// ---------- CheckField ----------
+
+// checkWidth is the display width of the "[X] " box, the same in both of its states.
+const checkWidth = 4
+
+// CheckField is a boolean row rendered as a checkbox — "[X] Include dirs" — for the flags
+// a two-option Yes/No ToggleField reads as heavier than they are. It satisfies Toggler, so
+// space and ◄ ► both flip it.
+//
+// It deliberately does NOT satisfy Activator: Enter stays the form's submit, since a form
+// of nothing but check fields would otherwise have no way to submit at all. Nor does it
+// satisfy valued — read the state off the field itself with Checked(), the way a
+// ToggleField's Index() is read, rather than through a stringly-typed FormScreen.Value.
+type CheckField struct {
+	fieldBase
+	checked bool
+	width   int
+}
+
+// NewCheckField builds a checkbox row seeded with checked.
+func NewCheckField(key, label string, checked bool) *CheckField {
+	return &CheckField{fieldBase: fieldBase{key, label}, checked: checked}
+}
+
+func (c *CheckField) Focusable() bool   { return true }
+func (c *CheckField) Focus() tea.Cmd    { return nil }
+func (c *CheckField) Blur()             {}
+func (c *CheckField) Checked() bool     { return c.checked }
+func (c *CheckField) SetChecked(v bool) { c.checked = v }
+
+// OnToggle flips the box. The direction is ignored: with two states, forward and backward
+// land in the same place.
+func (c *CheckField) OnToggle(bool) { c.checked = !c.checked }
+
+// SetInnerWidth can't use fieldBase.contentWidth, which subtracts the label: on every other
+// field the label sits in the prefix, but here it *is* the content, rendered to the right of
+// the box. So subtract the marker and the box instead.
+//
+// Floored at 1 for the same reason contentWidth is: ansi.Wrap reads a limit below 1 as
+// "don't wrap", which would quietly reinstate the overrun this arithmetic exists to prevent.
+func (c *CheckField) SetInnerWidth(inner int) {
+	if w := inner - markerWidth - checkWidth; w > 1 {
+		c.width = w
+		return
+	}
+	c.width = 1
+}
+
+// View renders "▸ [X] Label". It can't reuse fieldRow, whose prefix is marker+label — here
+// the box takes the label's place in the prefix and the label becomes the content, so a long
+// label folds under itself rather than under the box. Same JoinHorizontal, same reason.
+//
+// Colors follow the toggle's convention (packToggle): the checked state is the focused
+// color, the unchecked one muted. Styles are built per call, never cached in a package var,
+// so they track a core.SetTheme switch — and the label is wrapped raw and rendered after,
+// since lipgloss re-opens the style per line and folding an already-rendered run would leave
+// an SGR open across the break.
+func (c *CheckField) View(focused bool) string {
+	box, style := "[ ] ", lipgloss.NewStyle().Foreground(core.MutedColor)
+	if c.checked {
+		box, style = "[X] ", lipgloss.NewStyle().Foreground(core.FocusedColor).Bold(true)
+	}
+	prefix := fieldMarker(focused) + style.Render(box)
+	return lipgloss.JoinHorizontal(lipgloss.Top, prefix, style.Render(ansi.Wrap(c.label, c.width, "")))
+}
+
 // ---------- PickField ----------
 
 // PickField is a focusable row whose Enter runs a custom action (an Activator) — used
