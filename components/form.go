@@ -43,6 +43,7 @@ type FormScreen struct {
 	fields     []FormField
 	help       []key.Binding
 	focus      int
+	focused    bool // panel focus when nested (FocusableScreen); a standalone form is always focused
 	onSubmit   func(*core.Shared, *FormScreen) core.Action
 	onCancel   func(*core.Shared) core.Action
 	onKey      func(*core.Shared, string) (core.Action, bool)
@@ -52,6 +53,7 @@ var _ core.Screen = (*FormScreen)(nil)
 var _ core.Filterer = (*FormScreen)(nil)
 var _ core.Crumber = (*FormScreen)(nil)
 var _ Typable = (*FormScreen)(nil)
+var _ FocusableScreen = (*FormScreen)(nil)
 
 // CrumbLabel contributes the form's breadcrumb segment, defaulting to "Form" when no
 // Crumb is declared.
@@ -60,7 +62,7 @@ func (f *FormScreen) CrumbLabel(short bool) string {
 }
 
 func NewForm(opts FormOpts) *FormScreen {
-	f := &FormScreen{title: opts.Title, crumb: opts.Crumb, crumbShort: opts.CrumbShort, fields: opts.Fields, help: opts.Help, onSubmit: opts.OnSubmit, onCancel: opts.OnCancel, onKey: opts.OnKey}
+	f := &FormScreen{title: opts.Title, crumb: opts.Crumb, crumbShort: opts.CrumbShort, fields: opts.Fields, help: opts.Help, focused: true, onSubmit: opts.OnSubmit, onCancel: opts.OnCancel, onKey: opts.OnKey}
 	f.focus = f.firstFocusable()
 	if opts.Focus != "" {
 		for i, fld := range f.fields {
@@ -230,12 +232,18 @@ func (f *FormScreen) Focus(key string) tea.Cmd {
 // FocusedKey is the key of the currently focused field.
 func (f *FormScreen) FocusedKey() string { return f.current().Key() }
 
+// SetFocused implements FocusableScreen: a host (ScreenPanel) tells the form
+// whether its panel holds focus, and the box border carries the signal —
+// accented when focused, plain when a sibling pane has it. Field-level focus
+// (the row marker) is unaffected.
+func (f *FormScreen) SetFocused(focused bool) { f.focused = focused }
+
 func (f *FormScreen) View(sh *core.Shared) string {
 	rows := make([]string, len(f.fields))
 	for i, fld := range f.fields {
 		rows[i] = fld.View(i == f.focus)
 	}
-	return core.WithTitle(f.title, sh.Box(strings.Join(rows, "\n")))
+	return core.WithTitle(f.title, sh.BoxFocused(strings.Join(rows, "\n"), f.focused))
 }
 
 func (f *FormScreen) HelpView(sh *core.Shared) string { return sh.BindingHelp(f.help) }

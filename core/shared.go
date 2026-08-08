@@ -19,6 +19,7 @@ type Shared struct {
 
 	width  int
 	height int
+	bodyY  int // rows of chrome above the body; the router maintains it each resize
 
 	Spinner spinner.Model
 	help    help.Model // renders static (non-list) help bars
@@ -86,3 +87,9 @@ func App[T any](s *Shared) *T { return s.App.(*T) }
 // Width reports the current terminal width, so a Header closure can size/truncate
 // its content to fit (see HeaderInnerWidth).
 func (s *Shared) Width() int { return s.width }
+
+// BodyY is the terminal row the active screen's body starts at (the height of the
+// chrome above it), maintained by the router on every resize. MouseMsg coordinates
+// are absolute terminal rows, so a screen that hit-tests its own layout subtracts
+// BodyY first.
+func (s *Shared) BodyY() int { return s.bodyY }

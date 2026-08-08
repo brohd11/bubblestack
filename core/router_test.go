@@ -275,7 +275,7 @@ func TestWrapKeyPassesThrough(t *testing.T) {
 
 // TestWrapKeyPrefersScreen checks the arbitration when both the top screen and the output
 // pane can wrap: focus decides. An unfocused pane means the user is looking at the screen,
-// so w is the screen's; focusing the pane (tab) points w back at the pane, which is what
+// so w is the screen's; focusing the pane (O) points w back at the pane, which is what
 // keeps the log's own wrap reachable from a screen that wraps.
 func TestWrapKeyPrefersScreen(t *testing.T) {
 	r, screen, out := wrapRouter()
@@ -295,7 +295,7 @@ func TestWrapKeyPrefersScreen(t *testing.T) {
 		t.Fatal("w should toggle the screen's wrap back off")
 	}
 
-	tm = pump(tm, keyMsg(Keys.ToggleOutput.Keys()[0])) // tab: focus the pane
+	tm = pump(tm, keyMsg(Keys.ToggleOutput.Keys()[0])) // O: focus the pane
 	pump(tm, keyMsg(Keys.Wrap.Keys()[0]))
 	if !out.Wrapped() {
 		t.Fatal("w should wrap the output pane once it holds focus")

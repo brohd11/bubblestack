@@ -43,7 +43,7 @@ type KeyMap struct {
 	// global chrome
 	NextTab      key.Binding
 	PrevTab      key.Binding
-	ToggleOutput key.Binding // focus/unfocus the output pane for scrolling
+	ToggleOutput key.Binding // focus/unfocus the output pane for scrolling (O; o shows/hides)
 	Output       key.Binding // show/hide the output box
 	Wrap         key.Binding // toggle the output pane's wrap render mode (optional Wrapper)
 	Mouse        key.Binding // toggle mouse capture; off restores terminal text selection
@@ -83,7 +83,7 @@ var Keys = KeyMap{
 
 	NextTab:      key.NewBinding(key.WithKeys("]", "x", "shift+right")),
 	PrevTab:      key.NewBinding(key.WithKeys("[", "z", "shift+left")),
-	ToggleOutput: key.NewBinding(key.WithKeys("tab")),
+	ToggleOutput: key.NewBinding(key.WithKeys("O")),
 	Output:       key.NewBinding(key.WithKeys("o")),
 	Wrap:         key.NewBinding(key.WithKeys("w")),
 	Mouse:        key.NewBinding(key.WithKeys("m")),

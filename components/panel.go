@@ -23,7 +23,7 @@ type Panel interface {
 // only carries what it uses.
 
 // Focusable marks a panel that can hold focus. A panel without it is
-// informational-only: skipped in shift+tab traversal and never routed keys.
+// informational-only: skipped in tab traversal and never routed keys.
 type Focusable interface {
 	Focus()
 	Blur()
@@ -33,7 +33,7 @@ type Focusable interface {
 // PanelUpdater receives input: key msgs while the panel is focused (or
 // capturing), and every non-key msg as a broadcast. The bool reports whether the
 // msg was consumed — an unhandled key falls through to the screen's own
-// shift+tab/Back handling.
+// tab/Back handling.
 type PanelUpdater interface {
 	UpdatePanel(sh *core.Shared, msg tea.Msg) (act core.Action, handled bool)
 }
@@ -53,7 +53,7 @@ type PanelHelper interface{ PanelHelp() []key.Binding }
 // screen. ModularScreen calls it once from its own Init and batches the cmds.
 type panelInitializer interface{ Init(*core.Shared) tea.Cmd }
 
-// FocusEnd ends a slot's focus chain: shift+tab from a slot whose NextFocus is
+// FocusEnd ends a slot's focus chain: tab from a slot whose NextFocus is
 // FocusEnd returns focus to the first Focusable slot instead of advancing (see
 // Slot.NextFocus).
 const FocusEnd = -1
@@ -71,14 +71,22 @@ type Slot struct {
 	// 0 counts as 1. The column's last slot always takes the rounding remainder,
 	// so the column's heights sum exactly.
 	Weight int
-	// NextFocus is the shift+tab focus target, by 1-based index into the
+	// Expand lets the slot absorb its column's leftover rows: panels render at
+	// most their Weight allocation, and a slot whose content renders shorter (a
+	// form's box, say) leaves the rest unrendered. After measuring, the screen
+	// splits that slack equally among the column's Expand slots (remainder to
+	// the last) and re-sizes them — one Expand slot is "take the rest of the
+	// screen". Panels that already fill their allocation (ScrollContainer,
+	// ListPanel) never trigger it.
+	Expand bool
+	// NextFocus is the tab focus target, by 1-based index into the
 	// flattened slot order (column 0 top→bottom, then column 1 top→bottom, …):
 	//
 	//   - 0 (unset): advance to the next Focusable slot in flattened order,
 	//     wrapping — the default loop, so Slot{Panel: x} needs no NextFocus.
 	//   - N > 0: jump to flattened slot N, which must be Focusable (an invalid
 	//     target leaves focus where it is).
-	//   - FocusEnd: the chain ends here; shift+tab returns focus to the first
+	//   - FocusEnd: the chain ends here; tab returns focus to the first
 	//     Focusable slot.
 	NextFocus int
 }

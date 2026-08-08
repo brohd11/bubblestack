@@ -161,6 +161,9 @@ func (r Router) resize() {
 	if r.sh.width == 0 {
 		return
 	}
+	// Publish the body's absolute row so screens that hit-test mouse coordinates
+	// (a ModularScreen focusing the pane under the cursor) can translate them.
+	r.sh.bodyY = vheight(r.topChrome(r.currentMask()))
 	// The output pane is router-owned chrome, so the router sizes it and keeps it
 	// pinned to the newest line unless the user is scrolling it.
 	if r.outputVisible() {

@@ -15,7 +15,7 @@ import (
 // and /-filtering all behave exactly as they do on a full picker screen. The one
 // deliberate difference is Back: a PickerScreen binds esc to Pop because it IS
 // the screen, while a ListPanel shares its screen with sibling panels — so esc
-// (and shift+tab) return handled=false and the host ModularScreen's fallbacks
+// (and tab) return handled=false and the host ModularScreen's fallbacks
 // (pop, pane cycle) fire instead.
 type ListPanel struct {
 	list     list.Model
@@ -68,21 +68,22 @@ func (p *ListPanel) List() *list.Model { return &p.list }
 func (p *ListPanel) Capturing() bool { return p.list.FilterState() == list.Filtering }
 
 // UpdatePanel runs the picker dispatch (listDispatch) with the two host-owned
-// keys carved out first: Back is the screen's pop and shift+tab its pane cycle,
+// keys carved out first: Back is the screen's pop and tab its pane cycle,
 // so neither is consumed here (contrast PickerScreen, which binds Back to Pop
 // itself). While filtering, esc stays — listDispatch's filtering branch feeds it
 // to the list, which cancels the filter. The wheel only moves the cursor while
-// focused: mouse msgs are broadcast to every panel, and a wheel that rolled an
-// unfocused sidebar would read as a bug.
+// focused: the host focuses the panel under the cursor before forwarding a
+// press, and anything that still arrives unfocused (a broadcast) must not roll
+// an unfocused sidebar.
 func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	if _, ok := msg.(tea.MouseMsg); ok && !p.focused {
 		return core.Action{}, false
 	}
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
-		// shift+tab has no core.Keys binding (it is ModularScreen's own key), so
+		// tab has no core.Keys binding (it is ModularScreen's own key), so
 		// it is matched as a raw string — the one sanctioned exception.
-		if k == "shift+tab" || (core.MatchKey(k, core.Keys.Back) && !p.Capturing()) {
+		if k == "tab" || (core.MatchKey(k, core.Keys.Back) && !p.Capturing()) {
 			return core.Action{}, false
 		}
 	}

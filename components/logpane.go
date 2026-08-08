@@ -167,7 +167,7 @@ func (p *LogPane) View(focused bool) string {
 	}
 	if focused {
 		color = core.FocusedColor
-		label = "Output · ↑/↓ scroll · tab/esc back · o hide · w wrap"
+		label = "Output · ↑/↓ scroll · O/esc back · o hide · w wrap"
 	}
 
 	inner := p.innerWidth()

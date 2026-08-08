@@ -12,12 +12,14 @@ import (
 // laid out as columns of weighted rows, with one Focusable panel holding focus
 // at a time. It is a pure layout shell — panels draw their own borders and own
 // their keys; the screen only routes input (child first, itself as fallback),
-// cycles focus on shift+tab, pops on esc, and composes the help bar. Like every
+// cycles focus on tab, pops on esc, and composes the help bar. Like every
 // component it names no domain type: the consumer fills the slots and answers
 // the hooks.
 type ModularScreen struct {
 	cols       [][]Slot
-	flat       []*Slot // declaration order: column 0 top→bottom, then column 1, …
+	flat       []*Slot     // declaration order: column 0 top→bottom, then column 1, …
+	rects      []panelRect // per flat slot, body-relative; laid out by SetSize
+	bodyH      int         // post-title body height, stashed by SetSize for Expand
 	colWidths  []int
 	focus      int // index into flat; -1 when no slot is focusable
 	title      string
@@ -30,12 +32,17 @@ type ModularScreen struct {
 	initFn     func(*core.Shared) tea.Cmd
 }
 
+// panelRect is a slot's body-relative bounding box, recorded by SetSize so Update
+// can hit-test mouse coordinates (translated via Shared.BodyY).
+type panelRect struct{ x, y, w, h int }
+
 var _ core.Screen = (*ModularScreen)(nil)
 var _ core.Filterer = (*ModularScreen)(nil)
 var _ core.PopStopper = (*ModularScreen)(nil)
 var _ core.Crumber = (*ModularScreen)(nil)
 var _ core.Receiver = (*ModularScreen)(nil)
 var _ core.DirLocator = (*ModularScreen)(nil)
+var _ core.FocusableScreen = (*ModularScreen)(nil)
 
 // ModularOpts configures a ModularScreen. ColWidths sizes columns in cells, one
 // entry per column; 0 (or a missing entry) makes the column flex — flex columns
@@ -116,16 +123,25 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 //     filter input losing characters to the pane cycle would read as a bug;
 //  2. other key msgs go to the focused panel's PanelUpdater — a handled result
 //     is applied and done;
-//  3. an unhandled shift+tab cycles focus (matched as a raw key string: it is
+//  3. an unhandled tab cycles focus (matched as a raw key string: it is
 //     ModularScreen's own key, so it has no core.Keys binding — the one
 //     sanctioned exception to the MatchKey rule);
 //  4. an unhandled Back pops the screen;
 //  5. anything else is dropped — the focused panel already had its chance.
 //
-// Non-key msgs (ticks, broadcast results, mouse) are instead fanned out to every
+// Non-key msgs (ticks, broadcast results) are instead fanned out to every
 // slot's PanelUpdater and their cmds batched, so a panel keeps live data without
 // holding focus; a nav Msg is rare on this path, but the first non-nil one is
 // honored.
+//
+// Mouse presses are the exception to the broadcast: they are hit-tested against
+// the slot rects SetSize recorded (coordinates translated via Shared.BodyY — the
+// same problem the router solves for the output pane with inOutput), and a press
+// inside a Focusable slot moves focus there and goes to that panel alone. That's
+// what makes a pane scrollable when keyboard focus can't reach it — a sibling
+// form may be capturing every key, but the wheel still works over its neighbor.
+// Presses that miss every slot (or hit a non-focusable one) fall through to the
+// broadcast, as do motion/release events.
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
@@ -141,12 +157,22 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 			}
 		}
 		switch {
-		case k == "shift+tab":
+		case k == "tab":
 			s.advanceFocus()
 		case core.MatchKey(k, core.Keys.Back):
 			return s, core.Pop()
 		}
 		return s, core.Action{}
+	}
+	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress {
+		if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
+			s.focusSlot(i)
+			if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
+				act, _ := u.UpdatePanel(sh, msg)
+				return s, act
+			}
+			return s, core.Action{}
+		}
 	}
 	var cmds []tea.Cmd
 	var nav tea.Msg
@@ -171,6 +197,24 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 func (s *ModularScreen) Filtering() bool { return s.capturingSlot() >= 0 }
 
 func (s *ModularScreen) PopStop() bool { return s.popStop }
+
+// SetFocused implements core.FocusableScreen: the router blurs the screen when
+// the output pane takes the keys and refocuses it on return. The focus INDEX is
+// untouched — only the focused panel's visual state flips (Blur/Focus are
+// idempotent flag-setters; a ScreenPanel forwards to its child), so the pane
+// that was active dims and relights in place.
+func (s *ModularScreen) SetFocused(focused bool) {
+	if s.focus < 0 {
+		return
+	}
+	if f, ok := s.focusedPanel().(Focusable); ok {
+		if focused {
+			f.Focus()
+		} else {
+			f.Blur()
+		}
+	}
+}
 
 // LocateDir reports the directory this screen concerns (ModularOpts.Dir), so the
 // global Terminal key opens a terminal there. Empty dir ⇒ no locator (the key
@@ -197,14 +241,50 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 // View stacks each column's panels vertically and joins the columns side by
 // side. Panels draw their own borders; the screen adds only the optional title
 // bar.
+//
+// Before joining, each column gets a measure-then-grow pass for its Expand
+// slots: panels are rendered at their Weight allocation, and a panel whose
+// content renders shorter (a form's box) would leave the slack pooling at the
+// bottom of the terminal. The slack is split equally among the column's Expand
+// slots (remainder to the last), which are re-sized and re-rendered — so an
+// Expand slot fills whatever its siblings didn't use. Growth only, never a
+// shrink; columns without Expand slots render exactly as allocated.
 func (s *ModularScreen) View(*core.Shared) string {
 	cols := make([]string, len(s.cols))
 	fi := 0
 	for c, col := range s.cols {
 		rows := make([]string, len(col))
+		total := 0
 		for i, slot := range col {
 			rows[i] = slot.Panel.View(fi == s.focus)
+			total += lipgloss.Height(rows[i])
 			fi++
+		}
+		if slack := s.bodyH - total; slack > 0 {
+			var expand []int // flat indices of this column's Expand slots
+			for i := range col {
+				if col[i].Expand {
+					expand = append(expand, fi-len(col)+i)
+				}
+			}
+			if len(expand) > 0 {
+				share := slack / len(expand)
+				for j, idx := range expand {
+					grow := share
+					if j == len(expand)-1 {
+						grow = slack - share*(len(expand)-1) // last takes the remainder
+					}
+					r := s.rects[idx]
+					s.flat[idx].Panel.SetSize(r.w, r.h+grow)
+				}
+				// Re-render only the grown slots.
+				for i := range col {
+					if col[i].Expand {
+						idx := fi - len(col) + i
+						rows[i] = col[i].Panel.View(idx == s.focus)
+					}
+				}
+			}
 		}
 		cols[c] = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
@@ -217,7 +297,7 @@ func (s *ModularScreen) View(*core.Shared) string {
 func (s *ModularScreen) HelpView(sh *core.Shared) string {
 	var hints []key.Binding
 	if s.focusableCount() > 1 {
-		hints = append(hints, key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧tab", "panes")))
+		hints = append(hints, key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "panes")))
 	}
 	hints = append(hints, core.Hint("back", core.Keys.Back))
 	if s.focus >= 0 {
@@ -233,11 +313,16 @@ func (s *ModularScreen) HelpView(sh *core.Shared) string {
 // ColWidths, flex columns sharing the rest, the division remainder going to the
 // last flex column) and then each column's height between its slots by Weight —
 // the last slot taking the remainder, so rounding can't drift the layout off the
-// bottom. Panels receive outer cell dims; each subtracts its own borders.
+// bottom. Panels receive outer cell dims; each subtracts its own borders. The
+// same arithmetic also records each slot's body-relative rect, so Update can
+// hit-test mouse presses (see slotAt).
 func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	y0 := 0
 	if s.title != "" {
-		bodyHeight -= lipgloss.Height(core.RenderTitleBar(s.title))
+		y0 = lipgloss.Height(core.RenderTitleBar(s.title))
+		bodyHeight -= y0
 	}
+	s.bodyH = bodyHeight
 	widths := make([]int, len(s.cols))
 	fixed, flex, lastFlex := 0, 0, -1
 	for c := range s.cols {
@@ -268,6 +353,8 @@ func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 			widths[lastFlex] = 1
 		}
 	}
+	s.rects = make([]panelRect, 0, len(s.flat))
+	x := 0
 	for c, col := range s.cols {
 		total := 0
 		for _, slot := range col {
@@ -282,9 +369,11 @@ func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 			if h < 1 {
 				h = 1
 			}
+			s.rects = append(s.rects, panelRect{x: x, y: y0 + used, w: widths[c], h: h})
 			used += h
 			slot.Panel.SetSize(widths[c], h)
 		}
+		x += widths[c]
 	}
 }
 
@@ -347,7 +436,7 @@ func (s *ModularScreen) nextFocusable(from int) int {
 	return from
 }
 
-// advanceFocus moves focus on shift+tab per the slot's NextFocus rule (see
+// advanceFocus moves focus on tab per the slot's NextFocus rule (see
 // Slot.NextFocus): default loop, explicit 1-based target, or FocusEnd back to
 // the first Focusable slot.
 func (s *ModularScreen) advanceFocus() {
@@ -368,12 +457,35 @@ func (s *ModularScreen) advanceFocus() {
 	default:
 		target = s.nextFocusable(s.focus)
 	}
-	if target < 0 || target == s.focus {
+	if target >= 0 {
+		s.focusSlot(target)
+	}
+}
+
+// focusSlot moves focus to flat slot i, blurring the old panel and focusing the
+// new. A no-op when i already holds focus or isn't Focusable.
+func (s *ModularScreen) focusSlot(i int) {
+	if i == s.focus || !isFocusable(s.flat[i].Panel) {
 		return
 	}
-	if f, ok := s.focusedPanel().(Focusable); ok {
-		f.Blur()
+	if s.focus >= 0 {
+		if f, ok := s.focusedPanel().(Focusable); ok {
+			f.Blur()
+		}
 	}
-	s.focus = target
+	s.focus = i
 	s.focusedPanel().(Focusable).Focus()
+}
+
+// slotAt is the flat index of the slot whose rect contains absolute terminal
+// coordinates (x, y), or -1. Rects are body-relative; Shared.BodyY carries the
+// chrome rows above the body.
+func (s *ModularScreen) slotAt(sh *core.Shared, x, y int) int {
+	rel := y - sh.BodyY()
+	for i, r := range s.rects {
+		if x >= r.x && x < r.x+r.w && rel >= r.y && rel < r.y+r.h {
+			return i
+		}
+	}
+	return -1
 }

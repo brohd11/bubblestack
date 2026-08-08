@@ -111,7 +111,7 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	// Global keys are handled once, here, for whatever screen is on top: quit,
-	// the output-pane focus/scroll mode, and tab/c (gated by the active screen's
+	// the output-pane focus/scroll mode, and O/c (gated by the active screen's
 	// filter so they don't steal filter keystrokes). globalKey returns an Action whose
 	// control message is resolved inline and whose async cmd (e.g. tea.Quit) is queued.
 	if key, ok := msg.(tea.KeyMsg); ok {

@@ -82,6 +82,19 @@ func (s *Shared) Box(body string) string {
 	return boxStyle.Width(s.ConfirmWidth()).Render(body)
 }
 
+// BoxFocused is Box with a focus-tinted border: FocusedColor when focused,
+// BorderColor when not. Screens that can be nested in a ModularScreen (a form
+// beside a detail pane) render through it so the box border carries the panel
+// focus the way a ScrollContainer's legend border does. Standalone screens keep
+// using Box.
+func (s *Shared) BoxFocused(body string, focused bool) string {
+	color := BorderColor
+	if focused {
+		color = FocusedColor
+	}
+	return boxStyle.BorderForeground(color).Width(s.ConfirmWidth()).Render(body)
+}
+
 // BoxInnerWidth is the widest a line of body text can be before Box word-wraps it:
 // ConfirmWidth minus the padding lipgloss reserves out of it. Derived from boxStyle
 // rather than written as a literal, so a padding change can't silently desync a caller

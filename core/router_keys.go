@@ -74,7 +74,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// mode — the output pane and the top screen (a diff, say) — so focus decides which
 	// one the key means: the pane while it holds focus, otherwise the screen if it wraps
 	// at all, and the pane when it doesn't. That keeps w pointed at whatever the user is
-	// actually looking at, and leaves the pane reachable (tab, then w) from a screen that
+	// actually looking at, and leaves the pane reachable (O, then w) from a screen that
 	// wraps.
 	//
 	// Both sides are optional capabilities (Wrapper), so neither an Output nor a screen
@@ -122,11 +122,11 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	if outputOn && ch.outputFocused {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput), MatchKey(k, Keys.Back):
-			ch.outputFocused = false
+			r.setOutputFocused(false)
 			return Action{}, true
 		case MatchKey(k, Keys.Output):
 			ch.Output.Hide()
-			ch.outputFocused = false
+			r.setOutputFocused(false)
 			return Action{}, true
 		case MatchKey(k, Keys.Clear):
 			r.clearOutput()
@@ -143,11 +143,12 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		return Async(ch.Output.Update(msg)), true
 	}
 
-	// tab jumps into the output pane, c clears the log, [ / ] switch top-level tabs
-	// (only at the root, so the live stack always belongs to the active tab), and `
-	// unwinds a deep stack back to the root for a quick exit — unless the active
-	// screen is capturing filter text. The output keys pass through (no consume) when
-	// there is no output pane, so a chromeless app can bind tab/o itself.
+	// O jumps into the output pane, o shows/hides it, c clears the log, [ / ]
+	// switch top-level tabs (only at the root, so the live stack always belongs
+	// to the active tab), and ` unwinds a deep stack back to the root for a
+	// quick exit — unless the active screen is capturing filter text. The output
+	// keys pass through (no consume) when there is no output pane, so a
+	// chromeless app can bind O/o itself.
 	if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput):
@@ -155,7 +156,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 				break
 			}
 			if ch.Output.Shown() {
-				ch.outputFocused = true
+				r.setOutputFocused(true)
 				ch.Output.GotoBottom()
 			}
 			return Action{}, true
@@ -165,7 +166,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 			}
 			ch.Output.Toggle()
 			if !ch.Output.Shown() {
-				ch.outputFocused = false
+				r.setOutputFocused(false)
 			}
 			return Action{}, true
 		case MatchKey(k, Keys.Clear):
@@ -202,7 +203,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 // unfocused pane to the bottom on every message, so a wheel that scrolled without
 // focusing would snap straight back. Focus already means "the user is reading rather
 // than tailing" here, so the wheel just says so — and the pane's border and legend
-// announce it, with tab/esc returning as they do from a keyboard focus.
+// announce it, with O/esc returning as they do from a keyboard focus.
 func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	if msg.Action != tea.MouseActionPress {
 		return Action{}, false
@@ -214,7 +215,7 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 		return Action{}, false
 	}
 	ch := r.sh.Chrome
-	ch.outputFocused = true
+	r.setOutputFocused(true)
 	return Async(ch.Output.Update(msg)), true
 }
 
@@ -260,5 +261,21 @@ func (r *Router) clearOutput() {
 	if ch.Status != nil {
 		ch.Status.Clear()
 	}
-	ch.outputFocused = false
+	r.setOutputFocused(false)
+}
+
+// setOutputFocused is the single writer for the output pane's focus flag, so the
+// body screen's focus always tracks it: on a transition the top screen is told
+// via FocusableScreen (a ModularScreen dims its active pane, a form its border)
+// and told again when the keys return. Screens without the capability render
+// the same either way.
+func (r *Router) setOutputFocused(on bool) {
+	ch := r.sh.Chrome
+	if ch == nil || ch.outputFocused == on {
+		return
+	}
+	ch.outputFocused = on
+	if f, ok := r.Top().(FocusableScreen); ok {
+		f.SetFocused(!on)
+	}
 }

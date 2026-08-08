@@ -41,8 +41,17 @@ type Screen interface {
 // relevant rather than every screen carrying a stub.
 
 // filterer reports an active text filter, so the router's global single-key
-// shortcuts (tab/c) don't steal keystrokes meant for the filter input.
+// shortcuts (O/c) don't steal keystrokes meant for the filter input.
 type Filterer interface{ Filtering() bool }
+
+// FocusableScreen is a screen that can render a focused and an unfocused state
+// (a form tinting its box border, a ModularScreen dimming its active pane). The
+// router drives it on output-pane focus transitions: SetFocused(false) when the
+// pane takes the keys, SetFocused(true) when they return. Opt-in like every
+// other capability — a screen without it renders the same either way, and a
+// screen that is always the whole body (never visually "blurred") simply
+// doesn't implement it.
+type FocusableScreen interface{ SetFocused(bool) }
 
 // receiver lets a screen react to a broadcast notification (PropagateAll). The
 // framework only routes the payload (opaque, consumer-defined); a screen type-

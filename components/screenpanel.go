@@ -6,13 +6,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// FocusableScreen is implemented by a full screen that can render a focused and
+// an unfocused state (a form tinting its box border, say). It aliases the core
+// capability the router drives on output-pane focus transitions; ScreenPanel
+// additionally forwards the host ModularScreen's focus through it, so a nested
+// screen dims when a sibling pane takes focus. Opt-in, like every other
+// capability — a screen without it renders the same either way.
+type FocusableScreen = core.FocusableScreen
+
 // ScreenPanel embeds a full core.Screen as one panel of a ModularScreen — a
 // nested screen for when a pane needs behavior no single-purpose panel has (a
 // form next to a detail view, say). The child keeps its whole Update contract:
 // every message routed to the panel goes to child.Update, and the returned
 // (possibly new) screen replaces the child, exactly as the router would. That
-// makes the panel a focus sink by design: UpdatePanel always reports
-// handled=true, so shift+tab and esc never fall through to the host while a
+// makes the panel a key sink by design: UpdatePanel always reports
+// handled=true, so tab and esc never fall through to the host while a
 // ScreenPanel is the route target — the child decides everything, including esc.
 //
 // Two caveats follow from host and child sharing one router:
@@ -21,6 +29,9 @@ import (
 //   - PanelHelp is not implemented: core.Screen renders its help as a finished
 //     string (HelpView), not as []key.Binding, so there is nothing to merge into
 //     the host's help bar.
+//   - UpdatePanel always reports handled=true, so tab and esc never fall
+//     through to the host while a ScreenPanel is the route target. Capture
+//     (which keys reach the child at all) is narrower — see Capturing.
 type ScreenPanel struct {
 	child   core.Screen
 	sh      *core.Shared // captured at Init; the child's View/SetSize need it
@@ -49,8 +60,20 @@ func (p *ScreenPanel) Init(sh *core.Shared) tea.Cmd {
 	return p.child.Init(sh)
 }
 
-func (p *ScreenPanel) Focus()        { p.focused = true }
-func (p *ScreenPanel) Blur()         { p.focused = false }
+func (p *ScreenPanel) Focus() {
+	p.focused = true
+	if f, ok := p.child.(FocusableScreen); ok {
+		f.SetFocused(true)
+	}
+}
+
+func (p *ScreenPanel) Blur() {
+	p.focused = false
+	if f, ok := p.child.(FocusableScreen); ok {
+		f.SetFocused(false)
+	}
+}
+
 func (p *ScreenPanel) Focused() bool { return p.focused }
 
 // SetSize takes the outer cell dims and forwards them to the child verbatim (a
@@ -72,7 +95,7 @@ func (p *ScreenPanel) View(bool) string {
 
 // UpdatePanel forwards the message to the child and keeps the returned screen,
 // reporting handled=true unconditionally — the child owns every key while this
-// panel is the route target (see the type doc for what that costs shift+tab).
+// panel is the route target (see the type doc for what that costs tab).
 func (p *ScreenPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	next, act := p.child.Update(sh, msg)
 	if next != nil {
@@ -81,15 +104,20 @@ func (p *ScreenPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bo
 	return act, true
 }
 
-// Capturing proxies the child's capture state: a filtering child (core.Filterer)
-// or a typing child (Typable) claims the host's keystrokes, exactly as it would
-// claim the router's global keys were it a full screen.
+// Capturing proxies the child's capture state, preferring the precise signal:
+// a Typable child captures only while a text field actually holds focus
+// (Typing), so a nested form claims the host's keystrokes over its message
+// field but releases them on a toggle row — the sibling panels stay reachable.
+// A child that isn't a Typable falls back to Filterer.Filtering(). This is
+// narrower than the router-level rule on purpose: FormScreen.Filtering is
+// unconditionally true so a *standalone* form keeps tab from the router, and
+// nested that would make the form an absolute key sink no sibling could escape.
 func (p *ScreenPanel) Capturing() bool {
-	if f, ok := p.child.(core.Filterer); ok && f.Filtering() {
-		return true
+	if t, ok := p.child.(Typable); ok {
+		return t.Typing()
 	}
-	if t, ok := p.child.(Typable); ok && t.Typing() {
-		return true
+	if f, ok := p.child.(core.Filterer); ok {
+		return f.Filtering()
 	}
 	return false
 }
