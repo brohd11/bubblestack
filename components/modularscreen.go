@@ -137,11 +137,12 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 // Mouse presses are the exception to the broadcast: they are hit-tested against
 // the slot rects SetSize recorded (coordinates translated via Shared.BodyY — the
 // same problem the router solves for the output pane with inOutput), and a press
-// inside a Focusable slot moves focus there and goes to that panel alone. That's
-// what makes a pane scrollable when keyboard focus can't reach it — a sibling
-// form may be capturing every key, but the wheel still works over its neighbor.
-// Presses that miss every slot (or hit a non-focusable one) fall through to the
-// broadcast, as do motion/release events.
+// inside a Focusable slot moves focus there and goes to that panel alone, with
+// the coordinates made slot-relative first so a panel maps clicks against its
+// own layout. That's what makes a pane scrollable when keyboard focus can't
+// reach it — a sibling form may be capturing every key, but the wheel still
+// works over its neighbor. Presses that miss every slot (or hit a non-focusable
+// one) fall through to the broadcast, as do motion/release events.
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
@@ -167,8 +168,13 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress {
 		if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
 			s.focusSlot(i)
+			// Forward with slot-relative coordinates: a panel that maps clicks
+			// to its own layout (a ListPanel picking the clicked row) works in
+			// local space rather than knowing the screen's geometry.
+			mm.X -= s.rects[i].x
+			mm.Y -= sh.BodyY() + s.rects[i].y
 			if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
-				act, _ := u.UpdatePanel(sh, msg)
+				act, _ := u.UpdatePanel(sh, mm)
 				return s, act
 			}
 			return s, core.Action{}

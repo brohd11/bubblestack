@@ -114,23 +114,12 @@ func RenderBreadcrumb(crumbs []Crumb, width int) string {
 	if len(crumbs) == 0 {
 		return ""
 	}
-	last := len(crumbs) - 1
-	labels := func(short bool) []string {
-		out := make([]string, len(crumbs))
-		for i, c := range crumbs {
-			out[i] = c.pick(short && i != last)
-		}
-		return out
-	}
-	avail := width - 2 // breadcrumbBarStyle's horizontal padding
-	chosen := labels(false)
-	if width > 0 && lipgloss.Width(strings.Join(chosen, crumbSep)) > avail {
-		chosen = labels(true)
-	}
-	if width > 0 && lipgloss.Width(strings.Join(chosen, crumbSep)) > avail {
+	chosen, truncated := crumbLabels(crumbs, width)
+	if truncated {
 		// Last resort: truncate the whole trail, keeping the tail (current segment).
-		return breadcrumbBarStyle.Render(crumbMutedStyle.Render(TruncLeft(strings.Join(chosen, crumbSep), avail)))
+		return breadcrumbBarStyle.Render(crumbMutedStyle.Render(TruncLeft(strings.Join(chosen, crumbSep), width-2)))
 	}
+	last := len(chosen) - 1
 	parts := make([]string, len(chosen))
 	for i, l := range chosen {
 		if i == last {
@@ -140,6 +129,53 @@ func RenderBreadcrumb(crumbs []Crumb, width int) string {
 		}
 	}
 	return breadcrumbBarStyle.Render(strings.Join(parts, crumbMutedStyle.Render(crumbSep)))
+}
+
+// crumbLabels picks the label each segment renders with — full forms, or the
+// short forms when the full trail overflows width — so the renderer and the
+// click hit-test (crumbSpans) can never disagree about what's on screen.
+// truncated reports the left-truncated fallback, where segments are cut and no
+// spans can be computed.
+func crumbLabels(crumbs []Crumb, width int) (chosen []string, truncated bool) {
+	last := len(crumbs) - 1
+	labels := func(short bool) []string {
+		out := make([]string, len(crumbs))
+		for i, c := range crumbs {
+			out[i] = c.pick(short && i != last)
+		}
+		return out
+	}
+	avail := width - 2 // breadcrumbBarStyle's horizontal padding
+	chosen = labels(false)
+	if width > 0 && lipgloss.Width(strings.Join(chosen, crumbSep)) > avail {
+		chosen = labels(true)
+	}
+	if width > 0 && lipgloss.Width(strings.Join(chosen, crumbSep)) > avail {
+		return chosen, true
+	}
+	return chosen, false
+}
+
+// crumbSpan is one segment's clickable x range in terminal cells, [start, end).
+type crumbSpan struct{ start, end int }
+
+// crumbSpans maps each crumb to the cells it occupies in the rendered bar:
+// breadcrumbBarStyle's 1-cell left padding, then label widths joined by
+// crumbSep (the separators themselves are dead space). ok=false when the trail
+// renders truncated — segments are cut, so no span is trustworthy.
+func crumbSpans(crumbs []Crumb, width int) (spans []crumbSpan, ok bool) {
+	chosen, truncated := crumbLabels(crumbs, width)
+	if truncated || len(chosen) == 0 {
+		return nil, false
+	}
+	spans = make([]crumbSpan, len(chosen))
+	x := 1 // breadcrumbBarStyle's left padding
+	for i, l := range chosen {
+		w := lipgloss.Width(l)
+		spans[i] = crumbSpan{x, x + w}
+		x += w + lipgloss.Width(crumbSep)
+	}
+	return spans, true
 }
 
 // Output is a pluggable below-body pane the router renders, sizes, and — while it

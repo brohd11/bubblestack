@@ -77,7 +77,7 @@ func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 		}
 		return core.Action{}, false
 	}
-	return listDispatch(sh, l, msg, onSelect, onKey)
+	return listDispatch(sh, l, msg, sh.BodyY(), onSelect, onKey)
 }
 
 // listDispatch is the dispatch skeleton shared by RootUpdate and PickerScreen.Update:
@@ -88,9 +88,20 @@ func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 // left over to the list itself. What differs between screens — what Select runs,
 // which extra keys exist, whether Back pops — lives in the hooks; the order lives
 // here, so a dispatch-rule change (like the wheel-above-filter rule) is made once.
-func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg,
+//
+// A left click selects the row under the cursor and runs the select hook, exactly
+// as enter would (listItemAt does the row math). mouseYOff translates the msg's
+// absolute terminal row into the list view's: sh.BodyY() for a full-screen list,
+// 0 for a panel whose host already made the coordinates slot-relative.
+func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
 	if m, ok := msg.(tea.MouseMsg); ok {
+		if m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
+			if idx, ok := listItemAt(l, m.Y-mouseYOff); ok {
+				l.Select(idx)
+				return onSelect()
+			}
+		}
 		if WheelNav(l, m) {
 			return core.Action{}
 		}
@@ -117,6 +128,27 @@ func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg,
 	var cmd tea.Cmd
 	*l, cmd = l.Update(msg)
 	return core.Async(cmd)
+}
+
+// listItemAt maps a row within the list's rendered view to a visible-item
+// index, reporting false for clicks outside the items (the header, the spacing
+// below the last item, the pagination row). The layout constants are bubbles'
+// internals, pinned by tests: titleView occupies one row whenever the title
+// shows or the filter is enabled (the filter input replaces the title in it),
+// and each item is NewDelegate's Height(2) + Spacing(1) rows. Select takes a
+// visible-item index and paginates to it, so a click lands even mid-page.
+func listItemAt(l *list.Model, relY int) (int, bool) {
+	const itemRows = 3 // core.NewDelegate: Height 2 + Spacing 1
+	header := 1        // bubbles renders a one-row titleView for NewSelectList lists
+	row := relY - header
+	if row < 0 {
+		return 0, false
+	}
+	idx := l.Paginator.Page*l.Paginator.PerPage + row/itemRows
+	if idx < 0 || idx >= len(l.VisibleItems()) {
+		return 0, false
+	}
+	return idx, true
 }
 
 // WrapNav wraps the cursor at a list boundary: up on the first row selects the

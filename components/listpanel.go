@@ -106,7 +106,7 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		}
 		return core.Action{}, false
 	}
-	return listDispatch(sh, &p.list, msg, onSelect, onKey), true
+	return listDispatch(sh, &p.list, msg, 0, onSelect, onKey), true
 }
 
 // PanelHelp contributes the list's select/filter hints plus any caller-supplied

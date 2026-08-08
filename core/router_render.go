@@ -62,15 +62,14 @@ func (r Router) tabStripView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
 }
 
-// breadcrumbView builds the breadcrumb bar from the live nav stack: it asks each
-// screen implementing Crumber for its segment (root→top, the top screen full and the
-// upstream ones short), skips empty ones, and hands the crumbs to Chrome.Breadcrumb
-// to render (joined path + separator rule, gated by the pane's hidden flag). Built
-// fresh each frame so it always reflects the current stack — pushing/popping needs no
-// breadcrumb bookkeeping.
-func (r Router) breadcrumbView() string {
+// crumbTrail walks the live nav stack collecting breadcrumb segments (screens
+// implementing Crumber with a non-empty full label), paired with each segment's
+// stack index — the click hit-test (crumbClick) needs the index to know how far
+// to Pop, since non-Crumber screens leave no segment to click.
+func (r Router) crumbTrail() ([]Crumb, []int) {
 	var crumbs []Crumb
-	for _, s := range r.stack {
+	var idxs []int
+	for i, s := range r.stack {
 		c, ok := s.(Crumber)
 		if !ok {
 			continue
@@ -80,7 +79,19 @@ func (r Router) breadcrumbView() string {
 			continue
 		}
 		crumbs = append(crumbs, Crumb{Full: full, Short: c.CrumbLabel(true)})
+		idxs = append(idxs, i)
 	}
+	return crumbs, idxs
+}
+
+// breadcrumbView builds the breadcrumb bar from the live nav stack: it asks each
+// screen implementing Crumber for its segment (root→top, the top screen full and the
+// upstream ones short), skips empty ones, and hands the crumbs to Chrome.Breadcrumb
+// to render (joined path + separator rule, gated by the pane's hidden flag). Built
+// fresh each frame so it always reflects the current stack — pushing/popping needs no
+// breadcrumb bookkeeping.
+func (r Router) breadcrumbView() string {
+	crumbs, _ := r.crumbTrail()
 	var bc *BreadcrumbPane
 	if r.sh.Chrome != nil {
 		bc = r.sh.Chrome.Breadcrumb

@@ -208,6 +208,14 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	if msg.Action != tea.MouseActionPress {
 		return Action{}, false
 	}
+	// A left click on a breadcrumb segment pops the stack back to it — the mouse
+	// analog of hammering esc. Router-owned chrome, so it lives here with the
+	// output-pane wheel claim below.
+	if msg.Button == tea.MouseButtonLeft {
+		if act, ok := r.crumbClick(msg.X, msg.Y); ok {
+			return act, true
+		}
+	}
 	if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
 		return Action{}, false
 	}
@@ -217,6 +225,50 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	ch := r.sh.Chrome
 	r.setOutputFocused(true)
 	return Async(ch.Output.Update(msg)), true
+}
+
+// crumbClick hit-tests a left click against the breadcrumb bar: the segment
+// under the cursor maps to a stack depth (crumbTrail pairs segments with stack
+// indices), and the router pops back to it. Returns handled=false for clicks
+// anywhere else — the bar's rule row, separators, a truncated trail (segments
+// are cut, so no span is trustworthy), or with the pane hidden/masked — so the
+// active screen still gets its own clicks.
+func (r *Router) crumbClick(x, y int) (Action, bool) {
+	mask := r.currentMask()
+	if mask.Breadcrumb || len(r.stack) < 2 {
+		return Action{}, false
+	}
+	ch := r.sh.Chrome
+	if ch != nil && ch.Breadcrumb != nil && ch.Breadcrumb.Hidden() {
+		return Action{}, false
+	}
+	// The bar's row: below the header and tab strip, each gated by the mask the
+	// same way topChrome stacks them.
+	barY := 0
+	if !mask.Header && ch != nil {
+		barY += vheight(ch.Header.view(r.sh))
+	}
+	if !mask.TabStrip {
+		barY += vheight(r.tabStripView())
+	}
+	if y != barY {
+		return Action{}, false
+	}
+	crumbs, idxs := r.crumbTrail()
+	spans, ok := crumbSpans(crumbs, r.sh.width)
+	if !ok {
+		return Action{}, false
+	}
+	for i, sp := range spans {
+		if x < sp.start || x >= sp.end {
+			continue
+		}
+		if n := len(r.stack) - 1 - idxs[i]; n > 0 {
+			return Pop(n), true
+		}
+		return Action{}, true // the current segment: consume the click, go nowhere
+	}
+	return Action{}, false
 }
 
 // inOutput reports whether terminal row y falls inside the output box. The box is

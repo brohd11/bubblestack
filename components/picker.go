@@ -126,7 +126,7 @@ func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		}
 		return core.Action{}, false
 	}
-	return s, listDispatch(sh, &s.list, msg, onSelect, onKey)
+	return s, listDispatch(sh, &s.list, msg, sh.BodyY(), onSelect, onKey)
 }
 
 func (s *PickerScreen) View(*core.Shared) string     { return s.list.View() }
