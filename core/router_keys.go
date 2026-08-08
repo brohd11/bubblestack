@@ -208,12 +208,26 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	if msg.Action != tea.MouseActionPress {
 		return Action{}, false
 	}
+	// A press aimed at the body returns output-pane focus to it: the pane grabs
+	// focus on wheel (below), and the keyboard has O/esc to come back — but a
+	// click or wheel over the body must release it too, or the pane keeps the
+	// keys (and keeps the screen dimmed) after the mouse has moved on.
+	if ch := r.sh.Chrome; ch != nil && ch.outputFocused &&
+		!(r.outputVisible() && r.inOutput(msg.Y)) {
+		r.setOutputFocused(false)
+	}
 	// A left click on a breadcrumb segment pops the stack back to it — the mouse
 	// analog of hammering esc. Router-owned chrome, so it lives here with the
 	// output-pane wheel claim below.
 	if msg.Button == tea.MouseButtonLeft {
 		if act, ok := r.crumbClick(msg.X, msg.Y); ok {
 			return act, true
+		}
+		// A click over the output pane focuses it, as the wheel does — consumed,
+		// so the body screen never sees clicks aimed at the log.
+		if r.outputVisible() && !r.currentMask().Output && r.inOutput(msg.Y) {
+			r.setOutputFocused(true)
+			return Action{}, true
 		}
 	}
 	if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {

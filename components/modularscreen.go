@@ -16,20 +16,22 @@ import (
 // component it names no domain type: the consumer fills the slots and answers
 // the hooks.
 type ModularScreen struct {
-	cols       [][]Slot
-	flat       []*Slot     // declaration order: column 0 top→bottom, then column 1, …
-	rects      []panelRect // per flat slot, body-relative; laid out by SetSize
-	bodyH      int         // post-title body height, stashed by SetSize for Expand
-	colWidths  []int
-	focus      int // index into flat; -1 when no slot is focusable
-	title      string
-	crumb      string
-	crumbShort string
-	help       []key.Binding
-	refresh    func(*core.Shared, any) bool
-	popStop    bool
-	dir        string
-	initFn     func(*core.Shared) tea.Cmd
+	cols        [][]Slot
+	flat        []*Slot     // declaration order: column 0 top→bottom, then column 1, …
+	rects       []panelRect // per flat slot, body-relative Weight allocation; laid out by SetSize
+	hitRects    []panelRect // per flat slot, as actually rendered (post-Expand); rebuilt by View
+	bodyH       int         // post-title body height, stashed by SetSize for Expand
+	colWidths   []int
+	focus       int  // index into flat; -1 when no slot is focusable
+	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
+	title       string
+	crumb       string
+	crumbShort  string
+	help        []key.Binding
+	refresh     func(*core.Shared, any) bool
+	popStop     bool
+	dir         string
+	initFn      func(*core.Shared) tea.Cmd
 }
 
 // panelRect is a slot's body-relative bounding box, recorded by SetSize so Update
@@ -75,17 +77,18 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		help = append(append([]key.Binding{}, opts.Help...), core.DirKeyHints()...)
 	}
 	s := &ModularScreen{
-		cols:       columns,
-		colWidths:  opts.ColWidths,
-		focus:      -1,
-		title:      opts.Title,
-		crumb:      opts.Crumb,
-		crumbShort: opts.CrumbShort,
-		help:       help,
-		refresh:    opts.Refresh,
-		popStop:    opts.PopStop,
-		dir:        opts.Dir,
-		initFn:     opts.Init,
+		cols:        columns,
+		colWidths:   opts.ColWidths,
+		focus:       -1,
+		hostFocused: true,
+		title:       opts.Title,
+		crumb:       opts.Crumb,
+		crumbShort:  opts.CrumbShort,
+		help:        help,
+		refresh:     opts.Refresh,
+		popStop:     opts.PopStop,
+		dir:         opts.Dir,
+		initFn:      opts.Init,
 	}
 	for c := range s.cols {
 		for i := range s.cols[c] {
@@ -119,8 +122,9 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 }
 
 // Update routes input child-first, the screen itself as fallback:
-//  1. a capturing panel (Capturing) claims every keystroke, focused or not — a
-//     filter input losing characters to the pane cycle would read as a bug;
+//  1. a capturing FOCUSED panel (Capturing) claims every keystroke — a filter
+//     input losing characters to the pane cycle would read as a bug, and the
+//     focus gate is what stops a clicked-away textarea from keeping the keys;
 //  2. other key msgs go to the focused panel's PanelUpdater — a handled result
 //     is applied and done;
 //  3. an unhandled tab cycles focus (matched as a raw key string: it is
@@ -171,8 +175,9 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 			// Forward with slot-relative coordinates: a panel that maps clicks
 			// to its own layout (a ListPanel picking the clicked row) works in
 			// local space rather than knowing the screen's geometry.
-			mm.X -= s.rects[i].x
-			mm.Y -= sh.BodyY() + s.rects[i].y
+			r := s.slotRect(i)
+			mm.X -= r.x
+			mm.Y -= sh.BodyY() + r.y
 			if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
 				act, _ := u.UpdatePanel(sh, mm)
 				return s, act
@@ -198,18 +203,21 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 	return s, core.Action{Msg: nav, Cmd: tea.Batch(cmds...)}
 }
 
-// Filtering keeps the router's global single-key shortcuts (tab, q, [ ]) from
-// stealing keystrokes while any panel is capturing text (see capturingSlot).
+// Filtering keeps the router's global single-key shortcuts (O, q, [ ]) from
+// stealing keystrokes while the focused panel is capturing text (see
+// capturingSlot).
 func (s *ModularScreen) Filtering() bool { return s.capturingSlot() >= 0 }
 
 func (s *ModularScreen) PopStop() bool { return s.popStop }
 
 // SetFocused implements core.FocusableScreen: the router blurs the screen when
 // the output pane takes the keys and refocuses it on return. The focus INDEX is
-// untouched — only the focused panel's visual state flips (Blur/Focus are
-// idempotent flag-setters; a ScreenPanel forwards to its child), so the pane
-// that was active dims and relights in place.
+// untouched — hostFocused gates the focused render arg View passes (a panel
+// that renders from the arg, like ScrollContainer, dims), and the Blur/Focus
+// forwarding carries it to panels that render from their own state (a
+// ScreenPanel's child form) — so the active pane dims and relights in place.
 func (s *ModularScreen) SetFocused(focused bool) {
+	s.hostFocused = focused
 	if s.focus < 0 {
 		return
 	}
@@ -257,12 +265,25 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 // shrink; columns without Expand slots render exactly as allocated.
 func (s *ModularScreen) View(*core.Shared) string {
 	cols := make([]string, len(s.cols))
+	y0 := 0
+	if s.title != "" {
+		y0 = lipgloss.Height(core.RenderTitleBar(s.title))
+	}
+	// The mouse hit-test targets what was RENDERED, not the Weight allocation:
+	// a short-rendering panel (a form's box) leaves its allocation half-used and
+	// the Expand pass shifts everything below it up, so hit rects come from the
+	// final row heights here, each frame.
+	track := len(s.rects) == len(s.flat)
+	var hit []panelRect
+	if track {
+		hit = make([]panelRect, len(s.flat))
+	}
 	fi := 0
 	for c, col := range s.cols {
 		rows := make([]string, len(col))
 		total := 0
 		for i, slot := range col {
-			rows[i] = slot.Panel.View(fi == s.focus)
+			rows[i] = slot.Panel.View(fi == s.focus && s.hostFocused)
 			total += lipgloss.Height(rows[i])
 			fi++
 		}
@@ -287,13 +308,22 @@ func (s *ModularScreen) View(*core.Shared) string {
 				for i := range col {
 					if col[i].Expand {
 						idx := fi - len(col) + i
-						rows[i] = col[i].Panel.View(idx == s.focus)
+						rows[i] = col[i].Panel.View(idx == s.focus && s.hostFocused)
 					}
 				}
 			}
 		}
+		if track {
+			y := y0
+			for i := range col {
+				idx := fi - len(col) + i
+				hit[idx] = panelRect{x: s.rects[idx].x, y: y, w: s.rects[idx].w, h: lipgloss.Height(rows[i])}
+				y += lipgloss.Height(rows[i])
+			}
+		}
 		cols[c] = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
+	s.hitRects = hit
 	return core.WithTitle(s.title, lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 }
 
@@ -391,21 +421,28 @@ func weightOf(s Slot) int {
 	return 1
 }
 
-// capturingSlot is the flat index of the panel currently capturing text input (a
-// filtering list, a typing form child), or -1. Only a panel that is also a
-// PanelUpdater counts — capturing without input routing is meaningless, and only
-// one panel can sensibly capture at a time.
+// capturingSlot is the flat index of the panel to route every keystroke to
+// while it captures text input (a filtering list, a typing form child), or -1.
+// Capture is gated on FOCUS: the keyboard can't move focus mid-capture (capture
+// claims tab), so focused-only capture loses nothing there — but the mouse
+// moves focus without the capturing panel knowing, and a click on a sibling
+// must not leave keystrokes flowing to a textarea the user has left. Clicking
+// the panel back restores capture with the focus. Only a panel that is also a
+// PanelUpdater counts — capturing without input routing is meaningless, and
+// only one panel can sensibly capture at a time.
 func (s *ModularScreen) capturingSlot() int {
-	for i, slot := range s.flat {
-		c, ok := slot.Panel.(Capturing)
-		if !ok || !c.Capturing() {
-			continue
-		}
-		if _, ok := slot.Panel.(PanelUpdater); ok {
-			return i
-		}
+	if s.focus < 0 {
+		return -1
 	}
-	return -1
+	p := s.focusedPanel()
+	c, ok := p.(Capturing)
+	if !ok || !c.Capturing() {
+		return -1
+	}
+	if _, ok := p.(PanelUpdater); !ok {
+		return -1
+	}
+	return s.focus
 }
 
 // firstFocusable is the flat index of the first Focusable slot, or -1.
@@ -483,12 +520,27 @@ func (s *ModularScreen) focusSlot(i int) {
 	s.focusedPanel().(Focusable).Focus()
 }
 
+// slotRect is the rect input hit-testing and coordinate translation use: the
+// rendered layout once View has run (it differs from the Weight allocation
+// whenever a panel renders short and Expand shifts things up), the allocation
+// before then.
+func (s *ModularScreen) slotRect(i int) panelRect {
+	if len(s.hitRects) == len(s.flat) {
+		return s.hitRects[i]
+	}
+	return s.rects[i]
+}
+
 // slotAt is the flat index of the slot whose rect contains absolute terminal
 // coordinates (x, y), or -1. Rects are body-relative; Shared.BodyY carries the
 // chrome rows above the body.
 func (s *ModularScreen) slotAt(sh *core.Shared, x, y int) int {
+	if len(s.rects) != len(s.flat) {
+		return -1 // not laid out yet
+	}
 	rel := y - sh.BodyY()
-	for i, r := range s.rects {
+	for i := range s.flat {
+		r := s.slotRect(i)
 		if x >= r.x && x < r.x+r.w && rel >= r.y && rel < r.y+r.h {
 			return i
 		}

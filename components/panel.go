@@ -39,10 +39,11 @@ type PanelUpdater interface {
 }
 
 // Capturing reports that the panel is capturing text (a /-filter, a typing form
-// child). While any panel is capturing, ModularScreen routes every keystroke to
-// it regardless of focus bookkeeping and reports Filtering() to the router, so
-// neither the pane cycle nor the router's global single-key shortcuts steal
-// filter text.
+// child). While the FOCUSED panel is capturing, ModularScreen routes every
+// keystroke to it and reports Filtering() to the router, so neither the pane
+// cycle nor the router's global single-key shortcuts steal filter text. A
+// capturing panel that loses focus (a click elsewhere) stops claiming keys
+// until it is focused again.
 type Capturing interface{ Capturing() bool }
 
 // PanelHelper contributes the focused panel's key hints to the screen's help bar.
