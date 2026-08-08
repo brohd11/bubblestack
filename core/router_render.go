@@ -62,6 +62,24 @@ func (r Router) tabStripView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
 }
 
+// tabSpans maps each tab to the cells it occupies in the rendered strip, so the
+// click hit-test (tabClick) and the renderer can never disagree: tabStripStyle's
+// 1-cell left padding, then each title plus its own 1-cell horizontal padding
+// (tabStyle/activeTabStyle are identical but for color). The tabs are joined with
+// no gap, so each span starts where the previous one ends. Computed from the
+// titles rather than the rendered row, so a title containing spaces hit-tests
+// exactly.
+func (r Router) tabSpans() []crumbSpan {
+	spans := make([]crumbSpan, len(r.tabs))
+	x := 1 // tabStripStyle's left padding
+	for i, t := range r.tabs {
+		w := lipgloss.Width(t.Title) + 2 // the tab style's horizontal padding
+		spans[i] = crumbSpan{x, x + w}
+		x += w
+	}
+	return spans
+}
+
 // crumbTrail walks the live nav stack collecting breadcrumb segments (screens
 // implementing Crumber with a non-empty full label), paired with each segment's
 // stack index — the click hit-test (crumbClick) needs the index to know how far

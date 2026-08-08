@@ -40,7 +40,11 @@ var FullscreenMask = core.FullscreenMask
 type Config struct {
 	App    any                       // consumer context, recovered via core.App[T]
 	Header func(*core.Shared) string // persistent context box (nil ⇒ none)
-	Output core.Output               // below-body pane (nil ⇒ none)
+	// HeaderClick fires on a left click anywhere in the header box, given the click's
+	// terminal cell coordinates (the header starts at row 0, so y is also the
+	// header-local row). nil ⇒ header clicks fall through to the body screen.
+	HeaderClick func(sh *core.Shared, x, y int) core.Action
+	Output      core.Output // below-body pane (nil ⇒ none)
 	Status core.Status               // transient status line (nil ⇒ none)
 	Tabs   []core.TabEntry           // top-level tabs
 	// Theme names a startup theme. Empty ⇒ the framework loads the shared
@@ -80,6 +84,7 @@ func Run(cfg Config) error {
 	sh.Chrome = &core.Chrome{Breadcrumb: core.NewBreadcrumbPane(), Output: cfg.Output, Status: cfg.Status}
 	if cfg.Header != nil {
 		sh.Chrome.Header = core.NewHeaderPane(cfg.Header)
+		sh.Chrome.Header.OnClick = cfg.HeaderClick
 	}
 	// An explicit Config.Theme wins; otherwise fall back to the shared store (the picker's
 	// persisted choice, applied across every bubblestack app). An empty result leaves the

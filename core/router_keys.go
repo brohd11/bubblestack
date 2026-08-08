@@ -220,6 +220,12 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	// analog of hammering esc. Router-owned chrome, so it lives here with the
 	// output-pane wheel claim below.
 	if msg.Button == tea.MouseButtonLeft {
+		if act, ok := r.headerClick(msg.X, msg.Y); ok {
+			return act, true
+		}
+		if act, ok := r.tabClick(msg.X, msg.Y); ok {
+			return act, true
+		}
 		if act, ok := r.crumbClick(msg.X, msg.Y); ok {
 			return act, true
 		}
@@ -239,6 +245,57 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	ch := r.sh.Chrome
 	r.setOutputFocused(true)
 	return Async(ch.Output.Update(msg)), true
+}
+
+// headerClick hit-tests a left click against the header box — the topmost chrome,
+// rows [0, header height). A hit fires the consumer's HeaderPane.OnClick with the
+// click's cell coordinates (y is also the header-local row, for a closure that
+// sub-divides its box). Returns handled=false when the header is masked, hidden,
+// or has no OnClick, so the click falls through to whatever lies below.
+func (r *Router) headerClick(x, y int) (Action, bool) {
+	if r.currentMask().Header {
+		return Action{}, false
+	}
+	ch := r.sh.Chrome
+	if ch == nil || ch.Header == nil || ch.Header.Hidden() || ch.Header.OnClick == nil {
+		return Action{}, false
+	}
+	if y < 0 || y >= vheight(ch.Header.view(r.sh)) {
+		return Action{}, false
+	}
+	return ch.Header.OnClick(r.sh, x, y), true
+}
+
+// tabClick hit-tests a left click against the tab strip: the tab under the cursor
+// is activated and unwound to its root in one message (ShowTab) — the mouse analog
+// of the [ / ] tab keys, but available from any depth. Only the strip's first row
+// is live; the rule below it is dead space. Returns handled=false for clicks
+// anywhere else (masked/absent strip, the rule row, past the last tab) so the
+// active screen still gets them.
+func (r *Router) tabClick(x, y int) (Action, bool) {
+	mask := r.currentMask()
+	if mask.TabStrip || len(r.tabs) < 2 {
+		return Action{}, false
+	}
+	// The strip's row: right below the header, gated by the mask the same way
+	// topChrome stacks them.
+	stripY := 0
+	if !mask.Header && r.sh.Chrome != nil {
+		stripY = vheight(r.sh.Chrome.Header.view(r.sh))
+	}
+	if y != stripY {
+		return Action{}, false
+	}
+	for i, sp := range r.tabSpans() {
+		if x < sp.start || x >= sp.end {
+			continue
+		}
+		if i == r.active {
+			return Action{}, true // the current tab: consume the click, go nowhere
+		}
+		return ShowTab(r.tabs[i].Title), true
+	}
+	return Action{}, false
 }
 
 // crumbClick hit-tests a left click against the breadcrumb bar: the segment

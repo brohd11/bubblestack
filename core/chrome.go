@@ -35,7 +35,12 @@ type Chrome struct {
 // the header can be toggled off without dropping the closure.
 type HeaderPane struct {
 	Render func(*Shared) string
-	hidden bool
+	// OnClick, when set, fires on a left click anywhere in the header box. x,y are
+	// terminal cell coordinates; the header is the topmost chrome, so y doubles as
+	// the header-local row — a closure that sub-divides its box (future hit
+	// detection) can use them directly. Nil ⇒ header clicks fall through.
+	OnClick func(sh *Shared, x, y int) Action
+	hidden  bool
 }
 
 // NewHeaderPane wraps a header renderer (the closure a consumer supplies). The
