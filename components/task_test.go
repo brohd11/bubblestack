@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // The task tests drive Update directly with TaskEvents and keys, skipping Init so no
@@ -77,6 +79,28 @@ func TestStayTaskLingersThenDismisses(t *testing.T) {
 	_, act := s.Update(sh, keyMsg("enter"))
 	if !dismissed || !reflect.DeepEqual(act, core.Pop()) {
 		t.Errorf("a finished stay-task should dismiss via onDismiss, got dismissed=%v act=%+v", dismissed, act)
+	}
+}
+
+func TestStayTaskClickDismisses(t *testing.T) {
+	dismissed := false
+	s := NewStayTask("archiving", "archived", noopRun,
+		func(*core.Shared, core.TaskEvent) core.Action { return core.Action{} },
+		func(*core.Shared) core.Action { dismissed = true; return core.Pop() })
+	sh := core.NewShared(nil)
+	click := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+
+	// A click while the task runs must neither abort nor dismiss.
+	_, act := s.Update(sh, click)
+	if dismissed || !reflect.DeepEqual(act, core.Action{}) {
+		t.Errorf("a click on a running task should do nothing, got dismissed=%v act=%+v", dismissed, act)
+	}
+
+	// Finished: a click dismisses, same as esc/enter.
+	s.Update(sh, core.TaskEvent{Done: true})
+	_, act = s.Update(sh, click)
+	if !dismissed || !reflect.DeepEqual(act, core.Pop()) {
+		t.Errorf("a click should dismiss a finished stay-task, got dismissed=%v act=%+v", dismissed, act)
 	}
 }
 

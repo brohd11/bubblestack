@@ -105,16 +105,33 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 			return s, core.SetStatusAndLog("aborting…")
 		}
 		if s.done && (core.MatchKey(k, core.Keys.Back) || core.MatchKey(k, core.Keys.Select)) {
-			// An aborted task (any kind) and a finished stay-task both linger on the
-			// log until dismissed. Aborted tasks fall back to a plain Pop when the
-			// caller supplied no onDismiss (non-stay tasks).
-			if s.aborting && s.onDismiss == nil {
-				return s, core.Pop()
-			}
-			if s.aborting || s.stay {
-				return s, s.onDismiss(sh)
-			}
+			return s.dismiss(sh)
 		}
+
+	case tea.MouseMsg:
+		// A click dismisses a finished task, the same as esc/enter — a done task
+		// is a dead end whose only moves are exits. Clicks while it runs do
+		// nothing: aborting work is esc's job, and a click that cancelled would
+		// be a landmine.
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+			s.done && (s.aborting || s.stay) {
+			return s.dismiss(sh)
+		}
+	}
+	return s, core.Action{}
+}
+
+// dismiss is the shared exit from a finished task (esc/enter key, or a click).
+// An aborted task (any kind) and a finished stay-task both linger on the log
+// until dismissed. Aborted tasks fall back to a plain Pop when the caller
+// supplied no onDismiss (non-stay tasks); anything else is a no-op — a done
+// non-stay task already navigated away.
+func (s *TaskScreen) dismiss(sh *core.Shared) (core.Screen, core.Action) {
+	if s.aborting && s.onDismiss == nil {
+		return s, core.Pop()
+	}
+	if s.aborting || s.stay {
+		return s, s.onDismiss(sh)
 	}
 	return s, core.Action{}
 }
