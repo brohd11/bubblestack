@@ -130,25 +130,49 @@ func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 	return core.Async(cmd)
 }
 
+// The list layout constants are bubbles' internals, pinned by tests
+// (update_test.go): titleView occupies one row whenever the title shows or the
+// filter is enabled (the filter input replaces the title in it), and each item
+// is NewDelegate's Height(2) + Spacing(1) rows. listItemAt and ListItemRow are
+// inverses over these; a bubbles upgrade that changes either breaks the tests
+// loudly instead of misplacing clicks and overlays silently.
+const (
+	listItemRows   = 3 // core.NewDelegate: Height 2 + Spacing 1
+	listHeaderRows = 1 // bubbles renders a one-row titleView for NewSelectList lists
+)
+
 // listItemAt maps a row within the list's rendered view to a visible-item
 // index, reporting false for clicks outside the items (the header, the spacing
-// below the last item, the pagination row). The layout constants are bubbles'
-// internals, pinned by tests: titleView occupies one row whenever the title
-// shows or the filter is enabled (the filter input replaces the title in it),
-// and each item is NewDelegate's Height(2) + Spacing(1) rows. Select takes a
-// visible-item index and paginates to it, so a click lands even mid-page.
+// below the last item, the pagination row). Select takes a visible-item index
+// and paginates to it, so a click lands even mid-page.
 func listItemAt(l *list.Model, relY int) (int, bool) {
-	const itemRows = 3 // core.NewDelegate: Height 2 + Spacing 1
-	header := 1        // bubbles renders a one-row titleView for NewSelectList lists
-	row := relY - header
+	row := relY - listHeaderRows
 	if row < 0 {
 		return 0, false
 	}
-	idx := l.Paginator.Page*l.Paginator.PerPage + row/itemRows
+	idx := l.Paginator.Page*l.Paginator.PerPage + row/listItemRows
 	if idx < 0 || idx >= len(l.VisibleItems()) {
 		return 0, false
 	}
 	return idx, true
+}
+
+// ListItemRow is the inverse of listItemAt: the row, relative to the list's own
+// view, at which visible item idx starts, and whether idx is on the current
+// page. A screen that overlays a floating editor (LineEditScreen) over the
+// selected row gets its anchor here — add the list's absolute offsets (BodyY
+// for a full-screen list, the pane offset for a ListPanel) for terminal
+// coordinates. ok is false when the item is scrolled off-page; the caller
+// picks the fallback (clamp to a visible row, or center).
+func ListItemRow(l *list.Model, idx int) (int, bool) {
+	if idx < 0 || idx >= len(l.VisibleItems()) {
+		return 0, false
+	}
+	start := l.Paginator.Page * l.Paginator.PerPage
+	if idx < start || idx >= start+l.Paginator.PerPage {
+		return 0, false
+	}
+	return listHeaderRows + (idx-start)*listItemRows, true
 }
 
 // WrapNav wraps the cursor at a list boundary: up on the first row selects the

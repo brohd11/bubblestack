@@ -76,3 +76,37 @@ func TestCompositeOutOfBoundsRows(t *testing.T) {
 		t.Errorf("row 1 = %q, want %q", got, ".XX.")
 	}
 }
+
+// posOverlay is an overlay stub that anchors its box at a fixed cell, to exercise
+// the router's OverlayPositioner branch and its on-screen clamping.
+type posOverlay struct {
+	stubScreen
+	x, y int
+}
+
+func (posOverlay) IsOverlay() bool                  { return true }
+func (p posOverlay) OverlayPos(int, int) (int, int) { return p.x, p.y }
+func (posOverlay) View(*Shared) string              { return "AB" }
+
+// TestOverlayPositioned asserts an OverlayPositioner's box lands at its anchor
+// rather than centered, and that an anchor past the frame's edge clamps so the
+// box stays fully on screen.
+func TestOverlayPositioned(t *testing.T) {
+	tm := sized(newCoreTestRouter()) // 80x24
+
+	tm = pump(tm, Push(posOverlay{x: 4, y: 2}))
+	lines := strings.Split(tm.(Router).View(), "\n")
+	if got := ansi.Strip(lines[2]); got[4:6] != "AB" {
+		t.Errorf("row 2 = %q, want the box anchored at (4,2)", got)
+	}
+
+	tm = pump(tm, Pop(1))
+	tm = pump(tm, Push(posOverlay{x: 100, y: 100}))
+	lines = strings.Split(tm.(Router).View(), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("row count = %d, want 24 (frame height)", len(lines))
+	}
+	if got := ansi.Strip(lines[23]); !strings.HasSuffix(got, "AB") {
+		t.Errorf("last row = %q, want the box clamped to the bottom-right corner", got)
+	}
+}

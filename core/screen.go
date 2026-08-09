@@ -139,3 +139,16 @@ type Crumber interface{ CrumbLabel(short bool) string }
 // screen can implement Overlayer and still render full-screen by returning false
 // (DialogScreen does this — one type serves both confirm and popup).
 type Overlayer interface{ IsOverlay() bool }
+
+// OverlayPositioner is an opt-in interface for an overlay screen (Overlayer) that
+// wants its box composited at a specific cell position instead of centered — a
+// floating line edit anchored over the list row it edits, say. The router passes
+// the rendered box dimensions so the screen can account for them (placing the box
+// above vs. below an anchor), and clamps the returned position into the visible
+// frame either way, so an implementation may return its raw anchor. Optional; an
+// overlay that doesn't implement it centers as before.
+type OverlayPositioner interface {
+	// OverlayPos returns the zero-based cell (column, row) the box's top-left
+	// corner composits at. boxW/boxH are the rendered box dimensions.
+	OverlayPos(boxW, boxH int) (x, y int)
+}

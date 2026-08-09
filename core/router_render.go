@@ -241,16 +241,24 @@ func (r Router) frame(s Screen) string {
 
 func (r Router) View() string {
 	// An overlay (popup) on top draws the screen below it as the background, then
-	// composites its own box centered over it — so the underlying screen stays
-	// visible around the popup. Only the top screen receives input, so it's modal.
+	// composites its own box over it — so the underlying screen stays visible
+	// around the box. Only the top screen receives input, so it's modal. The box
+	// is centered unless the overlay implements OverlayPositioner (a floating
+	// edit anchored over the element it covers); either way the position clamps
+	// into the frame so a box near an edge stays fully on screen.
 	if o, ok := r.Top().(Overlayer); ok && o.IsOverlay() && len(r.stack) >= 2 {
 		bg := r.frame(r.stack[len(r.stack)-2])
 		box := r.Top().View(r.sh)
-		x := (r.sh.width - lipgloss.Width(box)) / 2
-		y := (r.sh.height - lipgloss.Height(box)) / 2
-		if y < 0 {
-			y = 0
+		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
+		var x, y int
+		if p, ok := r.Top().(OverlayPositioner); ok {
+			x, y = p.OverlayPos(bw, bh)
+		} else {
+			x = (r.sh.width - bw) / 2
+			y = (r.sh.height - bh) / 2
 		}
+		x = max(0, min(x, r.sh.width-bw))
+		y = max(0, min(y, r.sh.height-bh))
 		return Composite(bg, box, x, y)
 	}
 	return r.frame(r.Top())

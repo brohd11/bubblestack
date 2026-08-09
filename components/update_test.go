@@ -61,3 +61,34 @@ func TestListItemAtEmpty(t *testing.T) {
 		t.Fatal("an empty list has no clickable row")
 	}
 }
+
+// TestListItemRow pins the inverse of listItemAt over the same bubbles layout
+// constants: item idx starts at row header + (idx - Page*PerPage) * itemRows,
+// and an item scrolled off the current page (or out of range) reports false.
+// A floating editor (LineEditScreen) anchors over the row this returns.
+func TestListItemRow(t *testing.T) {
+	l := clickList(10, 80, 24) // PerPage = (24 - title - pagination) / 3 = 7
+
+	for idx, want := range map[int]int{0: 1, 1: 4, 2: 7, 6: 19} {
+		row, ok := ListItemRow(&l, idx)
+		if !ok || row != want {
+			t.Errorf("idx %d: got (%d, %v), want (%d, true)", idx, row, ok, want)
+		}
+		// Inverse consistency: the row maps back to the item.
+		if back, ok := listItemAt(&l, row); !ok || back != idx {
+			t.Errorf("idx %d: listItemAt(row %d) = (%d, %v), want (%d, true)", idx, row, back, ok, idx)
+		}
+	}
+	// Off-page and out-of-range items have no row on screen.
+	for _, idx := range []int{-1, 7, 10} {
+		if _, ok := ListItemRow(&l, idx); ok {
+			t.Errorf("idx %d: got ok=true, want false (off-page or out of range)", idx)
+		}
+	}
+
+	// Page two: item 7 is the first row of the page.
+	l.Paginator.Page = 1
+	if got, ok := ListItemRow(&l, 7); !ok || got != 1 {
+		t.Errorf("page 1 idx 7: got (%d, %v), want (1, true)", got, ok)
+	}
+}
