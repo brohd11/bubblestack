@@ -18,7 +18,9 @@ import (
 // lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
 // three-way prompt when the buffer is dirty (y = save & exit, n = discard & exit,
 // esc/c = cancel). Enter splits lines, tab (or shift+tab) inserts a tab, the arrows
-// move the cursor, and a left click places it.
+// move the cursor, and a left click places it. The wheel scrolls the view without
+// moving the cursor (a cursor move then snaps the view back to it), and when the
+// buffer overflows the viewport a proportional scrollbar takes the rightmost column.
 //
 // It is a standalone screen owning the whole body, not a ModularScreen panel: it
 // captures every keystroke (Filtering reports true the whole time, so the router's
@@ -103,6 +105,9 @@ var (
 // renderer measures it as zero-width, so the padded frame line overflows, wraps, and
 // every later frame shifts (the "screen advances a line" corruption).
 const editorTabWidth = 4
+
+// editorWheelStep is how many lines one wheel notch scrolls the viewport.
+const editorWheelStep = 3
 
 // expandLine renders a buffer line to display runes, tabs expanded to spaces. Display
 // cells then equal display-rune indexes (double-width runes are the accepted
@@ -252,8 +257,22 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	case tea.KeyMsg:
 		return s.key(sh, m)
 	case tea.MouseMsg:
-		if !s.confirmExit && m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
+		if s.confirmExit || m.Action != tea.MouseActionPress {
+			return s, core.Action{}
+		}
+		switch m.Button {
+		case tea.MouseButtonLeft:
 			s.clickAt(sh, m.X, m.Y)
+		case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+			// The wheel is browse-only and only while focused: mouse msgs are
+			// broadcast to every pane, so an unfocused editor must not roll.
+			if s.focused {
+				if m.Button == tea.MouseButtonWheelUp {
+					s.scrollLines(-editorWheelStep)
+				} else {
+					s.scrollLines(editorWheelStep)
+				}
+			}
 		}
 		return s, core.Action{}
 	}
@@ -544,6 +563,9 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	if x -= s.insetX(); x < 0 {
 		x = 0
 	}
+	if s.barVisible() && x >= s.textW() {
+		return // the scrollbar column carries no buffer position
+	}
 	rel := y - s.insetY()
 	if !s.embedded {
 		rel -= sh.BodyY() // absolute coordinates: the chrome rows come off too
@@ -558,6 +580,32 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	col := colAtCell(s.lines[row], s.scrX+x)
 	s.curY, s.curX, s.wantX = row, col, col
 	s.clampScroll()
+}
+
+// scrollLines moves the viewport delta lines without touching the caret — the
+// wheel's browse mode — clamped so the view never passes the buffer's ends. The
+// caret may leave the screen; the next caret-moving key snaps the view back to it
+// (clampScroll runs after every keystroke).
+func (s *EditorScreen) scrollLines(delta int) {
+	s.scrY += delta
+	s.clampScrollBounds()
+}
+
+// clampScrollBounds keeps the scroll offsets inside the buffer WITHOUT chasing the
+// caret — the resize-time clamp. The router re-lays out after every message
+// (core.Router.Update), so a caret-chasing clamp here (clampScroll) would snap the
+// view back on every wheel tick and browse mode could never leave the caret behind.
+// Typing or moving the caret re-asserts visibility through key's clampScroll.
+func (s *EditorScreen) clampScrollBounds() {
+	if m := len(s.lines) - s.h; s.scrY > m {
+		s.scrY = m
+	}
+	if s.scrY < 0 {
+		s.scrY = 0
+	}
+	if s.scrX < 0 {
+		s.scrX = 0
+	}
 }
 
 // clampScroll scrolls the viewport just enough to keep the cursor visible, in both
@@ -577,9 +625,42 @@ func (s *EditorScreen) clampScroll() {
 	if curCell < s.scrX {
 		s.scrX = curCell
 	}
-	if curCell >= s.scrX+s.w {
-		s.scrX = curCell - s.w + 1
+	if w := s.textW(); curCell >= s.scrX+w {
+		s.scrX = curCell - w + 1
 	}
+}
+
+// barVisible reports whether the scrollbar column is drawn: only when the buffer
+// overflows the viewport.
+func (s *EditorScreen) barVisible() bool { return len(s.lines) > s.h }
+
+// textW is the width the text window gets — one column short of s.w while the
+// scrollbar takes the rightmost cell, so the caret can never hide under the bar.
+func (s *EditorScreen) textW() int {
+	if s.barVisible() {
+		return s.w - 1
+	}
+	return s.w
+}
+
+// scrollbarCell renders row i of the scrollbar: a thumb sized to the viewport's
+// share of the buffer and placed proportionally to scrY, on a full-height track.
+// The styles are built per call so a theme switch repaints, as renderLine's muted
+// style does.
+func (s *EditorScreen) scrollbarCell(row int) string {
+	thumb := max(s.h*s.h/len(s.lines), 1)
+	top := 0
+	if d := len(s.lines) - s.h; d > 0 {
+		top = s.scrY * (s.h - thumb) / d
+	}
+	color, glyph := core.MutedColor, "│"
+	if row >= top && row < top+thumb {
+		color, glyph = core.FocusedColor, "█"
+	}
+	if !s.focused {
+		color = core.MutedColor
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(glyph)
 }
 
 // ---------- rendering ----------
@@ -645,30 +726,46 @@ func (s *EditorScreen) gutter() int {
 }
 
 // body is the viewport itself: s.h rows of the visible line window and — while the
-// exit prompt is up — the prompt as the last row, each indented by the gutter. Always
-// exactly s.h lines tall, so the frame around it stays rectangular.
+// exit prompt is up — the prompt as the last row, each indented by the gutter. When
+// the buffer overflows, the rightmost column is the scrollbar (rows padded up to it,
+// so the bar reads as one solid column). Always exactly s.h lines tall, so the frame
+// around it stays rectangular.
 func (s *EditorScreen) body() string {
 	rows := s.h
 	if s.confirmExit {
 		rows-- // the prompt takes the last body row
 	}
+	bar := s.barVisible()
 	pad := strings.Repeat(" ", s.gutter())
 	var b strings.Builder
 	for i := 0; i < rows; i++ {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		row := s.scrY + i
-		if row >= len(s.lines) {
-			continue
+		b.WriteString(pad)
+		if row := s.scrY + i; row < len(s.lines) {
+			line := s.renderLine(row)
+			b.WriteString(line)
+			if bar {
+				b.WriteString(strings.Repeat(" ", s.textW()-lipgloss.Width(line)))
+			}
+		} else if bar {
+			b.WriteString(strings.Repeat(" ", s.textW()))
 		}
-		b.WriteString(pad + s.renderLine(row))
+		if bar {
+			b.WriteString(s.scrollbarCell(i))
+		}
 	}
 	if s.confirmExit {
 		if rows > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(pad + editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel"))
+		prompt := editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel")
+		b.WriteString(pad + prompt)
+		if bar {
+			b.WriteString(strings.Repeat(" ", max(s.textW()-lipgloss.Width(prompt), 0)))
+			b.WriteString(s.scrollbarCell(s.h - 1))
+		}
 	}
 	return b.String()
 }
@@ -688,7 +785,7 @@ func (s *EditorScreen) renderLine(row int) string {
 	if start > len(disp) {
 		start = len(disp)
 	}
-	end := s.scrX + s.w
+	end := s.scrX + s.textW()
 	if end > len(disp) {
 		end = len(disp)
 	}
@@ -699,7 +796,7 @@ func (s *EditorScreen) renderLine(row int) string {
 	if row != s.curY {
 		return string(vis)
 	}
-	c := cellOfCol(s.lines[row], s.curX) - s.scrX // clampScroll keeps this within [0, s.w)
+	c := cellOfCol(s.lines[row], s.curX) - s.scrX // clampScroll keeps this within [0, s.textW())
 	if c < len(vis) {
 		return string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
 	}
@@ -728,7 +825,9 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 
 // SetSize records the viewport dims — the args net of whatever chrome this editor
 // draws (see insetX/insetY, plus the frame's closing border on each axis) — and
-// re-clamps the scroll so a shrink can't leave the cursor off-screen.
+// re-clamps the scroll into the buffer's bounds. Bounds only, NOT to the caret: the
+// router re-lays out after every message, so caret-chasing here would undo every
+// wheel scroll the same tick it happened.
 func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	s.w, s.h = width-s.insetX(), bodyHeight-s.insetY()
 	if s.bordered {
@@ -741,7 +840,7 @@ func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	if s.h < 1 {
 		s.h = 1
 	}
-	s.clampScroll()
+	s.clampScrollBounds()
 }
 
 // ---------- save ----------

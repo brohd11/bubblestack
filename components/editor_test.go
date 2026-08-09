@@ -609,3 +609,154 @@ func TestEditorOnExitHook(t *testing.T) {
 		}
 	})
 }
+
+// longDoc is a 100-line buffer, taller than any test viewport.
+func longDoc() string {
+	return strings.TrimSuffix(strings.Repeat("x\n", 100), "\n")
+}
+
+func wheel(s *EditorScreen, sh *core.Shared, btn tea.MouseButton) {
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: btn, X: 5, Y: 5})
+}
+
+// TestEditorWheelScroll: the wheel browses the buffer without moving the caret,
+// clamped at both ends; a caret move afterwards snaps the view back to it
+// (clampScroll runs after every keystroke).
+func TestEditorWheelScroll(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(longDoc())
+
+	wheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrY != editorWheelStep {
+		t.Fatalf("wheel down → scrY %d, want %d", s.scrY, editorWheelStep)
+	}
+	if s.curY != 0 || s.curX != 0 {
+		t.Fatalf("the wheel must not move the caret, got (%d,%d)", s.curY, s.curX)
+	}
+	wheel(s, sh, tea.MouseButtonWheelUp)
+	wheel(s, sh, tea.MouseButtonWheelUp) // past the top: clamps
+	if s.scrY != 0 {
+		t.Fatalf("wheel up past the top → scrY %d, want 0", s.scrY)
+	}
+	for i := 0; i < 40; i++ {
+		wheel(s, sh, tea.MouseButtonWheelDown)
+	}
+	if want := len(s.lines) - s.h; s.scrY != want {
+		t.Fatalf("wheel at the bottom → scrY %d, want %d (len-h)", s.scrY, want)
+	}
+
+	// The router re-lays out (SetSize) after EVERY message; the browse position must
+	// survive it, or each wheel tick snaps straight back to the caret.
+	s.SetSize(sh, 80, 20)
+	if want := len(s.lines) - s.h; s.scrY != want {
+		t.Fatalf("SetSize undid the wheel scroll: scrY %d, want %d", s.scrY, want)
+	}
+
+	// The caret sits far above the view now; one arrow snaps the view back to it.
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	if s.curY != 1 || s.scrY != 1 {
+		t.Fatalf("down with the caret off-screen → (%d, scrY %d), want (1, 1)", s.curY, s.scrY)
+	}
+}
+
+// TestEditorWheelFocus: mouse msgs are broadcast to every pane, so the wheel rolls
+// only the focused editor; the exit prompt suspends it too.
+func TestEditorWheelFocus(t *testing.T) {
+	s, sh := newPaneEditor(EditorOpts{})
+	s.setContent(longDoc())
+
+	s.SetFocused(false)
+	wheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrY != 0 {
+		t.Fatalf("an unfocused pane must not scroll, scrY = %d", s.scrY)
+	}
+	s.SetFocused(true)
+	wheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrY != editorWheelStep {
+		t.Fatalf("focused wheel down → scrY %d, want %d", s.scrY, editorWheelStep)
+	}
+
+	s.dirty = true
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	if !s.confirmExit {
+		t.Fatal("dirty ctrl+x should raise the exit prompt")
+	}
+	before := s.scrY // raising the prompt re-clamps the view to the caret
+	wheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrY != before {
+		t.Fatalf("the prompt suspends the wheel: scrY %d, want %d", s.scrY, before)
+	}
+}
+
+// TestEditorScrollbar: a buffer taller than the viewport draws a proportional
+// scrollbar in the rightmost column — a thumb sized to the viewport's share of the
+// buffer, placed by scrY — and the text window narrows one column so the caret
+// never hides under the bar. A short buffer keeps the full width and no bar.
+func TestEditorScrollbar(t *testing.T) {
+	s, _ := newEditor(EditorOpts{}) // standalone: no gutter, the bar is the last cell
+	s.setContent("a\nb\nc")
+	if s.barVisible() || s.textW() != s.w {
+		t.Fatalf("a buffer that fits: barVisible=%v textW=%d, want no bar and full %d", s.barVisible(), s.textW(), s.w)
+	}
+	if strings.ContainsRune(s.body(), '█') || strings.ContainsRune(s.body(), '│') {
+		t.Fatal("no scrollbar cells without overflow")
+	}
+
+	s.setContent(longDoc())
+	if !s.barVisible() || s.textW() != s.w-1 {
+		t.Fatalf("overflow: barVisible=%v textW=%d, want the bar and w-1 (%d)", s.barVisible(), s.textW(), s.w-1)
+	}
+	thumb := s.h * s.h / len(s.lines)
+	lastCell := func(row string) rune { rs := []rune(row); return rs[len(rs)-1] }
+	assertBar := func(top int) {
+		t.Helper()
+		rows := strings.Split(s.body(), "\n")
+		if len(rows) != s.h {
+			t.Fatalf("body = %d rows, want %d", len(rows), s.h)
+		}
+		for i, row := range rows {
+			if w := lipgloss.Width(row); w != s.w {
+				t.Fatalf("row %d width = %d, want %d (bar included)", i, w, s.w)
+			}
+			want := '│'
+			if i >= top && i < top+thumb {
+				want = '█'
+			}
+			if got := lastCell(row); got != want {
+				t.Fatalf("row %d bar cell = %q, want %q (scrY %d)", i, got, want, s.scrY)
+			}
+		}
+	}
+	assertBar(0) // unscrolled: the thumb hugs the top
+
+	s.scrollLines(len(s.lines)) // to the very bottom
+	if top := s.scrY * (s.h - thumb) / (len(s.lines) - s.h); top != s.h-thumb {
+		t.Fatalf("at the bottom the thumb should hug the last rows: top %d, want %d", top, s.h-thumb)
+	}
+	assertBar(s.h - thumb)
+
+	// The caret never hides under the bar: horizontal scrolling keeps it within textW.
+	s.setContent(strings.Repeat("y", 200) + "\n" + longDoc())
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if cell := cellOfCol(s.lines[0], s.curX); s.scrX+s.textW() != cell+1 {
+		t.Fatalf("caret at EOL should sit in the last text cell: scrX=%d textW=%d cell=%d", s.scrX, s.textW(), cell)
+	}
+}
+
+// TestEditorScrollbarClick: the bar column carries no buffer position — a click
+// there is ignored rather than yanking the caret to a line's end.
+func TestEditorScrollbarClick(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(longDoc())
+	click := func(x, y int) {
+		s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+	}
+	click(s.w-1, s.titleH()+5) // the bar column
+	if s.curY != 0 || s.curX != 0 {
+		t.Fatalf("click on the scrollbar moved the caret to (%d,%d)", s.curY, s.curX)
+	}
+	click(3, s.titleH()+5) // inside the text: still lands (the 1-rune line clamps the column)
+	if s.curY != 5 || s.curX != 1 {
+		t.Fatalf("click in the text = (%d,%d), want (5,1)", s.curY, s.curX)
+	}
+}
