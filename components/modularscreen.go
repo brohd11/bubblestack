@@ -520,6 +520,18 @@ func (s *ModularScreen) focusSlot(i int) {
 	s.focusedPanel().(Focusable).Focus()
 }
 
+// FocusSlot moves keyboard focus to flat slot i (the declaration order: column 0
+// top→bottom, then column 1, …) — the programmatic counterpart of the tab cycle and
+// the mouse click, for a consumer that needs focus to follow an event (a sidebar
+// selection focusing the detail pane, say). Out-of-range and non-Focusable targets
+// are a no-op.
+func (s *ModularScreen) FocusSlot(i int) {
+	if i < 0 || i >= len(s.flat) {
+		return
+	}
+	s.focusSlot(i)
+}
+
 // slotRect is the rect input hit-testing and coordinate translation use: the
 // rendered layout once View has run (it differs from the Weight allocation
 // whenever a panel renders short and Expand shifts things up), the allocation

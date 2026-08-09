@@ -24,7 +24,9 @@ import (
 // It is a standalone screen owning the whole body, not a ModularScreen panel: it
 // captures every keystroke (Filtering reports true the whole time, so the router's
 // global single-key shortcuts never steal typed text — ctrl+c remains the hard quit).
-// To embed it in a pane layout later, wrap it in a ScreenPanel.
+// To embed it in a pane layout, wrap it in a ScreenPanel and set EditorOpts.OnExit —
+// the capture means tab never reaches the host's pane cycle, so the exit key is the
+// keyboard's only way out of the pane.
 //
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
@@ -34,6 +36,8 @@ type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
 	crumb string // breadcrumb segment; defaults to title
+
+	onExit func(*core.Shared) core.Action // embedded mode: replaces Pop on exit (nil ⇒ Pop)
 
 	lines      [][]rune // the buffer; always at least one (possibly empty) line
 	curY, curX int      // cursor: line index and rune column within it
@@ -50,10 +54,18 @@ type EditorScreen struct {
 // EditorOpts configures an EditorScreen. Path names the file to edit; a missing or
 // unreadable file starts an empty buffer that the first save creates (nano's behavior).
 // Title/Crumb default from the path's base name.
+//
+// OnExit, when set, replaces the exit navigation (ctrl+x on a clean buffer, "n" =
+// discard, and a successful save from the exit prompt): instead of core.Pop() the
+// hook's Action is returned. Embed it in a pane layout (via ScreenPanel) with the
+// hook set — a raw Pop there would dismiss the host ModularScreen, and the router
+// ignores a Pop of the root screen, leaving the editor's capture with no keyboard
+// way out. Standalone use leaves it nil and keeps the Pop.
 type EditorOpts struct {
-	Path  string
-	Title string
-	Crumb string
+	Path   string
+	Title  string
+	Crumb  string
+	OnExit func(*core.Shared) core.Action
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -144,11 +156,21 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		crumb = title
 	}
 	return &EditorScreen{
-		path:  opts.Path,
-		title: title,
-		crumb: crumb,
-		lines: [][]rune{{}},
+		path:   opts.Path,
+		title:  title,
+		crumb:  crumb,
+		onExit: opts.OnExit,
+		lines:  [][]rune{{}},
 	}
+}
+
+// exit produces the screen's exit navigation: the OnExit hook's Action when one is
+// configured (embedded use), else a plain Pop (standalone use).
+func (s *EditorScreen) exit(sh *core.Shared) core.Action {
+	if s.onExit != nil {
+		return s.onExit(sh)
+	}
+	return core.Pop()
 }
 
 // Init kicks off the file read when a path is configured; the result arrives as an
@@ -193,9 +215,9 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			return s, core.SetStatus("save failed: " + m.err.Error())
 		}
 		s.dirty = false
-		return s, core.Pop()
+		return s, s.exit(sh)
 	case tea.KeyMsg:
-		return s.key(m)
+		return s.key(sh, m)
 	case tea.MouseMsg:
 		if !s.confirmExit && m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
 			s.clickAt(sh, m.X, m.Y)
@@ -212,14 +234,14 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 // stay typable). The word/line editing combos mirror bubbles/textinput's KeyMap
 // verbatim (alt+←→ word jumps, alt+⌫ word delete, ctrl+u/k line deletes, ctrl+a/e
 // line ends, ctrl+h/d char-delete aliases) so the editor behaves like the form field.
-func (s *EditorScreen) key(m tea.KeyMsg) (core.Screen, core.Action) {
+func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
 	k := m.String()
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
 			return s, core.Action{Cmd: s.saveCmd()}
 		case "n", "N":
-			return s, core.Pop()
+			return s, s.exit(sh)
 		case "esc", "c":
 			s.confirmExit = false
 		}
@@ -228,7 +250,7 @@ func (s *EditorScreen) key(m tea.KeyMsg) (core.Screen, core.Action) {
 	switch k {
 	case "ctrl+x":
 		if !s.dirty {
-			return s, core.Pop()
+			return s, s.exit(sh)
 		}
 		s.confirmExit = true
 	case "shift+tab":

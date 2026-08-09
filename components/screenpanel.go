@@ -50,6 +50,25 @@ var _ panelInitializer = (*ScreenPanel)(nil)
 // host ModularScreen's Init.
 func NewScreenPanel(child core.Screen) *ScreenPanel { return &ScreenPanel{child: child} }
 
+// SetChild swaps the wrapped screen — the move a pane that cycles through same-type
+// children makes (a detail pane showing whichever row is selected, an editor pane
+// switching buffers). The old child is dropped as-is; keeping it alive (and thereby
+// its state) is the caller's business. Once the panel is initialized the new child
+// gets the panel's current size and its Init runs, the returned cmd being the
+// caller's to emit (the framework idiom — IO only in the cmd lane); before Init the
+// swap is silent and the host's own Init will start the new child. Focus state is
+// untouched: a focused panel stays focused on the new child.
+func (p *ScreenPanel) SetChild(child core.Screen) tea.Cmd {
+	p.child = child
+	if p.sh == nil {
+		return nil
+	}
+	if p.width > 0 {
+		p.child.SetSize(p.sh, p.width, p.height)
+	}
+	return p.child.Init(p.sh)
+}
+
 // Init captures the Shared the child's View/SetSize signatures need and runs the
 // child's own Init. A size assigned before Init is applied now.
 func (p *ScreenPanel) Init(sh *core.Shared) tea.Cmd {

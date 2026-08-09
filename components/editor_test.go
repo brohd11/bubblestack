@@ -21,7 +21,7 @@ func newEditor(opts EditorOpts) (*EditorScreen, *core.Shared) {
 }
 
 func typeRunes(s *EditorScreen, rs ...rune) {
-	s.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: rs})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: rs})
 }
 
 func buffer(s *EditorScreen) string {
@@ -54,17 +54,17 @@ func TestEditorTyping(t *testing.T) {
 func TestEditorEnterAndShiftTab(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	typeRunes(s, 'a', 'b', 'c')
-	s.key(tea.KeyMsg{Type: tea.KeyEnter})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
 	typeRunes(s, 'd')
 	if got := buffer(s); got != "abc\nd" {
 		t.Fatalf("buffer = %q, want %q", got, "abc\nd")
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyShiftTab})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got := buffer(s); got != "abc\nd\t" {
 		t.Fatalf("buffer = %q, want tab inserted, got %q", "abc\nd\t", got)
 	}
 	// A bare tab inserts nothing.
-	s.key(tea.KeyMsg{Type: tea.KeyTab})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyTab})
 	if got := buffer(s); got != "abc\nd\t" {
 		t.Fatalf("bare tab must not type, buffer = %q", got)
 	}
@@ -114,14 +114,14 @@ func TestEditorBackspace(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("ab\ncd")
 	s.curY, s.curX = 1, 0
-	s.key(tea.KeyMsg{Type: tea.KeyBackspace}) // join
+	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace}) // join
 	if got := buffer(s); got != "abcd" {
 		t.Fatalf("join: buffer = %q, want %q", got, "abcd")
 	}
 	if s.curY != 0 || s.curX != 2 {
 		t.Fatalf("cursor after join = (%d,%d), want (0,2)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyBackspace}) // delete 'b'
+	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace}) // delete 'b'
 	if got := buffer(s); got != "acd" {
 		t.Fatalf("delete: buffer = %q, want %q", got, "acd")
 	}
@@ -134,21 +134,21 @@ func TestEditorArrows(t *testing.T) {
 	s.setContent("abcd\nx\nabc")
 	s.curY, s.curX, s.wantX = 0, 3, 3
 
-	s.key(tea.KeyMsg{Type: tea.KeyDown}) // onto "x": clamp 3 → 1
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDown}) // onto "x": clamp 3 → 1
 	if s.curY != 1 || s.curX != 1 {
 		t.Fatalf("down onto short line = (%d,%d), want (1,1)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyDown}) // onto "abc": back to target column 3
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDown}) // onto "abc": back to target column 3
 	if s.curY != 2 || s.curX != 3 {
 		t.Fatalf("down restores target column = (%d,%d), want (2,3)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyRight}) // end of "abc": wraps to next line? no next — stays
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight}) // end of "abc": wraps to next line? no next — stays
 	if s.curY != 2 || s.curX != 3 {
 		t.Fatalf("right at buffer end = (%d,%d), want (2,3)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyUp})
-	s.key(tea.KeyMsg{Type: tea.KeyLeft}) // column 1 → 0 of "x"
-	s.key(tea.KeyMsg{Type: tea.KeyLeft}) // column 0: wraps to end of "abcd"
+	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft}) // column 1 → 0 of "x"
+	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft}) // column 0: wraps to end of "abcd"
 	if s.curY != 0 || s.curX != 4 {
 		t.Fatalf("left wraps to previous line end = (%d,%d), want (0,4)", s.curY, s.curX)
 	}
@@ -188,7 +188,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// Mid-word: alt+backspace deletes back to the word start.
 	s.setContent("foo bar baz")
 	s.curY, s.curX = 0, 6 // inside "bar", after the 'a'
-	s.key(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
 	if got := buffer(s); got != "foo r baz" {
 		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foo r baz")
 	}
@@ -196,7 +196,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// At a word start (after spaces): deletes the PREVIOUS word and the spaces.
 	s.setContent("foo   bar")
 	s.curY, s.curX = 0, 6
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlW})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlW})
 	if got := buffer(s); got != "bar" {
 		t.Fatalf("ctrl+w past spaces: buffer = %q, want %q", got, "bar")
 	}
@@ -204,7 +204,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// Column 0 joins the line, exactly like backspace (one press per segment).
 	s.setContent("one\ntwo")
 	s.curY, s.curX = 1, 0
-	s.key(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
 	if got := buffer(s); got != "onetwo" {
 		t.Fatalf("alt+backspace at col 0: buffer = %q, want %q", got, "onetwo")
 	}
@@ -212,14 +212,14 @@ func TestEditorWordDelete(t *testing.T) {
 	// alt+delete removes the word under/ahead of the cursor…
 	s.setContent("foo bar")
 	s.curY, s.curX = 0, 1
-	s.key(tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
 	if got := buffer(s); got != "fbar" {
 		t.Fatalf("alt+delete mid-word: buffer = %q, want %q", got, "fbar")
 	}
 	// …and at end of line pulls the next line up.
 	s.setContent("ab\ncd")
 	s.curY, s.curX = 0, 2
-	s.key(tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
 	if got := buffer(s); got != "abcd" {
 		t.Fatalf("alt+delete at EOL: buffer = %q, want %q", got, "abcd")
 	}
@@ -227,13 +227,13 @@ func TestEditorWordDelete(t *testing.T) {
 	// ctrl+u / ctrl+k delete to the line start / end.
 	s.setContent("hello world")
 	s.curY, s.curX = 0, 5
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlU})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlU})
 	if got := buffer(s); got != " world" {
 		t.Fatalf("ctrl+u: buffer = %q, want %q", got, " world")
 	}
 	s.setContent("hello world")
 	s.curY, s.curX = 0, 5
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlK})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlK})
 	if got := buffer(s); got != "hello" {
 		t.Fatalf("ctrl+k: buffer = %q, want %q", got, "hello")
 	}
@@ -247,38 +247,38 @@ func TestEditorWordNav(t *testing.T) {
 	s.setContent("foo bar\n  baz quux")
 
 	s.curY, s.curX = 0, 5 // inside "bar"
-	s.key(tea.KeyMsg{Type: tea.KeyLeft, Alt: true})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true})
 	if s.curX != 4 {
 		t.Fatalf("alt+left to word start: curX = %d, want 4", s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // previous word
+	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // previous word
 	if s.curX != 0 {
 		t.Fatalf("alt+left again: curX = %d, want 0", s.curX)
 	}
 	s.curY, s.curX = 1, 0
-	s.key(tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // col 0 → prev line end
+	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // col 0 → prev line end
 	if s.curY != 0 || s.curX != 7 {
 		t.Fatalf("alt+left wraps to prev line end: (%d,%d), want (0,7)", s.curY, s.curX)
 	}
 
 	s.curY, s.curX = 0, 0
-	s.key(tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "foo" and the space
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "foo" and the space
 	if s.curX != 4 {
 		t.Fatalf("alt+right to next word: curX = %d, want 4", s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlRight}) // no more words on line 1 → its end
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlRight}) // no more words on line 1 → its end
 	if s.curY != 0 || s.curX != 7 {
 		t.Fatalf("ctrl+right to line end: (%d,%d), want (0,7)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlRight}) // EOL → next line start
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlRight}) // EOL → next line start
 	if s.curY != 1 || s.curX != 0 {
 		t.Fatalf("ctrl+right wraps to next line: (%d,%d), want (1,0)", s.curY, s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // leading spaces → "baz"
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // leading spaces → "baz"
 	if s.curX != 2 {
 		t.Fatalf("alt+right over leading spaces: curX = %d, want 2", s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "baz" and the space → "quux"
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "baz" and the space → "quux"
 	if s.curX != 6 {
 		t.Fatalf("alt+right to next word: curX = %d, want 6", s.curX)
 	}
@@ -292,19 +292,19 @@ func TestEditorCtrlAliases(t *testing.T) {
 	s.setContent("abc")
 	s.curY, s.curX = 0, 2
 
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlH})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlH})
 	if got := buffer(s); got != "ac" {
 		t.Fatalf("ctrl+h: buffer = %q, want %q", got, "ac")
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlD})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlD})
 	if got := buffer(s); got != "a" {
 		t.Fatalf("ctrl+d: buffer = %q, want %q", got, "a")
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
 	if s.curX != 1 {
 		t.Fatalf("ctrl+e: curX = %d, want 1", s.curX)
 	}
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlA})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlA})
 	if s.curX != 0 {
 		t.Fatalf("ctrl+a: curX = %d, want 0", s.curX)
 	}
@@ -339,7 +339,7 @@ func TestEditorLoadAndDirty(t *testing.T) {
 // TestEditorExitCleanPops: ctrl+x on an unmodified buffer pops without a prompt.
 func TestEditorExitCleanPops(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
-	_, act := s.key(tea.KeyMsg{Type: tea.KeyCtrlX})
+	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
 	if act.Msg == nil {
 		t.Fatal("ctrl+x on a clean buffer should pop (non-nil nav msg)")
 	}
@@ -354,10 +354,10 @@ func TestEditorExitPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "saved.txt")
 	s, sh := newEditor(EditorOpts{Path: path})
 	typeRunes(s, 'h', 'i')
-	s.key(tea.KeyMsg{Type: tea.KeyEnter})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
 	typeRunes(s, 'y', 'o')
 
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlX})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
 	if !s.confirmExit {
 		t.Fatal("ctrl+x on a dirty buffer should show the save prompt")
 	}
@@ -369,14 +369,14 @@ func TestEditorExitPrompt(t *testing.T) {
 	}
 
 	// c cancels back to editing.
-	s.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if s.confirmExit {
 		t.Fatal("c should cancel the prompt")
 	}
 
 	// y saves: the cmd runs the write, its result msg pops the screen.
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlX})
-	_, act := s.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if act.Cmd == nil {
 		t.Fatal("y should return the async save cmd")
 	}
@@ -401,12 +401,62 @@ func TestEditorDiscardExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discarded.txt")
 	s, _ := newEditor(EditorOpts{Path: path})
 	typeRunes(s, 'x')
-	s.key(tea.KeyMsg{Type: tea.KeyCtrlX})
-	_, act := s.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	if act.Msg == nil {
 		t.Fatal("n should pop (non-nil nav msg)")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("n must not write the file")
 	}
+}
+
+// TestEditorOnExitHook: with EditorOpts.OnExit set (embedded use), every exit path —
+// clean ctrl+x, discard, and save — runs the hook instead of popping.
+func TestEditorOnExitHook(t *testing.T) {
+	t.Run("clean", func(t *testing.T) {
+		fired := 0
+		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
+		s, _ := newEditor(EditorOpts{OnExit: hook})
+		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		if fired != 1 || act.Msg != nil {
+			t.Fatalf("clean ctrl+x should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
+		}
+	})
+
+	t.Run("discard", func(t *testing.T) {
+		fired := 0
+		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
+		path := filepath.Join(t.TempDir(), "discarded.txt")
+		s, _ := newEditor(EditorOpts{Path: path, OnExit: hook})
+		typeRunes(s, 'x')
+		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		if fired != 1 || act.Msg != nil {
+			t.Fatalf("n should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("n must not write the file")
+		}
+	})
+
+	t.Run("save", func(t *testing.T) {
+		fired := 0
+		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
+		path := filepath.Join(t.TempDir(), "saved.txt")
+		s, sh := newEditor(EditorOpts{Path: path, OnExit: hook})
+		typeRunes(s, 'h', 'i')
+		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		if act.Cmd == nil {
+			t.Fatal("y should return the async save cmd")
+		}
+		_, act = s.Update(sh, act.Cmd())
+		if fired != 1 || act.Msg != nil {
+			t.Fatalf("a successful save should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
+		}
+		if b, err := os.ReadFile(path); err != nil || string(b) != "hi" {
+			t.Fatalf("saved content = %q, err = %v", b, err)
+		}
+	})
 }

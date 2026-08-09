@@ -127,3 +127,38 @@ func TestCaptureFollowsFocus(t *testing.T) {
 		t.Fatal("refocusing the capturing panel should restore capture")
 	}
 }
+
+// TestFocusSlot covers the exported focus move: a valid Focusable target takes
+// focus (blurring the old panel), while out-of-range and non-Focusable indexes
+// leave focus where it is.
+func TestFocusSlot(t *testing.T) {
+	first := &capturePanel{}
+	second := &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: first}, {Panel: &shortPanel{h: 1}}, {Panel: second}},
+	}, ModularOpts{})
+	if m.focus != 0 {
+		t.Fatalf("initial focus should be the first Focusable slot, got %d", m.focus)
+	}
+
+	m.FocusSlot(2)
+	if m.focus != 2 {
+		t.Fatalf("FocusSlot(2) should move focus, got %d", m.focus)
+	}
+
+	m.FocusSlot(1) // shortPanel is not Focusable
+	if m.focus != 2 {
+		t.Fatalf("a non-Focusable target should be a no-op, got %d", m.focus)
+	}
+
+	m.FocusSlot(9)
+	m.FocusSlot(-1)
+	if m.focus != 2 {
+		t.Fatalf("out-of-range targets should be a no-op, got %d", m.focus)
+	}
+
+	m.FocusSlot(0)
+	if m.focus != 0 {
+		t.Fatalf("FocusSlot(0) should move focus back, got %d", m.focus)
+	}
+}
