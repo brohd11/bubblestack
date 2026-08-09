@@ -7,23 +7,27 @@ import (
 )
 
 // This file holds the standard Actions menu: the small picker an app opens with "a"
-// for the chores every bubblestack app shares — switch the theme, self-update, refresh.
-// It was extracted from repoview's actions.go when golaunch grew the same menu; keeping
-// it here means a new app gets the whole sheet (and the shared self-update flow behind
-// it) for one function call.
+// for the chores every bubblestack app shares — switch the theme, browse the docs,
+// self-update, refresh. It was extracted from repoview's actions.go when golaunch
+// grew the same menu; keeping it here means a new app gets the whole sheet (and the
+// shared self-update flow behind it) for one function call.
 
-// NewActionsMenu builds the standard Actions picker: ◑ Theme, then any app-specific
-// rows (a docs index, say), then ⟲ Update <app> and ⟳ Refresh. refreshDesc/refresh are
-// the app's own rescan row (what its global Refresh key fires, described in its terms).
-// PopStop marks the menu as the hub its sub-flows (the theme picker, the update flow)
-// return to.
-func NewActionsMenu(hooks SelfUpdateHooks, refreshDesc string, refresh func(*core.Shared) core.Action, extra ...list.Item) *PickerScreen {
+// NewActionsMenu builds the standard Actions picker: ◑ Theme, then ? Docs when the
+// app has docs pages (DocsItem — nil/empty docs ⇒ no row), then any app-specific
+// rows, then ⟲ Update <app> and ⟳ Refresh. refreshDesc/refresh are the app's own
+// rescan row (what its global Refresh key fires, described in its terms).
+// PopStop marks the menu as the hub its sub-flows (the theme picker, the update
+// flow) return to.
+func NewActionsMenu(hooks SelfUpdateHooks, refreshDesc string, refresh func(*core.Shared) core.Action, docs []DocPage, extra ...list.Item) *PickerScreen {
 	items := []list.Item{
 		Item{
 			Name: "◑ Theme",
 			Desc: "switch the color theme",
 			Pick: func(sh *core.Shared) core.Action { return core.Push(ThemePicker()) },
 		},
+	}
+	if docsRow, ok := DocsItem(docs); ok {
+		items = append(items, docsRow)
 	}
 	items = append(items, extra...)
 	items = append(items,

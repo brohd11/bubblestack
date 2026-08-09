@@ -14,9 +14,14 @@ import (
 
 // This file is the shared in-TUI manual engine: parse a set of markdown pages, render
 // them with a deliberately partial markdown reader, and build a Docs index over them. It
-// names no domain type — a consumer supplies its own embedded pages/*.md and the page
+// names no domain type — a consumer supplies its own embedded pages and the page
 // title/description come out of the markdown itself — so every bubblestack app (gdaddon,
 // repoview, …) shares one renderer and index instead of copying ~300 lines.
+//
+// The standard consumer layout: pages at doc/embedded/*.md in the app's repo (the
+// discoverable doc folder), exposed by a tiny doc package's Pages() — go:embed can't
+// reach a parent directory, so the embed lives at that level, and the app's internal
+// docs flow imports Pages() from it.
 //
 // Adding a page is dropping a numbered .md into the consumer's pages dir: the filename
 // orders it (fs.ReadDir returns sorted), the first "# " heading is its title, and the
@@ -97,6 +102,34 @@ func newDocPage(p DocPage) *DocScreen {
 		Title:  p.Title,
 		Render: func(width int) string { return RenderMarkdown(p.Body, width) },
 	})
+}
+
+// DocsItem is the standard Actions-menu docs row: "? Docs" with a desc derived
+// from the page titles (docTopics), pushing the DocsIndex over pages. ok=false
+// when pages is empty — no docs compiled into the build, no row.
+func DocsItem(pages []DocPage) (item list.Item, ok bool) {
+	if len(pages) == 0 {
+		return nil, false
+	}
+	return Item{
+		Name: "? Docs",
+		Desc: docTopics(pages),
+		Pick: func(sh *core.Shared) core.Action { return core.Push(DocsIndex("Docs", "Docs", pages)) },
+	}, true
+}
+
+// docTopics builds the docs row's desc from the page titles — lowercased and
+// joined, capped at four topics with a trailing ellipsis when there are more.
+// Derived rather than fixed so adding a page updates the blurb on its own.
+func docTopics(pages []DocPage) string {
+	topics := make([]string, len(pages))
+	for i, p := range pages {
+		topics[i] = strings.ToLower(p.Title)
+	}
+	if len(topics) > 4 {
+		return strings.Join(topics[:4], ", ") + ", …"
+	}
+	return strings.Join(topics, ", ")
 }
 
 // The pages are markdown, but only the handful of constructs below are honored — this
