@@ -9,6 +9,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // newEditor builds a sized screen over a shared with no chrome (BodyY 0, so mouse
@@ -175,6 +176,153 @@ func TestEditorClickSetsCursor(t *testing.T) {
 	click(0, sh.BodyY()+s.titleH()+9) // below the buffer → last line
 	if s.curY != 2 || s.curX != 0 {
 		t.Fatalf("click below buffer = (%d,%d), want (2,0)", s.curY, s.curX)
+	}
+}
+
+// newPaneEditor builds the embedded shape: told it is a pane before sizing, exactly
+// as ScreenPanel drives it. Border is the caller's (the instancer's) choice, carried
+// in opts.
+func newPaneEditor(opts EditorOpts) (*EditorScreen, *core.Shared) {
+	s := NewEditorScreen(opts)
+	s.SetEmbedded(true)
+	sh := core.NewShared(nil)
+	s.SetSize(sh, 40, 10)
+	return s, sh
+}
+
+// TestEditorBorderedView: bordered, the title moves into the frame's top-edge legend
+// (carrying the [+] dirty marker) and the separate title bar is gone; unbordered, the
+// title bar stays and no frame is drawn.
+func TestEditorBorderedView(t *testing.T) {
+	s, sh := newPaneEditor(EditorOpts{Title: "notes.md", Border: true})
+	v := s.View(sh)
+	if !strings.HasPrefix(v, "┌─ notes.md ") {
+		t.Fatalf("bordered View should open with the title legend, got %q", strings.SplitN(v, "\n", 2)[0])
+	}
+	if strings.Contains(v, core.RenderTitleBar("notes.md")) {
+		t.Fatal("bordered View must not also draw the title bar")
+	}
+	if h := lipgloss.Height(v); h != 10 {
+		t.Fatalf("bordered View height = %d, want the pane's full 10 rows", h)
+	}
+
+	typeRunes(s, 'x') // dirty
+	if !strings.HasPrefix(s.View(sh), "┌─ notes.md [+] ") {
+		t.Fatal("the dirty marker should ride the legend")
+	}
+
+	plain, sh2 := newEditor(EditorOpts{Title: "notes.md"})
+	pv := plain.View(sh2)
+	if !strings.Contains(pv, core.RenderTitleBar("notes.md")) {
+		t.Fatal("unbordered View should keep its title bar")
+	}
+	if strings.Contains(pv, "┌") {
+		t.Fatal("unbordered View must draw no frame")
+	}
+}
+
+// TestEditorSizeInsets: the viewport is the assigned dims net of whatever chrome the
+// editor draws — the frame on both axes when bordered, the title bar otherwise, plus
+// the one-column gutter when embedded. Standalone stays what it always was.
+func TestEditorSizeInsets(t *testing.T) {
+	plain := NewEditorScreen(EditorOpts{})
+	plain.SetSize(core.NewShared(nil), 40, 10)
+	if plain.w != 40 || plain.h != 10-plain.titleH() {
+		t.Fatalf("standalone 40x10 → %dx%d, want 40x%d", plain.w, plain.h, 10-plain.titleH())
+	}
+
+	pane, _ := newPaneEditor(EditorOpts{}) // embedded, unbordered: gutter + title bar
+	if pane.w != 39 || pane.h != 10-pane.titleH() {
+		t.Fatalf("pane 40x10 → %dx%d, want 39x%d", pane.w, pane.h, 10-pane.titleH())
+	}
+
+	framed, _ := newPaneEditor(EditorOpts{Border: true}) // frame + gutter
+	if framed.w != 37 || framed.h != 8 {
+		t.Fatalf("framed pane 40x10 → %dx%d, want 37x8", framed.w, framed.h)
+	}
+}
+
+// TestEditorPaneClick is the embedded mouse contract (core.Embeddable): the host
+// ModularScreen hands over pane-relative coordinates, so only the editor's own chrome
+// comes off. Covers gote's real shape (unbordered: title bar + gutter) and the framed
+// one. The BodyY half of the contract can't be exercised here — Shared.bodyY is
+// router-owned and unexported, so it is 0 in every components test (as it is in the
+// standalone TestEditorClickSetsCursor above); what this pins is the inset math.
+func TestEditorPaneClick(t *testing.T) {
+	press := func(s *EditorScreen, sh *core.Shared, x, y int) {
+		s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+	}
+
+	t.Run("unbordered", func(t *testing.T) {
+		s, sh := newPaneEditor(EditorOpts{})
+		s.setContent("hello\nhi\nworld")
+		press(s, sh, 1, s.titleH()) // first body row, first text column
+		if s.curY != 0 || s.curX != 0 {
+			t.Fatalf("click on the first text cell = (%d,%d), want (0,0)", s.curY, s.curX)
+		}
+		press(s, sh, 4, s.titleH()+2) // "world", fourth column
+		if s.curY != 2 || s.curX != 3 {
+			t.Fatalf("click = (%d,%d), want (2,3)", s.curY, s.curX)
+		}
+		press(s, sh, 0, s.titleH()) // the gutter reads as column 0
+		if s.curY != 0 || s.curX != 0 {
+			t.Fatalf("click in the gutter = (%d,%d), want (0,0)", s.curY, s.curX)
+		}
+	})
+
+	t.Run("bordered", func(t *testing.T) {
+		s, sh := newPaneEditor(EditorOpts{Border: true})
+		s.setContent("hello\nhi\nworld")
+		press(s, sh, 2, 1) // inside the frame, past the gutter
+		if s.curY != 0 || s.curX != 0 {
+			t.Fatalf("click on the first text cell = (%d,%d), want (0,0)", s.curY, s.curX)
+		}
+		press(s, sh, 5, 3) // "world", fourth column
+		if s.curY != 2 || s.curX != 3 {
+			t.Fatalf("click = (%d,%d), want (2,3)", s.curY, s.curX)
+		}
+		press(s, sh, 3, 0) // the top border is not a buffer row
+		if s.curY != 2 || s.curX != 3 {
+			t.Fatalf("click on the top border moved the cursor to (%d,%d)", s.curY, s.curX)
+		}
+	})
+}
+
+// TestEditorUnfocusedRender: an unfocused pane mutes its body and drops the cursor —
+// a caret where the keys don't land reads as a lie — and mutes its title bar with it.
+// A standalone editor is focused from birth, so none of this shows.
+func TestEditorUnfocusedRender(t *testing.T) {
+	withColor(t) // the tint and the reverse-video caret are ANSI; force a profile
+
+	s, sh := newPaneEditor(EditorOpts{Title: "notes.md"})
+	s.setContent("hello\nworld")
+	if !s.focused {
+		t.Fatal("an editor should be focused from birth (standalone always is)")
+	}
+	lit := s.View(sh)
+	if !strings.Contains(lit, editorCursorStyle.Render("h")) {
+		t.Fatal("the focused pane should draw its cursor cell")
+	}
+
+	s.SetFocused(false)
+	dark := s.View(sh)
+	if strings.Contains(dark, editorCursorStyle.Render("h")) {
+		t.Fatal("an unfocused pane must not draw a cursor")
+	}
+	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
+	if !strings.Contains(dark, muted.Render("hello")) {
+		t.Fatal("an unfocused pane should mute its body text")
+	}
+	if strings.Contains(dark, core.RenderTitleBar("notes.md")) {
+		t.Fatal("an unfocused pane should mute its title bar too")
+	}
+	if lipgloss.Height(lit) != lipgloss.Height(dark) {
+		t.Fatal("focus must not change the pane's footprint")
+	}
+
+	s.SetFocused(true)
+	if s.View(sh) != lit {
+		t.Fatal("regaining focus should restore the lit render exactly")
 	}
 }
 

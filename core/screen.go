@@ -53,6 +53,27 @@ type Filterer interface{ Filtering() bool }
 // doesn't implement it.
 type FocusableScreen interface{ SetFocused(bool) }
 
+// Embeddable is a screen that can be told it is one pane of a layout rather than
+// the whole body. The router never asserts it — the EMBEDDER does:
+// components.ScreenPanel calls SetEmbedded(true) when it wraps a screen as a pane.
+// It reports a fact about PLACEMENT, not a style: what changes is the geometry the
+// screen computes against.
+//
+//   - mouse: the host ModularScreen forwards presses in PANE-RELATIVE coordinates,
+//     so an embedded screen must not subtract Shared.BodyY (it already came off);
+//     standalone, coordinates are absolute and BodyY does come off. This is the
+//     whole reason the capability exists — a screen cannot derive it, and getting
+//     it wrong lands clicks a chrome's worth of rows away from the pointer.
+//   - size: the dims handed to SetSize are the pane's outer cells, so whatever
+//     chrome the screen draws comes out of them (the panel convention).
+//
+// What the screen LOOKS like is not this interface's business: a border is a
+// construction-time option of the screen itself (EditorOpts.Border, mirroring
+// ListPanelOpts.Border), so the instancer composes it, embedded or not. Focus is
+// likewise separate — a screen implementing FocusableScreen has SetFocused
+// forwarded by the panel and denotes focus however suits it.
+type Embeddable interface{ SetEmbedded(bool) }
+
 // receiver lets a screen react to a broadcast notification (PropagateAll). The
 // framework only routes the payload (opaque, consumer-defined); a screen type-
 // switches on payloads it recognizes and ignores the rest. It may return an Action

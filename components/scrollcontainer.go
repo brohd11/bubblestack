@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // ScrollContainer is a read-only content panel in the LogPane visual idiom: a
@@ -150,31 +149,14 @@ func (p *ScrollContainer) contentHeight() int {
 // the title legend (plus a scroll/pane hint while focused) — the LogPane shape,
 // so a detail pane and the output pane read as the same kind of element.
 func (p *ScrollContainer) View(focused bool) string {
-	color := core.BorderColor
 	label := p.title
 	if focused {
-		color = core.FocusedColor
 		label = p.title + " · ↑/↓ scroll · tab next"
 	}
-
-	inner := p.innerWidth()
-	box := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderTop(false).
-		BorderForeground(color).
-		Padding(0, 1).
-		Width(inner + 2) // inner text + the 1-col padding on each side
-	content := box.Render(p.vp.View())
-
-	// Hand-draw the top border so the legend can sit mid-line. The run between the
-	// corners is the same width as the bottom border: inner + 2 (padding).
-	legend := "─ " + label + " "
-	fill := (inner + 2) - lipgloss.Width(legend)
-	if fill < 0 {
-		fill = 0
-	}
-	top := lipgloss.NewStyle().Foreground(color).
-		Render("┌" + legend + strings.Repeat("─", fill) + "┐")
-
-	return top + "\n" + content
+	// The run between the corners is the same width as the bottom border: the
+	// inner text plus the 1-col padding on each side. Composed from the frame
+	// helpers rather than frame() because of that padding.
+	inner := p.innerWidth() + 2
+	content := frameBox(inner, focused).Padding(0, 1).Render(p.vp.View())
+	return frameTop(label, inner, focused) + "\n" + content
 }

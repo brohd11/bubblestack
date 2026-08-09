@@ -23,6 +23,12 @@ type FocusableScreen = core.FocusableScreen
 // handled=true, so tab and esc never fall through to the host while a
 // ScreenPanel is the route target — the child decides everything, including esc.
 //
+// Embedding also tells the child what it needs to know to be a pane rather than a
+// whole body — see syncChild: a core.Embeddable child learns it is embedded (which
+// fixes its mouse geometry), and a FocusableScreen child learns whether this pane
+// currently holds focus. Neither imposes a look: what chrome a child draws is its
+// own construction-time business.
+//
 // Two caveats follow from host and child sharing one router:
 //   - a child that returns core.Pop() pops the host ModularScreen (a child may
 //     dismiss its host); core.Push works normally, stacking over the host.
@@ -56,10 +62,12 @@ func NewScreenPanel(child core.Screen) *ScreenPanel { return &ScreenPanel{child:
 // its state) is the caller's business. Once the panel is initialized the new child
 // gets the panel's current size and its Init runs, the returned cmd being the
 // caller's to emit (the framework idiom — IO only in the cmd lane); before Init the
-// swap is silent and the host's own Init will start the new child. Focus state is
-// untouched: a focused panel stays focused on the new child.
+// swap is silent and the host's own Init will start the new child. The panel's focus
+// state is untouched and pushed onto the new child (syncChild), so a focused pane
+// stays focused on it.
 func (p *ScreenPanel) SetChild(child core.Screen) tea.Cmd {
 	p.child = child
+	p.syncChild()
 	if p.sh == nil {
 		return nil
 	}
@@ -73,10 +81,30 @@ func (p *ScreenPanel) SetChild(child core.Screen) tea.Cmd {
 // child's own Init. A size assigned before Init is applied now.
 func (p *ScreenPanel) Init(sh *core.Shared) tea.Cmd {
 	p.sh = sh
+	p.syncChild()
 	if p.width > 0 {
 		p.child.SetSize(sh, p.width, p.height)
 	}
 	return p.child.Init(sh)
+}
+
+// syncChild hands the child the two facts only the panel knows. It runs before any
+// SetSize, so the child computes its very first layout against both; a child that
+// implements neither capability is left alone.
+//
+// Focus is pushed (not just forwarded on transitions) because a child otherwise never
+// learns the state it was born into: a screen defaults to focused — standalone it
+// always is — so a pane that doesn't hold focus would render its child lit, and a
+// child swapped into a focused pane would render it dark. The Focus/Blur transitions
+// alone can't cover either case: ModularScreen focuses one slot at construction and
+// never blurs the rest, and FocusSlot is a no-op when the target already holds focus.
+func (p *ScreenPanel) syncChild() {
+	if e, ok := p.child.(core.Embeddable); ok {
+		e.SetEmbedded(true)
+	}
+	if f, ok := p.child.(FocusableScreen); ok {
+		f.SetFocused(p.focused)
+	}
 }
 
 func (p *ScreenPanel) Focus() {

@@ -23,6 +23,10 @@ type ListPanel struct {
 	onSelect func(*core.Shared, list.Item) core.Action
 	onKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	help     []key.Binding
+
+	title    string // kept for the border legend (the list's own title bar is off when bordered)
+	bordered bool   // ListPanelOpts.Border: draw the shared frame
+	width    int    // outer cell width, for the frame's inner run
 }
 
 var _ Panel = (*ListPanel)(nil)
@@ -35,19 +39,34 @@ var _ PanelHelper = (*ListPanel)(nil)
 // on enter (default: a self-dispatching Item picks itself), OnKey claims extra
 // row keys before WrapNav, and Help adds help-bar bindings shown while the panel
 // is focused.
+//
+// Border opts the panel into the framework's framed look (the one ScrollContainer
+// and a bordered EditorScreen wear): the list's own title bar is dropped and the
+// title becomes the frame's top-edge legend, tinted by focus — so a sidebar denotes
+// which pane is live even when its cursor doesn't. It is a plain option rather than
+// a core.Borderer implementation because a panel only ever lives inside a
+// ModularScreen: there is no standalone case for the embedder to distinguish.
+// Default off, so existing sidebars render unchanged.
 type ListPanelOpts struct {
 	OnSelect func(*core.Shared, list.Item) core.Action
 	OnKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	Help     []key.Binding
+	Border   bool
 }
 
 // NewListPanel builds a sidebar list with the shared select-list styling.
 func NewListPanel(items []list.Item, title string, opts ListPanelOpts) *ListPanel {
+	listTitle := title
+	if opts.Border {
+		listTitle = "" // the title moves to the border legend; an empty one hides the bar
+	}
 	return &ListPanel{
-		list:     core.NewSelectList(items, title, opts.Help...),
+		list:     core.NewSelectList(items, listTitle, opts.Help...),
 		onSelect: opts.OnSelect,
 		onKey:    opts.OnKey,
 		help:     opts.Help,
+		title:    title,
+		bordered: opts.Border,
 	}
 }
 
@@ -118,11 +137,36 @@ func (p *ListPanel) PanelHelp() []key.Binding {
 	}, p.help...)
 }
 
-// View renders the list itself. The panel draws no border of its own, so the
-// focused arg only answers the Panel contract — the list cursor already marks
-// which panel is live.
-func (p *ListPanel) View(bool) string { return p.list.View() }
+// View renders the list, framed when ListPanelOpts.Border asked for it — then the
+// focused arg tints the frame and its title legend. Unbordered (the default) the
+// panel draws nothing of its own and the arg only answers the Panel contract: the
+// list cursor already marks which panel is live.
+func (p *ListPanel) View(focused bool) string {
+	if !p.bordered {
+		return p.list.View()
+	}
+	return frame(p.title, p.list.View(), p.innerWidth(), focused)
+}
 
-// SetSize takes the outer cell dims; with no border of its own, the list gets
-// them verbatim.
-func (p *ListPanel) SetSize(width, height int) { p.list.SetSize(width, height) }
+// SetSize takes the outer cell dims; the list gets them verbatim unless the panel
+// is bordered, in which case the frame comes off both axes first.
+func (p *ListPanel) SetSize(width, height int) {
+	p.width = width
+	if !p.bordered {
+		p.list.SetSize(width, height)
+		return
+	}
+	if height -= 2; height < 1 {
+		height = 1
+	}
+	p.list.SetSize(p.innerWidth(), height)
+}
+
+// innerWidth is the run between the frame's corners: the outer width minus the two
+// side borders.
+func (p *ListPanel) innerWidth() int {
+	if w := p.width - 2; w > 1 {
+		return w
+	}
+	return 1
+}

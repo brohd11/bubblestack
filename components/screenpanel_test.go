@@ -27,6 +27,82 @@ func (s *stubScreen) SetSize(_ *core.Shared, w, h int) {
 	s.w, s.h = w, h
 }
 
+// paneStub is a child that answers both embed-time capabilities, recording what it
+// was told and the dims it was sized with — the shape of an embedded EditorScreen.
+// It starts focused, as a real screen does (standalone always is).
+type paneStub struct {
+	stubScreen
+	embedded bool
+	focused  bool
+}
+
+func newPaneStub() *paneStub { return &paneStub{focused: true} }
+
+func (s *paneStub) SetEmbedded(on bool) { s.embedded = on }
+func (s *paneStub) SetFocused(on bool)  { s.focused = on }
+
+// TestScreenPanelSyncsChild: embedding hands the child the two facts only the panel
+// knows — that it is a pane (core.Embeddable, which fixes its mouse geometry) and
+// whether this pane holds focus — from Init and from a later SetChild alike, and
+// always before the child is sized. A child that implements neither is left alone.
+func TestScreenPanelSyncsChild(t *testing.T) {
+	sh := core.NewShared(nil)
+
+	t.Run("from init", func(t *testing.T) {
+		child := newPaneStub()
+		p := NewScreenPanel(child)
+		if child.embedded {
+			t.Fatal("wrapping alone must not embed the child")
+		}
+		p.SetSize(40, 10)
+		p.Init(sh)
+		if !child.embedded {
+			t.Fatal("Init should tell an Embeddable child it is a pane")
+		}
+		if child.w != 40 || child.h != 10 {
+			t.Fatalf("child sized %dx%d, want the outer 40x10", child.w, child.h)
+		}
+	})
+
+	// An unfocused pane must not leave its child rendering as focused: nothing else
+	// ever blurs it, since ModularScreen focuses one slot at construction and never
+	// touches the rest.
+	t.Run("unfocused pane blurs its child", func(t *testing.T) {
+		child := newPaneStub()
+		p := NewScreenPanel(child)
+		p.Init(sh)
+		if child.focused {
+			t.Fatal("a child of an unfocused pane should render unfocused")
+		}
+	})
+
+	// The mirror case, and the one gote hits: picking a second doc swaps a child into
+	// a pane that ALREADY holds focus, so FocusSlot is a no-op and the swap is the
+	// only chance to tell the new child it is live.
+	t.Run("focused pane lights its new child", func(t *testing.T) {
+		p := NewScreenPanel(&stubScreen{name: "plain"}) // implements neither: untouched
+		p.SetSize(40, 10)
+		p.Init(sh)
+		p.Focus()
+
+		child := newPaneStub()
+		child.focused = false
+		p.SetChild(child)
+		if !child.embedded || !child.focused {
+			t.Fatalf("SetChild should embed (%v) and focus (%v) the new child", child.embedded, child.focused)
+		}
+	})
+
+	t.Run("before init", func(t *testing.T) {
+		child := newPaneStub()
+		p := NewScreenPanel(&stubScreen{name: "plain"})
+		p.SetChild(child) // swapped in before the panel is initialized
+		if !child.embedded {
+			t.Fatal("a child swapped in before Init should still be embedded")
+		}
+	})
+}
+
 // TestScreenPanelSetChild covers the swap in both orders: before the panel's Init
 // (silent — the host's Init starts the new child, the cmd is nil) and after (the
 // new child is sized and initialized immediately, its Init cmd handed back).

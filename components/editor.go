@@ -26,7 +26,11 @@ import (
 // global single-key shortcuts never steal typed text — ctrl+c remains the hard quit).
 // To embed it in a pane layout, wrap it in a ScreenPanel and set EditorOpts.OnExit —
 // the capture means tab never reaches the host's pane cycle, so the exit key is the
-// keyboard's only way out of the pane.
+// keyboard's only way out of the pane. Embedded (ScreenPanel calls SetEmbedded, see
+// core.Embeddable) it reads mouse coordinates as pane-relative and indents the body
+// one column off the pane edge; it denotes focus by muting the body and dropping the
+// cursor, so an unfocused pane reads as inactive without a frame. Whether it draws a
+// frame at all is the instancer's call (EditorOpts.Border) and independent of both.
 //
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
@@ -48,7 +52,11 @@ type EditorScreen struct {
 	dirty       bool // buffer differs from what was loaded/last saved
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 
-	w, h int // viewport dims in cells (body minus the title bar), set by SetSize
+	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
+	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
+	focused  bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
+
+	w, h int // viewport dims in cells (the body net of the title bar or frame), set by SetSize
 }
 
 // EditorOpts configures an EditorScreen. Path names the file to edit; a missing or
@@ -61,10 +69,17 @@ type EditorScreen struct {
 // hook set — a raw Pop there would dismiss the host ModularScreen, and the router
 // ignores a Pop of the root screen, leaving the editor's capture with no keyboard
 // way out. Standalone use leaves it nil and keeps the Pop.
+//
+// Border draws the shared frame (the ScrollContainer look) with the title as its
+// top-edge legend instead of the title bar, the same opt-in ListPanelOpts.Border
+// carries: which chrome an instance wears is the composing caller's choice, not the
+// embedder's, so the same screen can be framed in one layout and plain in another.
+// Default off — an editor denotes focus by muting its text either way.
 type EditorOpts struct {
 	Path   string
 	Title  string
 	Crumb  string
+	Border bool
 	OnExit func(*core.Shared) core.Action
 }
 
@@ -139,6 +154,8 @@ func colAtCell(line []rune, cell int) int {
 var _ core.Screen = (*EditorScreen)(nil)
 var _ core.Filterer = (*EditorScreen)(nil)
 var _ core.Crumber = (*EditorScreen)(nil)
+var _ core.Embeddable = (*EditorScreen)(nil)
+var _ core.FocusableScreen = (*EditorScreen)(nil)
 
 // NewEditorScreen builds the screen with an empty buffer; a configured Path is read
 // asynchronously from Init (the framework idiom — IO only in the cmd lane).
@@ -156,11 +173,13 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		crumb = title
 	}
 	return &EditorScreen{
-		path:   opts.Path,
-		title:  title,
-		crumb:  crumb,
-		onExit: opts.OnExit,
-		lines:  [][]rune{{}},
+		path:     opts.Path,
+		title:    title,
+		crumb:    crumb,
+		onExit:   opts.OnExit,
+		lines:    [][]rune{{}},
+		bordered: opts.Border,
+		focused:  true, // standalone the editor is always focused; a panel blurs it
 	}
 }
 
@@ -185,6 +204,19 @@ func (s *EditorScreen) Init(*core.Shared) tea.Cmd {
 		return editorLoadedMsg{content: string(b), err: err}
 	}
 }
+
+// SetEmbedded implements core.Embeddable: ScreenPanel calls it when the editor is one
+// pane of a layout. It shifts the geometry only — mouse coordinates arrive
+// pane-relative (no Shared.BodyY to subtract) and the body indents one column off the
+// pane edge so text doesn't butt against a neighbouring pane's border. The look is
+// unaffected: EditorOpts.Border decides the frame.
+func (s *EditorScreen) SetEmbedded(on bool) { s.embedded = on }
+
+// SetFocused implements core.FocusableScreen: the host ModularScreen's focus arrives
+// through ScreenPanel. Unfocused, the editor mutes its body text, drops the cursor and
+// (unbordered) mutes its title bar, so the pane reads as inactive; the router drives
+// the same transition on a standalone editor when the output pane takes the keys.
+func (s *EditorScreen) SetFocused(focused bool) { s.focused = focused }
 
 // Filtering reports text capture at all times: the editor types every printable key,
 // so the router's global single-key shortcuts (q, o, r, [, ], t, …) must never fire
@@ -500,12 +532,19 @@ func (s *EditorScreen) moveVertical(delta int) {
 	}
 }
 
-// clickAt maps a left press to a buffer position: terminal rows are absolute, so the
-// chrome rows (Shared.BodyY) and the in-body title bar come off first, then the scroll
-// offsets turn viewport cells into buffer coordinates (the column via colAtCell, since
-// clicks land in display cells but curX counts runes), clamped to the line.
+// clickAt maps a left press to a buffer position: the offsets (see insetX/insetY)
+// come off first, then the scroll offsets turn viewport cells into buffer coordinates
+// (the column via colAtCell, since clicks land in display cells but curX counts
+// runes), clamped to the line. A click left of the body reads as column 0; one above
+// it is ignored.
 func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
-	rel := y - sh.BodyY() - s.titleH()
+	if x -= s.insetX(); x < 0 {
+		x = 0
+	}
+	rel := y - s.insetY()
+	if !s.embedded {
+		rel -= sh.BodyY() // absolute coordinates: the chrome rows come off too
+	}
 	if rel < 0 {
 		return
 	}
@@ -543,9 +582,36 @@ func (s *EditorScreen) clampScroll() {
 // ---------- rendering ----------
 
 // titleH is the title bar's rendered height, subtracted from the body (and from mouse
-// rows) the same way ModularScreen accounts for its own title.
+// rows) the same way ModularScreen accounts for its own title. The focused and muted
+// bars render at the same height, so focus never shifts the body.
 func (s *EditorScreen) titleH() int {
 	return lipgloss.Height(core.RenderTitleBar(s.titleText()))
+}
+
+// insetX and insetY are the body's offsets from the screen's own top-left: the chrome
+// this editor draws above and left of the first buffer cell. They are the single
+// definition SetSize (which subtracts them) and clickAt (which offsets by them) both
+// read, so the two can't drift apart.
+//
+// Left: the frame's border column when bordered, plus the embedded gutter — one blank
+// column keeping the text off a neighbouring pane's border.
+func (s *EditorScreen) insetX() int {
+	x := 0
+	if s.bordered {
+		x++
+	}
+	if s.embedded {
+		x++
+	}
+	return x
+}
+
+// insetY is the frame's top border row when bordered, else the title bar's height.
+func (s *EditorScreen) insetY() int {
+	if s.bordered {
+		return 1
+	}
+	return s.titleH()
 }
 
 func (s *EditorScreen) titleText() string {
@@ -555,14 +621,35 @@ func (s *EditorScreen) titleText() string {
 	return s.title
 }
 
-// View renders the title bar (with a [+] modified marker), the visible line window
-// with the cursor cell in reverse video, and — while the exit prompt is up — the
-// prompt as the body's last line.
+// View renders the buffer window under its title, both tracking focus: bordered, the
+// title (with its [+] modified marker) is the frame's top-border legend and the frame
+// carries the tint; unbordered, it is the title bar above the body, muted while a
+// sibling pane holds the keys.
 func (s *EditorScreen) View(*core.Shared) string {
+	if s.bordered {
+		return frame(s.titleText(), s.body(), s.w+s.gutter(), s.focused)
+	}
+	return core.WithTitleFocused(s.titleText(), s.body(), s.focused)
+}
+
+// gutter is the embedded body's one-column left indent (0 standalone) — the part of
+// insetX that lives INSIDE the frame, so View adds it back to the frame's inner run.
+func (s *EditorScreen) gutter() int {
+	if s.embedded {
+		return 1
+	}
+	return 0
+}
+
+// body is the viewport itself: s.h rows of the visible line window and — while the
+// exit prompt is up — the prompt as the last row, each indented by the gutter. Always
+// exactly s.h lines tall, so the frame around it stays rectangular.
+func (s *EditorScreen) body() string {
 	rows := s.h
 	if s.confirmExit {
 		rows-- // the prompt takes the last body row
 	}
+	pad := strings.Repeat(" ", s.gutter())
 	var b strings.Builder
 	for i := 0; i < rows; i++ {
 		if i > 0 {
@@ -572,21 +659,26 @@ func (s *EditorScreen) View(*core.Shared) string {
 		if row >= len(s.lines) {
 			continue
 		}
-		b.WriteString(s.renderLine(row))
+		b.WriteString(pad + s.renderLine(row))
 	}
 	if s.confirmExit {
 		if rows > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel"))
+		b.WriteString(pad + editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel"))
 	}
-	return core.WithTitle(s.titleText(), b.String())
+	return b.String()
 }
 
 // renderLine renders one buffer row's horizontal window in display cells (tabs
 // expanded via expandLine — the raw '\t' never reaches the frame), with the cursor
 // cell (a reverse-video rune, or a blank at end of line) when the row holds the
 // cursor. A cursor sitting on a tab reverses the expansion's first cell.
+//
+// Unfocused the whole window goes muted and the cursor is dropped: a caret in a pane
+// the keys don't reach reads as a lie about where typing lands, and one caret per
+// pane would leave nothing marking the live one. The muted style is built per call so
+// a theme switch repaints it, as styleHelp and StyleList do.
 func (s *EditorScreen) renderLine(row int) string {
 	disp := expandLine(s.lines[row])
 	start := s.scrX
@@ -598,6 +690,9 @@ func (s *EditorScreen) renderLine(row int) string {
 		end = len(disp)
 	}
 	vis := disp[start:end]
+	if !s.focused {
+		return lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
+	}
 	if row != s.curY {
 		return string(vis)
 	}
@@ -628,11 +723,18 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 	})
 }
 
-// SetSize records the viewport dims (the body minus the title bar) and re-clamps the
-// scroll so a shrink can't leave the cursor off-screen.
+// SetSize records the viewport dims — the args net of whatever chrome this editor
+// draws (see insetX/insetY, plus the frame's closing border on each axis) — and
+// re-clamps the scroll so a shrink can't leave the cursor off-screen.
 func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
-	s.w = width
-	s.h = bodyHeight - s.titleH()
+	s.w, s.h = width-s.insetX(), bodyHeight-s.insetY()
+	if s.bordered {
+		s.w-- // the right border
+		s.h-- // the bottom border
+	}
+	if s.w < 1 {
+		s.w = 1
+	}
 	if s.h < 1 {
 		s.h = 1
 	}

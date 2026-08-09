@@ -55,6 +55,15 @@ func RenderTitleBar(text string) string {
 	return listStyles.TitleBar.Render(listStyles.Title.Render(text))
 }
 
+// renderTitleBarMuted is RenderTitleBar for an unfocused element: the accent fill
+// comes off and the text goes muted. Only the colors change — the bar keeps
+// listStyles.Title's padding, so its height and left pad match the focused bar
+// exactly and a focus flip can't shift the body under it.
+func renderTitleBarMuted(text string) string {
+	muted := listStyles.Title.UnsetBackground().Foreground(MutedColor)
+	return listStyles.TitleBar.Render(muted.Render(text))
+}
+
 // WithTitle prepends a styled title bar to body, or returns body unchanged when
 // title is empty — so any screen can make its in-body title optional by passing the
 // raw (unrendered) title text straight through.
@@ -63,6 +72,21 @@ func WithTitle(title, body string) string {
 		return body
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, RenderTitleBar(title), body)
+}
+
+// WithTitleFocused is WithTitle with a focus-tinted bar: the accent bar when
+// focused, a muted one when a sibling pane holds focus. Screens that can be nested
+// in a ModularScreen render through it for the same reason they use BoxFocused —
+// so the whole element, title included, reads as inactive. Standalone screens
+// (always focused) keep using WithTitle.
+func WithTitleFocused(title, body string, focused bool) string {
+	if title == "" {
+		return body
+	}
+	if focused {
+		return WithTitle(title, body)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, renderTitleBarMuted(title), body)
 }
 
 // ---------- confirm/summary box ----------
