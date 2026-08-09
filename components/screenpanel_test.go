@@ -146,3 +146,64 @@ func TestScreenPanelSetChild(t *testing.T) {
 		}
 	})
 }
+
+// swapStub is a child whose Update swaps the panel's child mid-flight — the gote
+// editor pane's shape: its OnExit hook calls SetChild while the router is still
+// inside the child's Update.
+type swapStub struct {
+	stubScreen
+	panel *ScreenPanel
+	repl  core.Screen
+}
+
+func (s *swapStub) Update(*core.Shared, tea.Msg) (core.Screen, core.Action) {
+	s.panel.SetChild(s.repl)
+	return s, core.Action{}
+}
+
+// TestScreenPanelSwapSurvivesUpdate: a child whose update swaps the pane's child
+// (an OnExit hook closing the pane's doc and switching to the next one) must not
+// have the swap clobbered by UpdatePanel's returned-screen bookkeeping — before the
+// fix, the pane kept rendering the closed doc's editor, title and all.
+func TestScreenPanelSwapSurvivesUpdate(t *testing.T) {
+	sh := core.NewShared(nil)
+	p := NewScreenPanel(&stubScreen{name: "original"})
+	p.SetSize(40, 10)
+	p.Init(sh)
+	swap := &swapStub{panel: p, repl: &stubScreen{name: "replacement"}}
+	swap.name = "swapper"
+	p.SetChild(swap)
+
+	p.UpdatePanel(sh, tea.KeyMsg{Type: tea.KeyCtrlX})
+	if got := p.View(false); got != "replacement" {
+		t.Fatalf("the mid-update swap should survive, pane renders %q", got)
+	}
+}
+
+// TestScreenPanelForwardsPaneOrigin: the host-pushed origin reaches a PaneOriginer
+// child — immediately, and for a child swapped in after the first push.
+func TestScreenPanelForwardsPaneOrigin(t *testing.T) {
+	sh := core.NewShared(nil)
+	child := &originStubScreen{}
+	p := NewScreenPanel(child)
+	p.Init(sh)
+	p.SetPaneOrigin(31, 4)
+	if !child.has || child.x != 31 || child.y != 4 {
+		t.Fatalf("child got (%d,%d) has=%v, want (31,4)", child.x, child.y, child.has)
+	}
+
+	later := &originStubScreen{}
+	p.SetChild(later)
+	if !later.has || later.x != 31 || later.y != 4 {
+		t.Fatalf("a swapped-in child should inherit the origin, got (%d,%d) has=%v", later.x, later.y, later.has)
+	}
+}
+
+// originStubScreen records the pushed pane origin (EditorScreen's shape).
+type originStubScreen struct {
+	stubScreen
+	x, y int
+	has  bool
+}
+
+func (s *originStubScreen) SetPaneOrigin(x, y int) { s.x, s.y, s.has = x, y, true }

@@ -14,6 +14,14 @@ import (
 // capability — a screen without it renders the same either way.
 type FocusableScreen = core.FocusableScreen
 
+// PaneOriginer is implemented by a screen that lays something out in absolute
+// terminal cells and therefore needs to know where its pane sits — an EditorScreen
+// anchoring its save-as overlay at the pane's bottom edge. The host ModularScreen
+// pushes each slot's rendered origin to a panel implementing it; ScreenPanel does
+// and forwards to a child that implements it too. Coordinates are the pane's
+// top-left corner in absolute terminal cells.
+type PaneOriginer interface{ SetPaneOrigin(x, y int) }
+
 // ScreenPanel embeds a full core.Screen as one panel of a ModularScreen — a
 // nested screen for when a pane needs behavior no single-purpose panel has (a
 // form next to a detail view, say). The child keeps its whole Update contract:
@@ -47,6 +55,8 @@ type ScreenPanel struct {
 	width   int
 	height  int
 	focused bool
+	ox, oy  int  // the pane's absolute origin, pushed by the host ModularScreen
+	hasOrig bool
 }
 
 var _ Panel = (*ScreenPanel)(nil)
@@ -54,6 +64,7 @@ var _ Focusable = (*ScreenPanel)(nil)
 var _ PanelUpdater = (*ScreenPanel)(nil)
 var _ Capturing = (*ScreenPanel)(nil)
 var _ panelInitializer = (*ScreenPanel)(nil)
+var _ PaneOriginer = (*ScreenPanel)(nil)
 
 // NewScreenPanel wraps child as a panel. The child's Init runs once, from the
 // host ModularScreen's Init.
@@ -108,6 +119,21 @@ func (p *ScreenPanel) syncChild() {
 	if f, ok := p.child.(FocusableScreen); ok {
 		f.SetFocused(p.focused)
 	}
+	if p.hasOrig {
+		if po, ok := p.child.(PaneOriginer); ok {
+			po.SetPaneOrigin(p.ox, p.oy)
+		}
+	}
+}
+
+// SetPaneOrigin implements PaneOriginer: the host ModularScreen pushes the pane's
+// rendered origin each frame. Stored and forwarded to a child that consumes it
+// (syncChild covers children swapped in after the first push).
+func (p *ScreenPanel) SetPaneOrigin(x, y int) {
+	p.ox, p.oy, p.hasOrig = x, y, true
+	if po, ok := p.child.(PaneOriginer); ok {
+		po.SetPaneOrigin(x, y)
+	}
 }
 
 func (p *ScreenPanel) Focus() {
@@ -145,10 +171,15 @@ func (p *ScreenPanel) View(bool) string {
 
 // UpdatePanel forwards the message to the child and keeps the returned screen,
 // reporting handled=true unconditionally — the child owns every key while this
-// panel is the route target (see the type doc for what that costs tab).
+// panel is the route target (see the type doc for what that costs tab). The
+// returned screen replaces the child only when the child is still the one that
+// ran: the update's Action may have swapped it mid-flight (an OnExit hook calling
+// SetChild — gote's editor pane closing a doc), and restoring the runner would
+// clobber that swap.
 func (p *ScreenPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
-	next, act := p.child.Update(sh, msg)
-	if next != nil {
+	before := p.child
+	next, act := before.Update(sh, msg)
+	if next != nil && p.child == before {
 		p.child = next
 	}
 	return act, true

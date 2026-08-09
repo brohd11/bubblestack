@@ -73,6 +73,13 @@ func NewLineEdit(placeholder string, x, y, width int, onDone func(*core.Shared, 
 
 func (s *LineEditScreen) Init(*core.Shared) tea.Cmd { return textinput.Blink }
 
+// SetValue seeds the input (the cursor lands at the end), for an edit that starts
+// from an existing value — a save-as prefilled with the current file name, say.
+func (s *LineEditScreen) SetValue(v string) {
+	s.input.SetValue(v)
+	s.input.SetCursor(len([]rune(v)))
+}
+
 // IsOverlay marks the screen for compositing over the screen below it.
 func (s *LineEditScreen) IsOverlay() bool { return true }
 

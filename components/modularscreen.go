@@ -289,7 +289,7 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 // slots (remainder to the last), which are re-sized and re-rendered — so an
 // Expand slot fills whatever its siblings didn't use. Growth only, never a
 // shrink; columns without Expand slots render exactly as allocated.
-func (s *ModularScreen) View(*core.Shared) string {
+func (s *ModularScreen) View(sh *core.Shared) string {
 	cols := make([]string, len(s.cols))
 	y0 := 0
 	if s.title != "" {
@@ -347,6 +347,16 @@ func (s *ModularScreen) View(*core.Shared) string {
 		cols[c] = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 	s.hitRects = hit
+	// Publish each slot's rendered origin (absolute cells, like the mouse path's
+	// BodyY translation) to panels that lay out overlays of their own — an editor
+	// anchoring its save-as box at its own bottom edge.
+	if track {
+		for i, slot := range s.flat {
+			if po, ok := slot.Panel.(PaneOriginer); ok {
+				po.SetPaneOrigin(hit[i].x, sh.BodyY()+hit[i].y)
+			}
+		}
+	}
 	return core.WithTitle(s.title, lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 }
 

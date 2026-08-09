@@ -523,13 +523,21 @@ func TestEditorExitPrompt(t *testing.T) {
 		t.Fatal("c should cancel the prompt")
 	}
 
-	// y saves: the cmd runs the write, its result msg pops the screen.
+	// y pushes the filename prompt (nano's "File Name to Write"), seeded with the
+	// buffer's name; enter saves, and the async result pops the screen.
 	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if act.Cmd == nil {
-		t.Fatal("y should return the async save cmd")
+	_, act := s.Update(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if act.Msg == nil || act.Cmd != nil {
+		t.Fatal("y should push the filename prompt (nav msg, no cmd)")
 	}
-	_, act = s.Update(sh, act.Cmd())
+	edit := s.saveAsEdit(sh)
+	if got := edit.input.Value(); got != path {
+		t.Fatalf("the filename prompt should seed the full path, got %q", got)
+	}
+	if act := edit.OnDone(sh, path); act.Msg == nil {
+		t.Fatal("enter on the filename prompt should navigate (pop + save)")
+	}
+	_, act = s.Update(sh, s.saveCmd()())
 	if act.Msg == nil {
 		t.Fatal("a successful save should pop (non-nil nav msg)")
 	}
@@ -543,9 +551,12 @@ func TestEditorExitPrompt(t *testing.T) {
 	if s.dirty {
 		t.Fatal("buffer should be clean after a successful save")
 	}
+	if s.confirmExit {
+		t.Fatal("a completed save must clear the prompt")
+	}
 }
 
-// TestEditorDiscardExit: n on the prompt pops without writing.
+// TestEditorDiscardExit: n on the prompt pops without writing, prompt cleared.
 func TestEditorDiscardExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discarded.txt")
 	s, _ := newEditor(EditorOpts{Path: path})
@@ -554,6 +565,9 @@ func TestEditorDiscardExit(t *testing.T) {
 	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	if act.Msg == nil {
 		t.Fatal("n should pop (non-nil nav msg)")
+	}
+	if s.confirmExit {
+		t.Fatal("n must clear the prompt")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("n must not write the file")
@@ -596,11 +610,10 @@ func TestEditorOnExitHook(t *testing.T) {
 		s, sh := newEditor(EditorOpts{Path: path, OnExit: hook})
 		typeRunes(s, 'h', 'i')
 		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-		if act.Cmd == nil {
-			t.Fatal("y should return the async save cmd")
+		if act := s.saveAsEdit(sh).OnDone(sh, path); act.Msg == nil {
+			t.Fatal("enter on the filename prompt should navigate (pop + save)")
 		}
-		_, act = s.Update(sh, act.Cmd())
+		_, act := s.Update(sh, s.saveCmd()())
 		if fired != 1 || act.Msg != nil {
 			t.Fatalf("a successful save should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
 		}
@@ -608,6 +621,59 @@ func TestEditorOnExitHook(t *testing.T) {
 			t.Fatalf("saved content = %q, err = %v", b, err)
 		}
 	})
+}
+
+// TestEditorSaveAs: a different name at the filename prompt writes the NEW path and
+// renames the buffer (path and title follow), leaving the old file untouched; a
+// blank name cancels. A scratch buffer's prompt starts empty and saves to the typed
+// name — the save a bare "y" used to refuse with "no file path".
+func TestEditorSaveAs(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(old, []byte("orig"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, sh := newEditor(EditorOpts{Path: old})
+	s.Update(sh, s.Init(sh)())
+	typeRunes(s, '!')
+
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	edit := s.saveAsEdit(sh)
+	if got := edit.input.Value(); got != old {
+		t.Fatalf("the prompt should seed the full path, got %q", got)
+	}
+	edit.OnDone(sh, "  ") // blank: a quiet cancel
+	if s.path != old {
+		t.Fatalf("a blank name must not touch the path, got %q", s.path)
+	}
+	renamed := filepath.Join(dir, "renamed.txt")
+	edit.OnDone(sh, renamed)
+	if s.path != renamed || s.title != "renamed.txt" {
+		t.Fatalf("save-as should rename the buffer, got path %q title %q", s.path, renamed)
+	}
+	s.Update(sh, s.saveCmd()())
+	if b, err := os.ReadFile(renamed); err != nil || string(b) != "!orig" {
+		t.Fatalf("the new path should hold the buffer: %q, err = %v", b, err)
+	}
+	if b, err := os.ReadFile(old); err != nil || string(b) != "orig" {
+		t.Fatalf("save-as must not touch the old file: %q, err = %v", b, err)
+	}
+
+	scratch, sh2 := newEditor(EditorOpts{})
+	typeRunes(scratch, 'n', 'o')
+	scratch.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	edit2 := scratch.saveAsEdit(sh2)
+	if got := edit2.input.Value(); got != "" {
+		t.Fatalf("a scratch buffer's prompt starts empty, got %q", got)
+	}
+	fresh := filepath.Join(dir, "fresh.txt")
+	edit2.OnDone(sh2, fresh)
+	if _, act := scratch.Update(sh2, scratch.saveCmd()()); act.Msg == nil {
+		t.Fatal("saving a named scratch buffer should pop")
+	}
+	if b, err := os.ReadFile(fresh); err != nil || string(b) != "no" {
+		t.Fatalf("scratch saved content = %q, err = %v", b, err)
+	}
 }
 
 // longDoc is a 100-line buffer, taller than any test viewport.
@@ -758,5 +824,32 @@ func TestEditorScrollbarClick(t *testing.T) {
 	click(3, s.titleH()+5) // inside the text: still lands (the 1-rune line clamps the column)
 	if s.curY != 5 || s.curX != 1 {
 		t.Fatalf("click in the text = (%d,%d), want (5,1)", s.curY, s.curX)
+	}
+}
+
+// TestEditorSaveAsAnchor: the save-as box covers the bottom of just this editor —
+// embedded, the host-pushed pane origin and the pane's own width; standalone (no
+// origin was ever pushed) it spans the terminal width at the body's bottom.
+func TestEditorSaveAsAnchor(t *testing.T) {
+	s, sh := newEditor(EditorOpts{}) // standalone 80x20
+	edit := s.saveAsEdit(sh)
+	if edit.x != 0 || edit.width != sh.Width() {
+		t.Fatalf("standalone anchor = (%d, w %d), want (0, %d)", edit.x, edit.width, sh.Width())
+	}
+	if want := sh.BodyY() + s.insetY() + s.h - 2; edit.y != want {
+		t.Fatalf("standalone y = %d, want %d (one row above the prompt row)", edit.y, want)
+	}
+
+	pane, psh := newPaneEditor(EditorOpts{}) // embedded 40x10: gutter + title bar
+	pane.SetPaneOrigin(31, 4)
+	edit = pane.saveAsEdit(psh)
+	if pane.paneW() != 40 {
+		t.Fatalf("paneW = %d, want the pane's full 40", pane.paneW())
+	}
+	if edit.x != 31 || edit.width != 40 {
+		t.Fatalf("embedded anchor = (%d, w %d), want (31, 40)", edit.x, edit.width)
+	}
+	if want := 4 + pane.insetY() + pane.h - 2; edit.y != want {
+		t.Fatalf("embedded y = %d, want %d", edit.y, want)
 	}
 }

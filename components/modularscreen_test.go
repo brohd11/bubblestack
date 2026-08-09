@@ -298,3 +298,34 @@ func TestFocusSlot(t *testing.T) {
 		t.Fatalf("FocusSlot(0) should move focus back, got %d", m.focus)
 	}
 }
+
+// originPanel records the pane origin the host pushes from View (ScreenPanel's
+// shape; EditorScreen is the real consumer).
+type originPanel struct {
+	x, y int
+	has  bool
+}
+
+func (p *originPanel) SetSize(int, int)       {}
+func (p *originPanel) View(bool) string       { return "x" }
+func (p *originPanel) SetPaneOrigin(x, y int) { p.x, p.y, p.has = x, y, true }
+
+// TestModularScreenPushesPaneOrigin: every View publishes each slot's rendered
+// rect in absolute cells to PaneOriginer panels — the anchor an embedded editor's
+// save-as box uses to cover its own bottom rather than the whole screen.
+func TestModularScreenPushesPaneOrigin(t *testing.T) {
+	a, b := &originPanel{}, &originPanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: a}},
+		{{Panel: b}},
+	}, ModularOpts{ColWidths: []int{30, 0}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+	m.View(sh)
+	if !a.has || a.x != 0 || a.y != 0 {
+		t.Fatalf("slot 0 origin = (%d,%d) has=%v, want (0,0)", a.x, a.y, a.has)
+	}
+	if !b.has || b.x != 30 || b.y != 0 {
+		t.Fatalf("slot 1 origin = (%d,%d) has=%v, want (30,0)", b.x, b.y, b.has)
+	}
+}

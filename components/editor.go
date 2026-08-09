@@ -16,8 +16,10 @@ import (
 
 // EditorScreen is the simple nano-like text editor: it loads a file (or starts empty),
 // lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
-// three-way prompt when the buffer is dirty (y = save & exit, n = discard & exit,
-// esc/c = cancel). Enter splits lines, tab (or shift+tab) inserts a tab, the arrows
+// three-way prompt when the buffer is dirty (n = discard & exit, esc/c = cancel, and
+// y = a filename prompt seeded with the current name — nano's "File Name to Write",
+// so saving under a different name is a save-as). Enter splits lines, tab (or
+// shift+tab) inserts a tab, the arrows
 // move the cursor, and a left click places it. The wheel scrolls the view without
 // moving the cursor (a cursor move then snaps the view back to it), and when the
 // buffer overflows the viewport a proportional scrollbar takes the rightmost column.
@@ -59,12 +61,16 @@ type EditorScreen struct {
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
 	focused  bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
 
+	originX, originY int  // the pane's absolute top-left (components.PaneOriginer)
+	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
+
 	w, h int // viewport dims in cells (the body net of the title bar or frame), set by SetSize
 }
 
 // EditorOpts configures an EditorScreen. Path names the file to edit; a missing or
-// unreadable file starts an empty buffer that the first save creates (nano's behavior).
-// Title/Crumb default from the path's base name.
+// unreadable file starts an empty buffer that the first save creates (nano's
+// behavior). The exit prompt's "y" may replace Path at runtime (save-as). Title/Crumb
+// default from the path's base name.
 //
 // OnExit, when set, replaces the exit navigation (ctrl+x on a clean buffer, "n" =
 // discard, and a successful save from the exit prompt): instead of core.Pop() the
@@ -162,6 +168,7 @@ var _ core.Filterer = (*EditorScreen)(nil)
 var _ core.Crumber = (*EditorScreen)(nil)
 var _ core.Embeddable = (*EditorScreen)(nil)
 var _ core.FocusableScreen = (*EditorScreen)(nil)
+var _ PaneOriginer = (*EditorScreen)(nil)
 
 // NewEditorScreen builds the screen with an empty buffer; a configured Path is read
 // asynchronously from Init (the framework idiom — IO only in the cmd lane).
@@ -224,6 +231,12 @@ func (s *EditorScreen) SetEmbedded(on bool) { s.embedded = on }
 // the same transition on a standalone editor when the output pane takes the keys.
 func (s *EditorScreen) SetFocused(focused bool) { s.focused = focused }
 
+// SetPaneOrigin implements PaneOriginer: ScreenPanel forwards the host layout's
+// rendered origin, which the save-as overlay anchors from (see saveAsEdit).
+func (s *EditorScreen) SetPaneOrigin(x, y int) {
+	s.originX, s.originY, s.hasOrigin = x, y, true
+}
+
 // Filtering reports text capture at all times: the editor types every printable key,
 // so the router's global single-key shortcuts (q, o, r, [, ], t, …) must never fire
 // over it. ctrl+c stays the router's hard quit.
@@ -253,6 +266,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			return s, core.SetStatus("save failed: " + m.err.Error())
 		}
 		s.dirty = false
+		s.confirmExit = false
 		return s, s.exit(sh)
 	case tea.KeyMsg:
 		return s.key(sh, m)
@@ -293,8 +307,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
-			return s, core.Action{Cmd: s.saveCmd()}
+			return s, core.Push(s.saveAsEdit(sh))
 		case "n", "N":
+			s.confirmExit = false
 			return s, s.exit(sh)
 		case "esc", "c":
 			s.confirmExit = false
@@ -808,7 +823,7 @@ func (s *EditorScreen) renderLine(row int) string {
 func (s *EditorScreen) HelpView(sh *core.Shared) string {
 	if s.confirmExit {
 		return sh.BindingHelp([]key.Binding{
-			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save & exit")),
+			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save as… & exit")),
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "discard & exit")),
 			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
 		})
@@ -844,6 +859,56 @@ func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 }
 
 // ---------- save ----------
+
+// saveAsEdit builds the filename prompt "y" pushes: a floating line edit seeded
+// with the buffer's full path (an unchanged enter re-saves the same file), its
+// input row covering the y/n/c prompt row — nano's "File Name to Write". Enter
+// saves under the typed name (a different name is a save-as: the buffer takes the
+// new path and title); a blank entry or esc pops back to the prompt, which stays
+// up. A relative name resolves against the process CWD, nano's rule.
+//
+// The anchor covers the bottom of just this editor: embedded, the host layout
+// pushes the pane's absolute origin and the box spans the pane's width (SetPaneOrigin);
+// standalone there is no pane, so the box spans the full terminal width at the
+// body's bottom — the same look nano's full-width prompt has. y is one row above
+// the prompt row either way (the LineEdit draws its input one row below the anchor).
+func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
+	x, y, w := 0, sh.BodyY(), sh.Width()
+	if s.hasOrigin {
+		x, y, w = s.originX, s.originY, s.paneW()
+	}
+	edit := NewLineEdit("file name to write", x, y+s.insetY()+s.h-2, w,
+		func(_ *core.Shared, name string) core.Action {
+			if strings.TrimSpace(name) == "" {
+				return core.Pop()
+			}
+			s.applySaveName(name)
+			return core.Seq(core.Pop(), core.Action{Cmd: s.saveCmd()})
+		}, nil)
+	if s.path != "" {
+		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
+	}
+	edit.Crumb = "save as"
+	return edit
+}
+
+// paneW is the full width the pane gave SetSize — the text window plus the chrome
+// around it — so the save-as box covers exactly the editor's bottom.
+func (s *EditorScreen) paneW() int {
+	w := s.w + s.insetX()
+	if s.bordered {
+		w++ // the right border
+	}
+	return w
+}
+
+// applySaveName points the buffer at name: a save-as renames it, so the title bar
+// and crumb follow the new base name.
+func (s *EditorScreen) applySaveName(name string) {
+	s.path = name
+	s.title = filepath.Base(name)
+	s.crumb = s.title
+}
 
 // saveCmd snapshots the buffer and writes it to Path asynchronously (IO in the cmd
 // lane); the result arrives as an editorSavedMsg. An empty path is an error — a
