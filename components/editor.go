@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/brohd11/bubblestack/core"
 
@@ -57,6 +58,10 @@ type EditorScreen struct {
 	dirty       bool // buffer differs from what was loaded/last saved
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 
+	hl      Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
+	editSeq int         // bumped at every buffer mutation; hl reparses when hlSeq lags
+	hlSeq   int         // the edit sequence hl last parsed (-1 ⇒ never)
+
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
 	focused  bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
@@ -84,12 +89,23 @@ type EditorScreen struct {
 // carries: which chrome an instance wears is the composing caller's choice, not the
 // embedder's, so the same screen can be framed in one layout and plain in another.
 // Default off — an editor denotes focus by muting its text either way.
+//
+// Highlighter adds syntax coloring. Left nil, the registry is consulted with
+// Path's lowercased extension (RegisterHighlighter), so an ".md" buffer picks
+// the markdown highlighter up on its own; an extension nobody registered (or an
+// empty Path) renders plain, exactly as if highlighting did not exist. Set
+// explicitly, it wins over the registry — pass a highlighter for a path-less
+// scratch buffer, or to override the file's own kind. Highlighting is
+// render-only: styles never change cell widths, and a highlighter whose spans
+// don't reconstruct the line exactly is ignored (plain render), so the frame
+// contract — no raw tabs, rectangular body — can't be broken by one.
 type EditorOpts struct {
-	Path   string
-	Title  string
-	Crumb  string
-	Border bool
-	OnExit func(*core.Shared) core.Action
+	Path        string
+	Title       string
+	Crumb       string
+	Border      bool
+	OnExit      func(*core.Shared) core.Action
+	Highlighter Highlighter
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -185,6 +201,10 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 	if crumb == "" {
 		crumb = title
 	}
+	hl := opts.Highlighter
+	if hl == nil {
+		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
+	}
 	return &EditorScreen{
 		path:     opts.Path,
 		title:    title,
@@ -193,6 +213,8 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		lines:    [][]rune{{}},
 		bordered: opts.Border,
 		focused:  true, // standalone the editor is always focused; a panel blurs it
+		hl:       hl,
+		hlSeq:    -1, // nothing parsed yet, even before the first edit
 	}
 }
 
@@ -341,6 +363,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		if s.curX < len(s.lines[s.curY]) {
 			s.lines[s.curY] = s.lines[s.curY][:s.curX]
 			s.dirty = true
+			s.editSeq++
 		}
 	case "up":
 		s.moveVertical(-1)
@@ -381,6 +404,7 @@ func (s *EditorScreen) setContent(content string) {
 	s.curY, s.curX, s.wantX = 0, 0, 0
 	s.scrY, s.scrX = 0, 0
 	s.dirty = false
+	s.editSeq++ // the buffer changed even though the load is clean: reparse
 }
 
 // insertRunes inserts rs at the cursor and advances past them.
@@ -392,6 +416,7 @@ func (s *EditorScreen) insertRunes(rs ...rune) {
 	s.curX += len(rs)
 	s.wantX = s.curX
 	s.dirty = true
+	s.editSeq++
 }
 
 // newline splits the current line at the cursor; the tail moves to a new line below.
@@ -405,6 +430,7 @@ func (s *EditorScreen) newline() {
 	s.curY++
 	s.curX, s.wantX = 0, 0
 	s.dirty = true
+	s.editSeq++
 }
 
 // backspace deletes the rune before the cursor, or joins the line onto the previous
@@ -425,6 +451,7 @@ func (s *EditorScreen) backspace() {
 	}
 	s.wantX = s.curX
 	s.dirty = true
+	s.editSeq++
 }
 
 // forwardDelete deletes the rune under the cursor (delete key), or pulls the next line
@@ -441,6 +468,7 @@ func (s *EditorScreen) forwardDelete() {
 	}
 	s.wantX = s.curX
 	s.dirty = true
+	s.editSeq++
 }
 
 // ---------- word/line operations (the bubbles/textinput KeyMap mirror) ----------
@@ -510,6 +538,7 @@ func (s *EditorScreen) deleteRange(y1, x1, y2, x2 int) {
 	s.lines[y1] = append(s.lines[y1][:x1], s.lines[y2][x2:]...)
 	s.lines = append(s.lines[:y1+1], s.lines[y2+1:]...)
 	s.dirty = true
+	s.editSeq++
 }
 
 // deleteWordBack is DeleteWordBackward: deletes from wordBackPos to the cursor. At
@@ -790,6 +819,12 @@ func (s *EditorScreen) body() string {
 // cell (a reverse-video rune, or a blank at end of line) when the row holds the
 // cursor. A cursor sitting on a tab reverses the expansion's first cell.
 //
+// With a Highlighter set (and focused), the window renders through the spans
+// instead: contiguous same-style runs, tabs carrying their span's style through
+// the expansion, the cursor cell still reverse-video — the cursor wins over the
+// syntax style, exactly as it wins over plain text. Styles never change cell
+// widths, so the styled render measures the same as the plain one.
+//
 // Unfocused the whole window goes muted and the cursor is dropped: a caret in a pane
 // the keys don't reach reads as a lie about where typing lands, and one caret per
 // pane would leave nothing marking the live one. The muted style is built per call so
@@ -808,6 +843,11 @@ func (s *EditorScreen) renderLine(row int) string {
 	if !s.focused {
 		return lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
 	}
+	if s.hl != nil {
+		if styled, ok := s.renderLineStyled(row, start, end); ok {
+			return styled
+		}
+	}
 	if row != s.curY {
 		return string(vis)
 	}
@@ -816,6 +856,91 @@ func (s *EditorScreen) renderLine(row int) string {
 		return string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
 	}
 	return string(vis) + editorCursorStyle.Render(" ")
+}
+
+// hlSpans answers the row's validated spans, reparsing the buffer first when it
+// changed since the last parse — lazy and once per edit sequence, never per
+// frame or per row. nil means "render plain": the row is unstyled, or the spans
+// failed validation (their concatenated text must reconstruct the buffer line
+// exactly — the check that keeps a buggy highlighter from corrupting the frame).
+func (s *EditorScreen) hlSpans(row int) []Span {
+	if s.hlSeq != s.editSeq {
+		var b strings.Builder
+		for i, l := range s.lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(string(l))
+		}
+		s.hl.Parse(b.String())
+		s.hlSeq = s.editSeq
+	}
+	spans := s.hl.HighlightLine(row)
+	if spansText(spans) != string(s.lines[row]) {
+		return nil
+	}
+	return spans
+}
+
+// renderLineStyled renders the row's window [start, end) through the
+// highlighter's spans: per-rune span indexes ride through the tab expansion
+// (a tab's cells take its span's style), contiguous same-span runs render in
+// one style.Render, and the cursor cell splices in reverse-video — at end of
+// line, as the appended styled blank. ok=false falls back to the plain render.
+func (s *EditorScreen) renderLineStyled(row, start, end int) (string, bool) {
+	spans := s.hlSpans(row)
+	if spans == nil {
+		return "", false
+	}
+	line := s.lines[row]
+	// Cells sharing a span share its style, so the run grouping compares span
+	// indexes — never lipgloss.Style values (they carry a func field, so == does
+	// not even compile).
+	idx := make([]int, len(line))
+	pos := 0
+	for i, sp := range spans {
+		n := utf8.RuneCountInString(sp.Text)
+		for c := pos; c < pos+n && c < len(idx); c++ {
+			idx[c] = i
+		}
+		pos += n
+	}
+	var drunes []rune
+	var didx []int
+	for i, r := range line {
+		if r == '\t' {
+			for k := 0; k < editorTabWidth; k++ {
+				drunes = append(drunes, ' ')
+				didx = append(didx, idx[i])
+			}
+		} else {
+			drunes = append(drunes, r)
+			didx = append(didx, idx[i])
+		}
+	}
+	vis, vidx := drunes[start:end], didx[start:end]
+	c := -1 // no cursor splice off the cursor row
+	if row == s.curY {
+		c = cellOfCol(line, s.curX) - s.scrX
+	}
+	var b strings.Builder
+	for i := 0; i < len(vis); {
+		if i == c {
+			b.WriteString(editorCursorStyle.Render(string(vis[i])))
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(vis) && j != c && vidx[j] == vidx[i] {
+			j++
+		}
+		b.WriteString(spans[vidx[i]].Style.Render(string(vis[i:j])))
+		i = j
+	}
+	if row == s.curY && c >= len(vis) {
+		b.WriteString(editorCursorStyle.Render(" "))
+	}
+	return b.String(), true
 }
 
 // HelpView shows the editing hints, swapped for the prompt's y/n/c answers while the
