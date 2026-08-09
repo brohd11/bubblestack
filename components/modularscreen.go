@@ -12,12 +12,29 @@ import (
 // laid out as columns of weighted rows, with one Focusable panel holding focus
 // at a time. It is a pure layout shell — panels draw their own borders and own
 // their keys; the screen only routes input (child first, itself as fallback),
-// cycles focus on tab, pops on esc, and composes the help bar. Like every
-// component it names no domain type: the consumer fills the slots and answers
-// the hooks.
+// moves focus on the reserved pane keys, pops on esc, and composes the help bar.
+// Like every component it names no domain type: the consumer fills the slots and
+// answers the hooks.
+//
+// Focus moves two ways, both permanent and neither a fallback for the other:
+//
+//   - a CYCLE (shift+←/→) steps through the focusable slots in declaration order,
+//     wrapping — the right gesture on the two- or three-pane screens that make up
+//     most layouts, where "the next pane" is unambiguous;
+//   - DIRECTIONAL moves aim at a pane by its place in the grid: one column over
+//     keeping the current row, or one row up inside the column (see neighbor).
+//     That reads off the layout the user is looking at, and is what a grid big
+//     enough to make "next" meaningless actually needs. Implemented, but its keys
+//     are not chosen yet — see core.Keys.PaneLeft.
+//
+// Either way the cost to the panels is only the reserved keys themselves, which
+// is what lets a pane that types everything else (an embedded EditorScreen) still
+// be left from the keyboard.
 type ModularScreen struct {
 	cols        [][]Slot
 	flat        []*Slot     // declaration order: column 0 top→bottom, then column 1, …
+	pos         []gridPos   // per flat slot, its (column, row) in cols — the inverse of flat
+	starts      []int       // per column, the flat index of its first slot: flatIndex(c,r) = starts[c]+r
 	rects       []panelRect // per flat slot, body-relative Weight allocation; laid out by SetSize
 	hitRects    []panelRect // per flat slot, as actually rendered (post-Expand); rebuilt by View
 	bodyH       int         // post-title body height, stashed by SetSize for Expand
@@ -37,6 +54,10 @@ type ModularScreen struct {
 // panelRect is a slot's body-relative bounding box, recorded by SetSize so Update
 // can hit-test mouse coordinates (translated via Shared.BodyY).
 type panelRect struct{ x, y, w, h int }
+
+// gridPos is a slot's place in the declared grid — the address directional focus
+// movement works in, as opposed to the flat index everything else uses.
+type gridPos struct{ col, row int }
 
 var _ core.Screen = (*ModularScreen)(nil)
 var _ core.Filterer = (*ModularScreen)(nil)
@@ -91,8 +112,10 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		initFn:      opts.Init,
 	}
 	for c := range s.cols {
+		s.starts = append(s.starts, len(s.flat))
 		for i := range s.cols[c] {
 			s.flat = append(s.flat, &s.cols[c][i])
+			s.pos = append(s.pos, gridPos{col: c, row: i})
 		}
 	}
 	if f := s.firstFocusable(); f >= 0 {
@@ -121,15 +144,18 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// Update routes input child-first, the screen itself as fallback:
-//  1. a capturing FOCUSED panel (Capturing) claims every keystroke — a filter
-//     input losing characters to the pane cycle would read as a bug, and the
-//     focus gate is what stops a clicked-away textarea from keeping the keys;
-//  2. other key msgs go to the focused panel's PanelUpdater — a handled result
+// Update routes input screen-first for the reserved pane keys, then child-first
+// for everything else:
+//  1. a pane-navigation key (core.Keys.PaneNext et al.) moves focus and is
+//     consumed here, ABOVE the capture gate below. That ordering is the point: a
+//     panel that captures every keystroke would otherwise have no keyboard exit,
+//     and reserving a handful of keys buys one that works on every panel without
+//     any of them cooperating;
+//  2. a capturing FOCUSED panel (Capturing) claims every remaining keystroke — a
+//     filter input losing characters would read as a bug, and the focus gate is
+//     what stops a clicked-away textarea from keeping the keys;
+//  3. other key msgs go to the focused panel's PanelUpdater — a handled result
 //     is applied and done;
-//  3. an unhandled tab cycles focus (matched as a raw key string: it is
-//     ModularScreen's own key, so it has no core.Keys binding — the one
-//     sanctioned exception to the MatchKey rule);
 //  4. an unhandled Back pops the screen;
 //  5. anything else is dropped — the focused panel already had its chance.
 //
@@ -150,6 +176,9 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
+		if s.moveFocus(k) {
+			return s, core.Action{}
+		}
 		if ci := s.capturingSlot(); ci >= 0 {
 			act, _ := s.flat[ci].Panel.(PanelUpdater).UpdatePanel(sh, msg)
 			return s, act
@@ -161,10 +190,7 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 				}
 			}
 		}
-		switch {
-		case k == "tab":
-			s.advanceFocus()
-		case core.MatchKey(k, core.Keys.Back):
+		if core.MatchKey(k, core.Keys.Back) {
 			return s, core.Pop()
 		}
 		return s, core.Action{}
@@ -278,20 +304,18 @@ func (s *ModularScreen) View(*core.Shared) string {
 	if track {
 		hit = make([]panelRect, len(s.flat))
 	}
-	fi := 0
 	for c, col := range s.cols {
 		rows := make([]string, len(col))
 		total := 0
 		for i, slot := range col {
-			rows[i] = slot.Panel.View(fi == s.focus && s.hostFocused)
+			rows[i] = slot.Panel.View(s.starts[c]+i == s.focus && s.hostFocused)
 			total += lipgloss.Height(rows[i])
-			fi++
 		}
 		if slack := s.bodyH - total; slack > 0 {
 			var expand []int // flat indices of this column's Expand slots
 			for i := range col {
 				if col[i].Expand {
-					expand = append(expand, fi-len(col)+i)
+					expand = append(expand, s.starts[c]+i)
 				}
 			}
 			if len(expand) > 0 {
@@ -307,8 +331,7 @@ func (s *ModularScreen) View(*core.Shared) string {
 				// Re-render only the grown slots.
 				for i := range col {
 					if col[i].Expand {
-						idx := fi - len(col) + i
-						rows[i] = col[i].Panel.View(idx == s.focus && s.hostFocused)
+						rows[i] = col[i].Panel.View(s.starts[c]+i == s.focus && s.hostFocused)
 					}
 				}
 			}
@@ -316,7 +339,7 @@ func (s *ModularScreen) View(*core.Shared) string {
 		if track {
 			y := y0
 			for i := range col {
-				idx := fi - len(col) + i
+				idx := s.starts[c] + i
 				hit[idx] = panelRect{x: s.rects[idx].x, y: y, w: s.rects[idx].w, h: lipgloss.Height(rows[i])}
 				y += lipgloss.Height(rows[i])
 			}
@@ -327,13 +350,13 @@ func (s *ModularScreen) View(*core.Shared) string {
 	return core.WithTitle(s.title, lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 }
 
-// HelpView composes the bar from the screen's own hints (pane cycle, back), the
-// focused panel's PanelHelp bindings, and the caller's Help extras, rendered
+// HelpView composes the bar from the screen's own hints (pane navigation, back),
+// the focused panel's PanelHelp bindings, and the caller's Help extras, rendered
 // through the shared static-help style.
 func (s *ModularScreen) HelpView(sh *core.Shared) string {
 	var hints []key.Binding
 	if s.focusableCount() > 1 {
-		hints = append(hints, key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "panes")))
+		hints = append(hints, core.PaneHint())
 	}
 	hints = append(hints, core.Hint("back", core.Keys.Back))
 	if s.focus >= 0 {
@@ -467,42 +490,124 @@ func (s *ModularScreen) focusableCount() int {
 
 func (s *ModularScreen) focusedPanel() Panel { return s.flat[s.focus].Panel }
 
-// nextFocusable scans forward from `from`, wrapping, for the next Focusable
-// slot; with a single focusable slot it returns `from` itself (focus stays put).
-func (s *ModularScreen) nextFocusable(from int) int {
-	n := len(s.flat)
-	for i := 1; i <= n; i++ {
-		if j := (from + i) % n; isFocusable(s.flat[j].Panel) {
-			return j
+// moveFocus applies a pane-navigation key. It reports whether k was one of them —
+// consumed either way, so a move that runs off the edge is a no-op rather than
+// falling through to the focused panel. That is the whole contract of the
+// reservation: these keys mean "move panes" everywhere, on every screen, or they
+// mean nothing; a key that sometimes reaches the panel underneath would be worse
+// than one that never does.
+//
+// The cycle cases and the directional ones are peers, not a primary and a
+// fallback — see the type doc. The directional bindings carry no keycodes today,
+// so their cases simply never match (MatchKey against an empty binding is false)
+// and cost a comparison each.
+func (s *ModularScreen) moveFocus(k string) bool {
+	var dc, dr int
+	switch {
+	case core.MatchKey(k, core.Keys.PaneNext):
+		s.cycleFocus(1)
+		return true
+	case core.MatchKey(k, core.Keys.PanePrev):
+		s.cycleFocus(-1)
+		return true
+	case core.MatchKey(k, core.Keys.PaneLeft):
+		dc = -1
+	case core.MatchKey(k, core.Keys.PaneRight):
+		dc = 1
+	case core.MatchKey(k, core.Keys.PaneUp):
+		dr = -1
+	case core.MatchKey(k, core.Keys.PaneDown):
+		dr = 1
+	default:
+		return false
+	}
+	if s.focus >= 0 {
+		if t := s.neighbor(s.focus, dc, dr); t >= 0 {
+			s.focusSlot(t)
 		}
 	}
-	return from
+	return true
 }
 
-// advanceFocus moves focus on tab per the slot's NextFocus rule (see
-// Slot.NextFocus): default loop, explicit 1-based target, or FocusEnd back to
-// the first Focusable slot.
-func (s *ModularScreen) advanceFocus() {
+// cycleFocus steps focus by delta through the Focusable slots in flat order
+// (column 0 top→bottom, then column 1, …), wrapping at both ends. With fewer than
+// two focusable slots it lands back where it started, which focusSlot treats as
+// the no-op it is.
+func (s *ModularScreen) cycleFocus(delta int) {
 	if s.focus < 0 {
 		return
 	}
-	target := -1
-	switch nf := s.flat[s.focus].NextFocus; {
-	case nf == FocusEnd:
-		target = s.firstFocusable()
-	case nf > 0:
-		// An explicit target names a flattened slot directly; an out-of-range or
-		// non-focusable one is a config error, so focus stays put rather than
-		// landing somewhere arbitrary.
-		if i := nf - 1; i >= 0 && i < len(s.flat) && isFocusable(s.flat[i].Panel) {
-			target = i
+	n := len(s.flat)
+	for i := 1; i <= n; i++ {
+		j := ((s.focus+i*delta)%n + n) % n
+		if isFocusable(s.flat[j].Panel) {
+			s.focusSlot(j)
+			return
 		}
-	default:
-		target = s.nextFocusable(s.focus)
 	}
-	if target >= 0 {
-		s.focusSlot(target)
+}
+
+// neighbor is the flat index of the Focusable slot one step in direction
+// (dc, dr) from flat slot `from`, or -1 when there is none.
+//
+// This is live code with no keys on it yet: core.Keys.PaneLeft and friends carry
+// no keycodes (Apple Terminal strips the modifier from shift+↑/↓, so the obvious
+// binding would silently fail), and filling those lists in is all it takes to
+// reach this. Its behavior is pinned by TestPaneNavOverUnevenGrid, which calls it
+// directly for exactly that reason.
+//
+// A horizontal step walks column by column, aiming at the current ROW: shift+→
+// from row 1 lands on row 1 of the next column, or its nearest focusable row
+// when it is shorter or that row is informational. A vertical step walks row by
+// row inside the current column. Either way a column or row with nothing
+// focusable is skipped and the scan continues in the same direction.
+//
+// Movement CLAMPS at the grid's edge rather than wrapping, so a direction key
+// always means the same thing — a shift+← that sometimes jumped to the far right
+// would make the grid unreadable. One consequence worth knowing: across columns
+// of unequal length the round trip isn't symmetric (row 1 → a one-row column →
+// back to row 0), because the row index is clamped on the way over and there is
+// nothing to restore it from on the way back.
+func (s *ModularScreen) neighbor(from, dc, dr int) int {
+	p := s.pos[from]
+	if dr != 0 {
+		for r := p.row + dr; r >= 0 && r < len(s.cols[p.col]); r += dr {
+			if i := s.starts[p.col] + r; isFocusable(s.flat[i].Panel) {
+				return i
+			}
+		}
+		return -1
 	}
+	for c := p.col + dc; c >= 0 && c < len(s.cols); c += dc {
+		if i := s.focusableNear(c, p.row); i >= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// focusableNear is the flat index of column c's Focusable slot whose row is
+// closest to `row` (ties going to the upper one), or -1 when the column holds
+// none. `row` is clamped into the column first, so aiming past a short column's
+// end lands on its last row rather than missing.
+func (s *ModularScreen) focusableNear(c, row int) int {
+	n := len(s.cols[c])
+	if row >= n {
+		row = n - 1
+	}
+	for d := 0; d < n; d++ {
+		for _, r := range [2]int{row - d, row + d} {
+			if r >= 0 && r < n {
+				if i := s.starts[c] + r; isFocusable(s.flat[i].Panel) {
+					return i
+				}
+			}
+			if d == 0 {
+				break // row-d and row+d are the same slot
+			}
+		}
+	}
+	return -1
 }
 
 // focusSlot moves focus to flat slot i, blurring the old panel and focusing the
@@ -521,7 +626,7 @@ func (s *ModularScreen) focusSlot(i int) {
 }
 
 // FocusSlot moves keyboard focus to flat slot i (the declaration order: column 0
-// top→bottom, then column 1, …) — the programmatic counterpart of the tab cycle and
+// top→bottom, then column 1, …) — the programmatic counterpart of the pane keys and
 // the mouse click, for a consumer that needs focus to follow an event (a sidebar
 // selection focusing the detail pane, say). Out-of-range and non-Focusable targets
 // are a no-op.

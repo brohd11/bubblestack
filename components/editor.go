@@ -17,16 +17,16 @@ import (
 // EditorScreen is the simple nano-like text editor: it loads a file (or starts empty),
 // lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
 // three-way prompt when the buffer is dirty (y = save & exit, n = discard & exit,
-// esc/c = cancel). Enter splits lines, shift+tab inserts a tab (tab itself stays
-// reserved for pane/app navigation), the arrows move the cursor, and a left click
-// places it.
+// esc/c = cancel). Enter splits lines, tab (or shift+tab) inserts a tab, the arrows
+// move the cursor, and a left click places it.
 //
 // It is a standalone screen owning the whole body, not a ModularScreen panel: it
 // captures every keystroke (Filtering reports true the whole time, so the router's
 // global single-key shortcuts never steal typed text — ctrl+c remains the hard quit).
-// To embed it in a pane layout, wrap it in a ScreenPanel and set EditorOpts.OnExit —
-// the capture means tab never reaches the host's pane cycle, so the exit key is the
-// keyboard's only way out of the pane. Embedded (ScreenPanel calls SetEmbedded, see
+// Embedded in a pane layout the capture still holds, minus the host's reserved
+// pane keys (core.Keys.PaneNext et al.), which is how the keyboard leaves the pane;
+// EditorOpts.OnExit is then about closing the BUFFER (ctrl+x, with the save prompt),
+// not about escaping a trap. Embedded (ScreenPanel calls SetEmbedded, see
 // core.Embeddable) it reads mouse coordinates as pane-relative and indents the body
 // one column off the pane edge; it denotes focus by muting the body and dropping the
 // cursor, so an unfocused pane reads as inactive without a frame. Whether it draws a
@@ -34,8 +34,9 @@ import (
 //
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
-// tab/shift+tab must be intercepted before any input widget sees them. Deliberately
-// minimal: no soft-wrap (long lines scroll horizontally), no cut/paste, no search.
+// because tabs have to be stored raw but never rendered raw (see expandLine).
+// Deliberately minimal: no soft-wrap (long lines scroll horizontally), no cut/paste,
+// no search.
 type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
@@ -259,13 +260,15 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	return s, core.Action{}
 }
 
-// key routes one keystroke. Editor-local keys are matched as raw strings — the same
-// sanctioned exception as ModularScreen's "tab": ctrl+x / shift+tab / enter are this
-// screen's own keys with no core.Keys binding, and the arrows match only the raw
-// keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry — those letters must
-// stay typable). The word/line editing combos mirror bubbles/textinput's KeyMap
-// verbatim (alt+←→ word jumps, alt+⌫ word delete, ctrl+u/k line deletes, ctrl+a/e
-// line ends, ctrl+h/d char-delete aliases) so the editor behaves like the form field.
+// key routes one keystroke. Editor-local keys are matched as raw strings: ctrl+x /
+// tab / enter are this screen's own keys with no core.Keys binding, and the arrows
+// match only the raw keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry
+// — those letters must stay typable). The word/line editing combos mirror
+// bubbles/textinput's KeyMap verbatim (alt+←→ word jumps, alt+⌫ word delete,
+// ctrl+u/k line deletes, ctrl+a/e line ends, ctrl+h/d char-delete aliases) so the
+// editor behaves like the form field. shift+tab is kept as an alias for tab: it is
+// what a form binds to PrevField, so the finger that reaches for it in a field
+// shouldn't do nothing here.
 func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
 	k := m.String()
 	if s.confirmExit {
@@ -285,7 +288,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			return s, s.exit(sh)
 		}
 		s.confirmExit = true
-	case "shift+tab":
+	case "tab", "shift+tab":
 		s.insertRunes('\t')
 	case "enter":
 		s.newline()
@@ -715,7 +718,7 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 	}
 	return sh.BindingHelp([]key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧tab", "tab")),
+		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),

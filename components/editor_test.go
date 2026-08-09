@@ -50,9 +50,10 @@ func TestEditorTyping(t *testing.T) {
 	}
 }
 
-// TestEditorEnterAndShiftTab: enter splits the line at the cursor; shift+tab inserts
-// a literal tab (tab itself stays reserved for navigation).
-func TestEditorEnterAndShiftTab(t *testing.T) {
+// TestEditorEnterAndTab: enter splits the line at the cursor; both tab and its
+// shift+tab alias insert a literal tab. A bare tab typing is the whole point of the
+// editor owning the key — pane navigation is on shift+arrows, not tab.
+func TestEditorEnterAndTab(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	typeRunes(s, 'a', 'b', 'c')
 	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
@@ -64,10 +65,10 @@ func TestEditorEnterAndShiftTab(t *testing.T) {
 	if got := buffer(s); got != "abc\nd\t" {
 		t.Fatalf("buffer = %q, want tab inserted, got %q", "abc\nd\t", got)
 	}
-	// A bare tab inserts nothing.
+	// A bare tab types one too.
 	s.key(nil, tea.KeyMsg{Type: tea.KeyTab})
-	if got := buffer(s); got != "abc\nd\t" {
-		t.Fatalf("bare tab must not type, buffer = %q", got)
+	if got := buffer(s); got != "abc\nd\t\t" {
+		t.Fatalf("bare tab must type, buffer = %q, want %q", got, "abc\nd\t\t")
 	}
 }
 

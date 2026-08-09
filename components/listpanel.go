@@ -15,8 +15,7 @@ import (
 // and /-filtering all behave exactly as they do on a full picker screen. The one
 // deliberate difference is Back: a PickerScreen binds esc to Pop because it IS
 // the screen, while a ListPanel shares its screen with sibling panels — so esc
-// (and tab) return handled=false and the host ModularScreen's fallbacks
-// (pop, pane cycle) fire instead.
+// returns handled=false and the host ModularScreen's pop fires instead.
 type ListPanel struct {
 	list     list.Model
 	focused  bool
@@ -82,15 +81,17 @@ func (p *ListPanel) SetItems(items []list.Item) { p.list.SetItems(items) }
 func (p *ListPanel) List() *list.Model { return &p.list }
 
 // Capturing reports an active /-filter: while filtering, the host ModularScreen
-// routes every keystroke here regardless of focus, so the filter input never
-// loses a character to the pane cycle or the router's global keys.
+// routes every keystroke here (bar its reserved pane keys), so the filter
+// input never loses a character to the router's global single-key shortcuts.
 func (p *ListPanel) Capturing() bool { return p.list.FilterState() == list.Filtering }
 
-// UpdatePanel runs the picker dispatch (listDispatch) with the two host-owned
-// keys carved out first: Back is the screen's pop and tab its pane cycle,
-// so neither is consumed here (contrast PickerScreen, which binds Back to Pop
-// itself). While filtering, esc stays — listDispatch's filtering branch feeds it
-// to the list, which cancels the filter. The wheel only moves the cursor while
+// UpdatePanel runs the picker dispatch (listDispatch) with the one host-owned key
+// carved out first: Back is the screen's pop, so it is not consumed here (contrast
+// PickerScreen, which binds Back to Pop itself). While filtering, esc stays —
+// listDispatch's filtering branch feeds it to the list, which cancels the filter.
+// tab needs no carve-out now that the host owns no such key: unfiltered the list
+// binds nothing to it, and while filtering bubbles takes it as "accept the filter".
+// The wheel only moves the cursor while
 // focused: the host focuses the panel under the cursor before forwarding a
 // press, and anything that still arrives unfocused (a broadcast) must not roll
 // an unfocused sidebar.
@@ -99,10 +100,7 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		return core.Action{}, false
 	}
 	if km, ok := msg.(tea.KeyMsg); ok {
-		k := km.String()
-		// tab has no core.Keys binding (it is ModularScreen's own key), so
-		// it is matched as a raw string — the one sanctioned exception.
-		if k == "tab" || (core.MatchKey(k, core.Keys.Back) && !p.Capturing()) {
+		if k := km.String(); core.MatchKey(k, core.Keys.Back) && !p.Capturing() {
 			return core.Action{}, false
 		}
 	}

@@ -20,8 +20,8 @@ type FocusableScreen = core.FocusableScreen
 // every message routed to the panel goes to child.Update, and the returned
 // (possibly new) screen replaces the child, exactly as the router would. That
 // makes the panel a key sink by design: UpdatePanel always reports
-// handled=true, so tab and esc never fall through to the host while a
-// ScreenPanel is the route target — the child decides everything, including esc.
+// handled=true, so esc never falls through to the host while a ScreenPanel is
+// the route target — the child decides everything, including esc.
 //
 // Embedding also tells the child what it needs to know to be a pane rather than a
 // whole body — see syncChild: a core.Embeddable child learns it is embedded (which
@@ -35,9 +35,12 @@ type FocusableScreen = core.FocusableScreen
 //   - PanelHelp is not implemented: core.Screen renders its help as a finished
 //     string (HelpView), not as []key.Binding, so there is nothing to merge into
 //     the host's help bar.
-//   - UpdatePanel always reports handled=true, so tab and esc never fall
-//     through to the host while a ScreenPanel is the route target. Capture
-//     (which keys reach the child at all) is narrower — see Capturing.
+//   - UpdatePanel always reports handled=true, so esc never falls through to
+//     the host while a ScreenPanel is the route target. Capture (which keys
+//     reach the child at all) is narrower — see Capturing. The host's
+//     pane-navigation keys sit outside both: ModularScreen claims them before
+//     any panel is consulted, so a sink is never a trap and this panel needs no
+//     release logic of its own.
 type ScreenPanel struct {
 	child   core.Screen
 	sh      *core.Shared // captured at Init; the child's View/SetSize need it
@@ -157,8 +160,9 @@ func (p *ScreenPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bo
 // field but releases them on a toggle row — the sibling panels stay reachable.
 // A child that isn't a Typable falls back to Filterer.Filtering(). This is
 // narrower than the router-level rule on purpose: FormScreen.Filtering is
-// unconditionally true so a *standalone* form keeps tab from the router, and
-// nested that would make the form an absolute key sink no sibling could escape.
+// unconditionally true so a *standalone* form keeps the router's single-key
+// shortcuts off its fields, and nested that would hand the form every keystroke
+// on the screen.
 func (p *ScreenPanel) Capturing() bool {
 	if t, ok := p.child.(Typable); ok {
 		return t.Typing()

@@ -14,8 +14,9 @@ import (
 // bordered box whose hand-drawn top edge carries a title legend, scrolling a
 // viewport of caller-supplied lines. It is the ModularScreen building block for
 // "show this text here" — a detail view, a log tail, a diff — without owning any
-// navigation: esc and tab deliberately fall through (handled=false) so the
-// host screen keeps its pop and pane-cycle keys. It is purely presentational —
+// navigation: esc deliberately falls through (handled=false) so the host screen
+// keeps its pop, and the pane keys never reach a panel at all. It is purely
+// presentational —
 // no nav keys, no Push/Pop, no domain type; the caller owns the content via
 // SetLines/SetStatus.
 type ScrollContainer struct {
@@ -63,8 +64,8 @@ func (p *ScrollContainer) SetStatus(status string) {
 }
 
 // UpdatePanel scrolls the viewport on the nav keys and the wheel, and nothing
-// else: esc/back and tab return handled=false so the host ModularScreen
-// keeps its pop and pane-cycle fallbacks. The page keys match against the
+// else: esc/back returns handled=false so the host ModularScreen keeps its pop
+// fallback. The page keys match against the
 // viewport's own keymap (they have no core.Keys binding). The wheel only scrolls
 // while focused — mouse msgs are broadcast to every panel, and a wheel that
 // rolled every pane at once would read as a bug.
@@ -151,7 +152,7 @@ func (p *ScrollContainer) contentHeight() int {
 func (p *ScrollContainer) View(focused bool) string {
 	label := p.title
 	if focused {
-		label = p.title + " · ↑/↓ scroll · tab next"
+		label = p.title + " · ↑/↓ scroll · ⇧←→ panes"
 	}
 	// The run between the corners is the same width as the bottom border: the
 	// inner text plus the 1-col padding on each side. Composed from the frame

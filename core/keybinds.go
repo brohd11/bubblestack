@@ -17,7 +17,9 @@ import (
 //
 // Convention: ALL key handling — tab/screen Update loops, the shared components,
 // and the help bars — dispatches via these bindings with MatchKey and builds help
-// with Hint/FullHint; no site matches a raw keycode or key.Type. The shared Update
+// with Hint/FullHint; no site matches a raw keycode or key.Type. (A screen's own
+// one-off keys — the editor's ctrl+x, say — are still matched as raw strings; the
+// rule is that no key shared between sites goes unnamed here.) The shared Update
 // helpers that apply these bindings (components.RootUpdate for tab roots,
 // components.QueryUpdate for text-entry screens) live in components/update.go,
 // since they operate on the reusable list.Model / Item pieces.
@@ -53,6 +55,25 @@ type KeyMap struct {
 	Terminal     key.Binding // open a terminal at the top screen's directory (DirLocator); action is consumer-supplied
 	OpenDir      key.Binding // open the top screen's directory in the OS file manager (DirLocator); action is consumer-supplied
 
+	// pane navigation over a ModularScreen's grid of panels. The host screen
+	// matches these ABOVE every panel, capturing or not, so they stay the way out
+	// of a pane that claims every other keystroke (an embedded editor). That
+	// reservation is why they carry a modifier and why nothing else may bind
+	// them: keys the panels never see.
+	//
+	// Two schemes, both intended to stay. The cycle steps through the panes in
+	// declaration order and is the right gesture on the common two- or three-pane
+	// screen, where "the next one" is unambiguous. The directional moves aim at a
+	// particular pane by its place in the grid, which is what you want once a
+	// layout is big enough that "next" stops meaning anything.
+	PaneNext key.Binding
+	PanePrev key.Binding
+
+	PaneUp    key.Binding
+	PaneDown  key.Binding
+	PaneLeft  key.Binding
+	PaneRight key.Binding
+
 	// form
 	NextField key.Binding
 	PrevField key.Binding
@@ -81,8 +102,11 @@ var Keys = KeyMap{
 	Yes: key.NewBinding(key.WithKeys("enter", "y", "Y", "e")),
 	No:  key.NewBinding(key.WithKeys("esc", "n", "N", "c")),
 
-	NextTab:      key.NewBinding(key.WithKeys("]", "x", "shift+right")),
-	PrevTab:      key.NewBinding(key.WithKeys("[", "z", "shift+left")),
+	// The shift+arrows used to alias these; they are the pane-navigation keys now
+	// (see PaneLeft et al.), which the router must leave alone so they reach the
+	// screen. [ ] and z x remain.
+	NextTab:      key.NewBinding(key.WithKeys("]", "x")),
+	PrevTab:      key.NewBinding(key.WithKeys("[", "z")),
 	ToggleOutput: key.NewBinding(key.WithKeys("O")),
 	Output:       key.NewBinding(key.WithKeys("o")),
 	Wrap:         key.NewBinding(key.WithKeys("w")),
@@ -92,6 +116,24 @@ var Keys = KeyMap{
 	Refresh:      key.NewBinding(key.WithKeys("r")),
 	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
 	OpenDir:      key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "open dir")),
+
+	PaneNext: key.NewBinding(key.WithKeys("shift+right")),
+	PanePrev: key.NewBinding(key.WithKeys("shift+left")),
+
+	// The directional moves are implemented (see ModularScreen.neighbor) but carry
+	// no keycodes yet, so they match nothing: MatchKey against an empty binding is
+	// false. Filling a WithKeys list here is the only step needed to turn them on.
+	//
+	// They are unbound rather than sitting on shift+↑/↓ because Apple Terminal
+	// strips the modifier from the vertical arrows — shift+↑ arrives as a bare
+	// "up" — so binding them there would silently hand the key to the focused
+	// panel instead, which reads as the feature being broken. Whatever replaces
+	// them has to be something a stock terminal delivers unmodified; ctrl+letter
+	// combos are the realistic space.
+	PaneUp:    key.NewBinding(),
+	PaneDown:  key.NewBinding(),
+	PaneLeft:  key.NewBinding(),
+	PaneRight: key.NewBinding(),
 
 	NextField: key.NewBinding(key.WithKeys("down", "tab")),
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),
@@ -133,6 +175,14 @@ func prettyKey(k string) string {
 		return "←"
 	case "right":
 		return "→"
+	case "shift+up":
+		return "⇧↑"
+	case "shift+down":
+		return "⇧↓"
+	case "shift+left":
+		return "⇧←"
+	case "shift+right":
+		return "⇧→"
 	case "shift+tab":
 		return "⇧tab"
 	case " ":
@@ -180,6 +230,23 @@ func DirKeyHints() []key.Binding {
 		Hint("terminal", Keys.Terminal),
 		Hint("open dir", Keys.OpenDir),
 	}
+}
+
+// PaneHint is the single help entry for pane navigation, rendered as one entry
+// rather than the several Hint would produce — moving between panes is one idea
+// to the user, and a row of near-identical entries would crowd a bar that already
+// carries the focused panel's own keys. A ModularScreen includes it whenever it
+// has more than one focusable panel.
+//
+// The label is built from whichever bindings actually carry keys, so it widens by
+// itself when the currently-unbound directional keys get keycodes; the entry
+// still carries every keycode, so it matches and expands in full help.
+func PaneHint() key.Binding {
+	// Hint already skips bindings that carry no keys, so the unbound directional
+	// entries cost nothing here and appear the moment they are given keycodes.
+	return Hint("panes",
+		Keys.PanePrev, Keys.PaneNext,
+		Keys.PaneLeft, Keys.PaneRight, Keys.PaneUp, Keys.PaneDown)
 }
 
 // tabHint is the combined "[ ]" tab-switch hint shown by ShortHelp (the two tab

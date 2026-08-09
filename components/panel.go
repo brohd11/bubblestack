@@ -23,7 +23,7 @@ type Panel interface {
 // only carries what it uses.
 
 // Focusable marks a panel that can hold focus. A panel without it is
-// informational-only: skipped in tab traversal and never routed keys.
+// informational-only: skipped in pane traversal and never routed keys.
 type Focusable interface {
 	Focus()
 	Blur()
@@ -32,18 +32,25 @@ type Focusable interface {
 
 // PanelUpdater receives input: key msgs while the panel is focused (or
 // capturing), and every non-key msg as a broadcast. The bool reports whether the
-// msg was consumed — an unhandled key falls through to the screen's own
-// tab/Back handling.
+// msg was consumed — an unhandled key falls through to the screen's own Back
+// handling. The pane-navigation keys never arrive here at all: the host claims
+// them before the panel is consulted (see Capturing).
 type PanelUpdater interface {
 	UpdatePanel(sh *core.Shared, msg tea.Msg) (act core.Action, handled bool)
 }
 
 // Capturing reports that the panel is capturing text (a /-filter, a typing form
 // child). While the FOCUSED panel is capturing, ModularScreen routes every
-// keystroke to it and reports Filtering() to the router, so neither the pane
-// cycle nor the router's global single-key shortcuts steal filter text. A
-// capturing panel that loses focus (a click elsewhere) stops claiming keys
-// until it is focused again.
+// keystroke to it and reports Filtering() to the router, so the router's global
+// single-key shortcuts don't steal filter text. A capturing panel that loses
+// focus (a click elsewhere) stops claiming keys until it is focused again.
+//
+// The one exception is the pane-navigation keys (core.Keys.PaneNext et al.),
+// which the host matches above every panel: capture is total for everything a
+// panel could plausibly want, and the handful of reserved keys are what keeps
+// the pane escapable from the keyboard. Without that a full-capture panel
+// (an embedded EditorScreen, whose whole job is to type every key) would be a
+// trap needing a bespoke exit hook.
 type Capturing interface{ Capturing() bool }
 
 // PanelHelper contributes the focused panel's key hints to the screen's help bar.
@@ -53,11 +60,6 @@ type PanelHelper interface{ PanelHelp() []key.Binding }
 // the host screen's Shared — ScreenPanel uses it to Init and size its child
 // screen. ModularScreen calls it once from its own Init and batches the cmds.
 type panelInitializer interface{ Init(*core.Shared) tea.Cmd }
-
-// FocusEnd ends a slot's focus chain: tab from a slot whose NextFocus is
-// FocusEnd returns focus to the first Focusable slot instead of advancing (see
-// Slot.NextFocus).
-const FocusEnd = -1
 
 // isFocusable reports whether a panel opts into focus traversal.
 func isFocusable(p Panel) bool {
@@ -80,14 +82,4 @@ type Slot struct {
 	// screen". Panels that already fill their allocation (ScrollContainer,
 	// ListPanel) never trigger it.
 	Expand bool
-	// NextFocus is the tab focus target, by 1-based index into the
-	// flattened slot order (column 0 top→bottom, then column 1 top→bottom, …):
-	//
-	//   - 0 (unset): advance to the next Focusable slot in flattened order,
-	//     wrapping — the default loop, so Slot{Panel: x} needs no NextFocus.
-	//   - N > 0: jump to flattened slot N, which must be Focusable (an invalid
-	//     target leaves focus where it is).
-	//   - FocusEnd: the chain ends here; tab returns focus to the first
-	//     Focusable slot.
-	NextFocus int
 }
