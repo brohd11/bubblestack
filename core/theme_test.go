@@ -71,3 +71,37 @@ func TestApplyThemeOnFocusedFallback(t *testing.T) {
 		t.Errorf("empty OnFocused should fall back to defaultOnFocused, got %q", OnFocusedColor)
 	}
 }
+
+// TestMarkdownAccent: a theme may borrow another's accent for markdown, which is how
+// mono keeps a rendered page legible — its own accent is the terminal's own extreme
+// and would make headings, code spans and links read as body text.
+func TestMarkdownAccent(t *testing.T) {
+	restoreTheme(t)
+
+	// A theme without MarkdownFrom uses its own accent.
+	SetTheme("godot")
+	if got := MarkdownAccent(); !reflect.DeepEqual(got, FocusedColor) {
+		t.Errorf("godot should use its own accent, got %v want %v", got, FocusedColor)
+	}
+
+	// mono borrows lipgloss's, and does NOT change its own FocusedColor doing so —
+	// only the markdown page is affected, not selection or the title bar.
+	SetTheme("mono")
+	if got := MarkdownAccent(); !reflect.DeepEqual(got, themes["lipgloss"].Focused) {
+		t.Errorf("mono should borrow lipgloss's accent, got %v", got)
+	}
+	if reflect.DeepEqual(FocusedColor, MarkdownAccent()) {
+		t.Error("borrowing a markdown accent must not move the theme's own FocusedColor")
+	}
+
+	// A MarkdownFrom naming nothing registered falls back rather than answering nil:
+	// a typo should dim a page, not blank it.
+	RegisterTheme(Theme{
+		Name: "zz-badref", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder,
+		Focused: lipgloss.Color("9"), MarkdownFrom: "no-such-theme",
+	})
+	SetTheme("zz-badref")
+	if got := MarkdownAccent(); !reflect.DeepEqual(got, FocusedColor) {
+		t.Errorf("an unresolvable MarkdownFrom should fall back to the active accent, got %v", got)
+	}
+}

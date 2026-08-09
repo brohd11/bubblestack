@@ -36,8 +36,8 @@ type ModularScreen struct {
 	pos         []gridPos   // per flat slot, its (column, row) in cols — the inverse of flat
 	starts      []int       // per column, the flat index of its first slot: flatIndex(c,r) = starts[c]+r
 	rects       []panelRect // per flat slot, body-relative Weight allocation; laid out by SetSize
-	hitRects    []panelRect // per flat slot, as actually rendered (post-Expand); rebuilt by View
-	bodyH       int         // post-title body height, stashed by SetSize for Expand
+	hitRects    []panelRect // per flat slot, as actually rendered (post-ExpandV/H); rebuilt by View
+	bodyH       int         // post-title body height, stashed by SetSize for ExpandV
 	colWidths   []int
 	focus       int  // index into flat; -1 when no slot is focusable
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
@@ -282,13 +282,18 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 // side. Panels draw their own borders; the screen adds only the optional title
 // bar.
 //
-// Before joining, each column gets a measure-then-grow pass for its Expand
+// Before joining, each column gets a measure-then-grow pass for its ExpandV
 // slots: panels are rendered at their Weight allocation, and a panel whose
 // content renders shorter (a form's box) would leave the slack pooling at the
-// bottom of the terminal. The slack is split equally among the column's Expand
+// bottom of the terminal. The slack is split equally among the column's ExpandV
 // slots (remainder to the last), which are re-sized and re-rendered — so an
-// Expand slot fills whatever its siblings didn't use. Growth only, never a
-// shrink; columns without Expand slots render exactly as allocated.
+// ExpandV slot fills whatever its siblings didn't use. Growth only, never a
+// shrink; columns without ExpandV slots render exactly as allocated.
+//
+// ExpandH slots are then padded out to their allocated width. That pass is
+// separate and comes last because it acts on the rendered STRING rather than on
+// the layout: no width is being redistributed (SetSize already assigned it), the
+// padding just squares off a panel that drew narrower than it was given.
 func (s *ModularScreen) View(sh *core.Shared) string {
 	cols := make([]string, len(s.cols))
 	y0 := 0
@@ -297,7 +302,7 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 	}
 	// The mouse hit-test targets what was RENDERED, not the Weight allocation:
 	// a short-rendering panel (a form's box) leaves its allocation half-used and
-	// the Expand pass shifts everything below it up, so hit rects come from the
+	// the ExpandV pass shifts everything below it up, so hit rects come from the
 	// final row heights here, each frame.
 	track := len(s.rects) == len(s.flat)
 	var hit []panelRect
@@ -312,9 +317,9 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 			total += lipgloss.Height(rows[i])
 		}
 		if slack := s.bodyH - total; slack > 0 {
-			var expand []int // flat indices of this column's Expand slots
+			var expand []int // flat indices of this column's ExpandV slots
 			for i := range col {
-				if col[i].Expand {
+				if col[i].ExpandV {
 					expand = append(expand, s.starts[c]+i)
 				}
 			}
@@ -330,7 +335,7 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 				}
 				// Re-render only the grown slots.
 				for i := range col {
-					if col[i].Expand {
+					if col[i].ExpandV {
 						rows[i] = col[i].Panel.View(s.starts[c]+i == s.focus && s.hostFocused)
 					}
 				}
@@ -340,6 +345,12 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 			y := y0
 			for i := range col {
 				idx := s.starts[c] + i
+				// Square off an ExpandH slot against its allocation. PlaceHorizontal
+				// is a no-op when the block is already at least that wide, so this
+				// pads but can never truncate.
+				if col[i].ExpandH {
+					rows[i] = lipgloss.PlaceHorizontal(s.rects[idx].w, lipgloss.Left, rows[i])
+				}
 				hit[idx] = panelRect{x: s.rects[idx].x, y: y, w: s.rects[idx].w, h: lipgloss.Height(rows[i])}
 				y += lipgloss.Height(rows[i])
 			}
@@ -649,7 +660,7 @@ func (s *ModularScreen) FocusSlot(i int) {
 
 // slotRect is the rect input hit-testing and coordinate translation use: the
 // rendered layout once View has run (it differs from the Weight allocation
-// whenever a panel renders short and Expand shifts things up), the allocation
+// whenever a panel renders short and ExpandV shifts things up), the allocation
 // before then.
 func (s *ModularScreen) slotRect(i int) panelRect {
 	if len(s.hitRects) == len(s.flat) {

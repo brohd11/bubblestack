@@ -8,11 +8,12 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // shortPanel renders exactly h rows no matter what height it is allocated —
 // the shape a boxed form has inside a ModularScreen: content-sized, leaving its
-// Weight allocation half-used for the column's Expand slot to absorb.
+// Weight allocation half-used for the column's ExpandV slot to absorb.
 type shortPanel struct{ h int }
 
 func (p *shortPanel) SetSize(int, int) {}
@@ -24,14 +25,14 @@ func (p *shortPanel) View(bool) string {
 }
 
 // TestSlotAtUsesRenderedLayout is the commit-screen regression: the top panel
-// renders 4 rows of its 10-row allocation, the Expand panel below grows into
+// renders 4 rows of its 10-row allocation, the ExpandV panel below grows into
 // the slack, and a click in that grown region must hit the BOTTOM panel — the
 // allocation rects would (did) call it the top one.
 func TestSlotAtUsesRenderedLayout(t *testing.T) {
 	top := &shortPanel{h: 4}
 	bottom := NewScrollContainer("files")
 	m := NewModularScreen([][]Slot{
-		{{Panel: top, Weight: 1}, {Panel: bottom, Weight: 1, Expand: true}},
+		{{Panel: top, Weight: 1}, {Panel: bottom, Weight: 1, ExpandV: true}},
 	}, ModularOpts{})
 	sh := core.NewShared(nil) // BodyY 0: slotAt takes body-relative rows directly
 	m.SetSize(sh, 80, 20)
@@ -327,5 +328,85 @@ func TestModularScreenPushesPaneOrigin(t *testing.T) {
 	}
 	if !b.has || b.x != 30 || b.y != 0 {
 		t.Fatalf("slot 1 origin = (%d,%d) has=%v, want (30,0)", b.x, b.y, b.has)
+	}
+}
+
+// narrowPanel renders a fixed-width block regardless of its allocation — the shape
+// an EditorScreen has on a short document, whose body is only as wide as its longest
+// line and leaves the column a ragged right edge.
+type narrowPanel struct{ w, h int }
+
+func (p *narrowPanel) SetSize(int, int) {}
+func (p *narrowPanel) View(bool) string {
+	rows := make([]string, p.h)
+	for i := range rows {
+		rows[i] = strings.Repeat("x", p.w)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// TestExpandHFillsColumnWidth: ExpandH squares a narrow-rendering panel off against
+// its allocated column, so a two-column layout has a straight seam instead of one
+// that follows the content. Without the flag the panel renders exactly as it drew.
+func TestExpandHFillsColumnWidth(t *testing.T) {
+	sh := core.NewShared(nil)
+
+	for _, tc := range []struct {
+		name    string
+		expandH bool
+		want    int
+	}{
+		{"off", false, 10},
+		{"on", true, 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			narrow := &narrowPanel{w: 10, h: 5}
+			m := NewModularScreen([][]Slot{
+				{{Panel: narrow, Weight: 1, ExpandH: tc.expandH}},
+			}, ModularOpts{ColWidths: []int{40}})
+			m.SetSize(sh, 80, 20)
+			for _, line := range strings.Split(m.View(sh), "\n") {
+				if got := lipgloss.Width(line); got != tc.want {
+					t.Fatalf("ExpandH=%v: line width %d, want %d (%q)", tc.expandH, got, tc.want, line)
+				}
+			}
+		})
+	}
+}
+
+// TestExpandHKeepsWideContent: the padding can only add. A panel that renders WIDER
+// than its allocation (its own bug, but a real one) must not be truncated by the
+// fill — losing content is strictly worse than an overhang.
+func TestExpandHKeepsWideContent(t *testing.T) {
+	wide := &narrowPanel{w: 60, h: 2}
+	m := NewModularScreen([][]Slot{
+		{{Panel: wide, Weight: 1, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{20}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+	for _, line := range strings.Split(m.View(sh), "\n") {
+		if got := lipgloss.Width(line); got != 60 {
+			t.Fatalf("content wider than the column must survive, got width %d", got)
+		}
+	}
+}
+
+// TestExpandHWithExpandV: the two axes compose — the vertical pass re-renders the
+// grown slot, and the horizontal fill runs after it, so a slot with both ends up
+// filling its column in both directions.
+func TestExpandHWithExpandV(t *testing.T) {
+	top := &shortPanel{h: 4}
+	bottom := &narrowPanel{w: 8, h: 3}
+	m := NewModularScreen([][]Slot{
+		{{Panel: top, Weight: 1}, {Panel: bottom, Weight: 1, ExpandV: true, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{30}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+
+	rows := strings.Split(m.View(sh), "\n")
+	for i, line := range rows[4:] { // past the short top panel
+		if got := lipgloss.Width(line); got != 30 {
+			t.Fatalf("row %d of the grown slot should fill the column, got %d (%q)", i+4, got, line)
+		}
 	}
 }

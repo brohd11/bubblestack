@@ -25,6 +25,15 @@ type Theme struct {
 	Border    lipgloss.TerminalColor // box/rule borders
 	Focused   lipgloss.TerminalColor // selection / active accent
 	OnFocused lipgloss.TerminalColor // text drawn on the accent (title bar); nil ⇒ defaultOnFocused
+	// MarkdownFrom names another registered theme whose accent the markdown
+	// renderer should borrow (see MarkdownAccent). Empty — every preset but mono —
+	// means "use my own Focused". It exists because a rendered markdown page leans
+	// on the accent for three different things at once (headings, code spans,
+	// links), and a theme whose accent IS the terminal's own extreme has nothing
+	// left to distinguish them from body text: under mono the page flattens. One
+	// borrowed color is the cheap fix; a per-theme markdown palette is the
+	// thorough one, for the day this proves too blunt.
+	MarkdownFrom string
 }
 
 // defaultOnFocused is the title-bar text color used when a theme leaves OnFocused unset.
@@ -47,8 +56,9 @@ var themes = map[string]Theme{
 	"lipgloss": {Name: "lipgloss", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "162", Dark: "212"}},
 	// mono is a monochrome black/white/grey palette: the accent is the terminal's own
 	// extreme (black on a light background, white on a dark one), with greys for borders
-	// and secondary text.
-	"mono":  {Name: "mono", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "232", Dark: "255"}},
+	// and secondary text. That extreme is indistinguishable from body text, which a
+	// markdown page needs it not to be — so mono alone borrows an accent for those.
+	"mono":  {Name: "mono", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "232", Dark: "255"}, MarkdownFrom: "lipgloss"},
 	"godot": {Name: "godot", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "25", Dark: "67"}},
 	"red":   {Name: "red", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "160", Dark: "203"}},
 	"green": {Name: "green", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder, Focused: lipgloss.AdaptiveColor{Light: "28", Dark: "114"}},
@@ -77,6 +87,20 @@ func SetTheme(name string) bool {
 
 // CurrentTheme is the name of the active theme, for a picker to mark/select it.
 func CurrentTheme() string { return current.Name }
+
+// MarkdownAccent is the accent a rendered markdown page should use: the active
+// theme's own, or the one it borrows via Theme.MarkdownFrom. Read per call, never
+// cached, so a theme switch repaints — the rule the derived styles follow. A
+// MarkdownFrom naming a theme nobody registered falls back to the active accent
+// rather than answering nil, so a typo dims a page instead of blanking it.
+func MarkdownAccent() lipgloss.TerminalColor {
+	if from := current.MarkdownFrom; from != "" {
+		if t, ok := themes[from]; ok && t.Focused != nil {
+			return t.Focused
+		}
+	}
+	return FocusedColor
+}
 
 // ApplyTheme is the in-TUI form of SetTheme: it switches the theme (synchronously) and
 // broadcasts MsgThemeChanged via PropagateAll. The router only routes the payload; a

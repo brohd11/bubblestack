@@ -74,12 +74,20 @@ type Slot struct {
 	// 0 counts as 1. The column's last slot always takes the rounding remainder,
 	// so the column's heights sum exactly.
 	Weight int
-	// Expand lets the slot absorb its column's leftover rows: panels render at
+	// ExpandV lets the slot absorb its column's leftover ROWS: panels render at
 	// most their Weight allocation, and a slot whose content renders shorter (a
 	// form's box, say) leaves the rest unrendered. After measuring, the screen
-	// splits that slack equally among the column's Expand slots (remainder to
-	// the last) and re-sizes them — one Expand slot is "take the rest of the
+	// splits that slack equally among the column's ExpandV slots (remainder to
+	// the last) and re-sizes them — one ExpandV slot is "take the rest of the
 	// screen". Panels that already fill their allocation (ScrollContainer,
 	// ListPanel) never trigger it.
-	Expand bool
+	ExpandV bool
+	// ExpandH pads the slot's render out to its column's allocated WIDTH. Where
+	// ExpandV redistributes rows nobody claimed, this claims nothing new — the
+	// column's width is already assigned — it only stops a panel that renders
+	// narrower than it was given (an EditorScreen showing a short document, whose
+	// block is as wide as its longest line) from leaving the column a ragged right
+	// edge. Padding is with spaces and never truncates, so it is invisible except
+	// where it fixes the gap.
+	ExpandH bool
 }
