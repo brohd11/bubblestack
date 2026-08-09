@@ -86,7 +86,7 @@ var Keys = KeyMap{
 	ToggleOutput: key.NewBinding(key.WithKeys("O")),
 	Output:       key.NewBinding(key.WithKeys("o")),
 	Wrap:         key.NewBinding(key.WithKeys("w")),
-	Mouse:        key.NewBinding(key.WithKeys("m")),
+	Mouse:        key.NewBinding(key.WithKeys("ctrl+g")),
 	Clear:        key.NewBinding(key.WithKeys("C")),
 	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
 	Refresh:      key.NewBinding(key.WithKeys("r")),
@@ -112,6 +112,14 @@ var Keys = KeyMap{
 func MatchKey(k string, b key.Binding) bool {
 	return slices.Contains(b.Keys(), k)
 }
+
+// modifiedKey reports whether k carries a modifier (ctrl+/alt+/shift+…), i.e. is a
+// combo rather than typable text. The Filtering gate exists to stop the router's
+// global single-key shortcuts from stealing characters meant for a text input; a
+// modified combo produces no text, so the gates let it through even while a screen
+// filters (which is how a global combo like the mouse toggle stays reachable from a
+// full-capture screen such as the editor).
+func modifiedKey(k string) bool { return strings.Contains(k, "+") }
 
 // prettyKey maps raw keycodes to display glyphs so the default bars keep their
 // arrow look; unknown keys pass through unchanged.

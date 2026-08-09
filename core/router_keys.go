@@ -22,7 +22,7 @@ func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Actio
 	if action == nil || !MatchKey(k, b) {
 		return Action{}, false
 	}
-	if f, ok := r.Top().(Filterer); ok && f.Filtering() {
+	if f, ok := r.Top().(Filterer); ok && f.Filtering() && !modifiedKey(k) {
 		return Action{}, false
 	}
 	if loc, ok := r.Top().(DirLocator); ok {
@@ -49,7 +49,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// consumer-supplied so core names no domain type. Placed before the
 	// output-focused branch so it works even with the output pane focused.
 	if r.refreshAction != nil && MatchKey(k, Keys.Refresh) {
-		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
+		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
 			return r.refreshAction(r.sh), true
 		}
 	}
@@ -78,11 +78,12 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// wraps.
 	//
 	// Both sides are optional capabilities (Wrapper), so neither an Output nor a screen
-	// without one ever consumes the key. Filtering screens keep a literal w; a focused
-	// pane means the screen isn't reading keys anyway, so the gate doesn't apply there.
+	// without one ever consumes the key. Filtering screens keep a literal w (a
+	// modified-key combo would pass the gate — see modifiedKey); a focused pane means
+	// the screen isn't reading keys anyway, so the gate doesn't apply there.
 	if MatchKey(k, Keys.Wrap) {
 		f, isFilterer := r.Top().(Filterer)
-		filtering := isFilterer && f.Filtering()
+		filtering := isFilterer && f.Filtering() && !modifiedKey(k)
 		paneFocused := outputOn && ch.outputFocused
 
 		if paneFocused || !filtering {
@@ -103,7 +104,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// status line reports the trade rather than just the state, since reclaiming
 	// selection is the whole reason to press it.
 	if MatchKey(k, Keys.Mouse) {
-		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
+		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
 			r.mouseOn = !r.mouseOn
 			if r.mouseOn {
 				act := SetStatus("mouse on · wheel scrolls")
@@ -146,10 +147,11 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// O jumps into the output pane, o shows/hides it, c clears the log, [ / ]
 	// switch top-level tabs (only at the root, so the live stack always belongs
 	// to the active tab), and ` unwinds a deep stack back to the root for a
-	// quick exit — unless the active screen is capturing filter text. The output
-	// keys pass through (no consume) when there is no output pane, so a
+	// quick exit — unless the active screen is capturing filter text (and even
+	// then, a modified-key combo passes: it types no text — see modifiedKey).
+	// The output keys pass through (no consume) when there is no output pane, so a
 	// chromeless app can bind O/o itself.
-	if f, ok := r.Top().(Filterer); !ok || !f.Filtering() {
+	if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput):
 			if !outputOn {

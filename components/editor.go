@@ -1,0 +1,641 @@
+package components
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"unicode"
+
+	"github.com/brohd11/bubblestack/core"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// EditorScreen is the simple nano-like text editor: it loads a file (or starts empty),
+// lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
+// three-way prompt when the buffer is dirty (y = save & exit, n = discard & exit,
+// esc/c = cancel). Enter splits lines, shift+tab inserts a tab (tab itself stays
+// reserved for pane/app navigation), the arrows move the cursor, and a left click
+// places it.
+//
+// It is a standalone screen owning the whole body, not a ModularScreen panel: it
+// captures every keystroke (Filtering reports true the whole time, so the router's
+// global single-key shortcuts never steal typed text — ctrl+c remains the hard quit).
+// To embed it in a pane layout later, wrap it in a ScreenPanel.
+//
+// The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
+// because click-to-cursor needs the scroll offset, which textarea does not export, and
+// tab/shift+tab must be intercepted before any input widget sees them. Deliberately
+// minimal: no soft-wrap (long lines scroll horizontally), no cut/paste, no search.
+type EditorScreen struct {
+	path  string // file to load/save; empty ⇒ unsavable scratch buffer
+	title string // title-bar text (defaults to the file's base name, else "Editor")
+	crumb string // breadcrumb segment; defaults to title
+
+	lines      [][]rune // the buffer; always at least one (possibly empty) line
+	curY, curX int      // cursor: line index and rune column within it
+	wantX      int      // column vertical moves aim for (clamped per line)
+	scrY       int      // topmost visible buffer line
+	scrX       int      // leftmost visible DISPLAY cell (tabs expand, so cells ≠ runes)
+
+	dirty       bool // buffer differs from what was loaded/last saved
+	confirmExit bool // the nano-style save/discard/cancel prompt is showing
+
+	w, h int // viewport dims in cells (body minus the title bar), set by SetSize
+}
+
+// EditorOpts configures an EditorScreen. Path names the file to edit; a missing or
+// unreadable file starts an empty buffer that the first save creates (nano's behavior).
+// Title/Crumb default from the path's base name.
+type EditorOpts struct {
+	Path  string
+	Title string
+	Crumb string
+}
+
+// editorLoadedMsg carries the async file read from Init back to Update.
+type editorLoadedMsg struct {
+	content string
+	err     error
+}
+
+// editorSavedMsg carries the async write from the exit prompt back to Update.
+type editorSavedMsg struct{ err error }
+
+var (
+	editorCursorStyle = lipgloss.NewStyle().Reverse(true)
+	editorPromptStyle = lipgloss.NewStyle().Bold(true)
+)
+
+// editorTabWidth is the display width a tab expands to when rendering. Raw '\t' must
+// never reach the View output: the terminal expands it to the next tab stop while the
+// renderer measures it as zero-width, so the padded frame line overflows, wraps, and
+// every later frame shifts (the "screen advances a line" corruption).
+const editorTabWidth = 4
+
+// expandLine renders a buffer line to display runes, tabs expanded to spaces. Display
+// cells then equal display-rune indexes (double-width runes are the accepted
+// limitation of this simple editor).
+func expandLine(line []rune) []rune {
+	var out []rune
+	for _, r := range line {
+		if r == '\t' {
+			for i := 0; i < editorTabWidth; i++ {
+				out = append(out, ' ')
+			}
+		} else {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// cellOfCol is the display cell of a rune column within line (tabs count full width).
+func cellOfCol(line []rune, col int) int {
+	cell := 0
+	for _, r := range line[:col] {
+		if r == '\t' {
+			cell += editorTabWidth
+		} else {
+			cell++
+		}
+	}
+	return cell
+}
+
+// colAtCell is the rune column at or before a display cell — the inverse of cellOfCol
+// for mapping mouse clicks back into the buffer. A click inside a tab's expansion
+// lands on the tab itself.
+func colAtCell(line []rune, cell int) int {
+	c := 0
+	for i, r := range line {
+		w := 1
+		if r == '\t' {
+			w = editorTabWidth
+		}
+		if c+w > cell {
+			return i
+		}
+		c += w
+	}
+	return len(line)
+}
+
+var _ core.Screen = (*EditorScreen)(nil)
+var _ core.Filterer = (*EditorScreen)(nil)
+var _ core.Crumber = (*EditorScreen)(nil)
+
+// NewEditorScreen builds the screen with an empty buffer; a configured Path is read
+// asynchronously from Init (the framework idiom — IO only in the cmd lane).
+func NewEditorScreen(opts EditorOpts) *EditorScreen {
+	title := opts.Title
+	if title == "" {
+		if opts.Path != "" {
+			title = filepath.Base(opts.Path)
+		} else {
+			title = "Editor"
+		}
+	}
+	crumb := opts.Crumb
+	if crumb == "" {
+		crumb = title
+	}
+	return &EditorScreen{
+		path:  opts.Path,
+		title: title,
+		crumb: crumb,
+		lines: [][]rune{{}},
+	}
+}
+
+// Init kicks off the file read when a path is configured; the result arrives as an
+// editorLoadedMsg. No path ⇒ nothing to load.
+func (s *EditorScreen) Init(*core.Shared) tea.Cmd {
+	if s.path == "" {
+		return nil
+	}
+	path := s.path
+	return func() tea.Msg {
+		b, err := os.ReadFile(path)
+		return editorLoadedMsg{content: string(b), err: err}
+	}
+}
+
+// Filtering reports text capture at all times: the editor types every printable key,
+// so the router's global single-key shortcuts (q, o, r, [, ], t, …) must never fire
+// over it. ctrl+c stays the router's hard quit.
+func (s *EditorScreen) Filtering() bool { return true }
+
+// CrumbLabel contributes the screen's breadcrumb segment (title, or the short crumb
+// when one was configured).
+func (s *EditorScreen) CrumbLabel(short bool) string {
+	return crumbSeg(short, "", s.crumb, s.title)
+}
+
+// Update handles the async load/save results, mouse presses, and keystrokes — in the
+// exit prompt's mode only its y/n/esc/c answers are live.
+func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
+	switch m := msg.(type) {
+	case editorLoadedMsg:
+		if m.err == nil {
+			s.setContent(m.content)
+		}
+		// A read error (missing file, permissions) leaves the empty buffer: the first
+		// save creates the file, as nano does.
+		return s, core.Action{}
+	case editorSavedMsg:
+		if m.err != nil {
+			s.confirmExit = false
+			sh.Log("editor: save failed: " + m.err.Error())
+			return s, core.SetStatus("save failed: " + m.err.Error())
+		}
+		s.dirty = false
+		return s, core.Pop()
+	case tea.KeyMsg:
+		return s.key(m)
+	case tea.MouseMsg:
+		if !s.confirmExit && m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
+			s.clickAt(sh, m.X, m.Y)
+		}
+		return s, core.Action{}
+	}
+	return s, core.Action{}
+}
+
+// key routes one keystroke. Editor-local keys are matched as raw strings — the same
+// sanctioned exception as ModularScreen's "tab": ctrl+x / shift+tab / enter are this
+// screen's own keys with no core.Keys binding, and the arrows match only the raw
+// keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry — those letters must
+// stay typable). The word/line editing combos mirror bubbles/textinput's KeyMap
+// verbatim (alt+←→ word jumps, alt+⌫ word delete, ctrl+u/k line deletes, ctrl+a/e
+// line ends, ctrl+h/d char-delete aliases) so the editor behaves like the form field.
+func (s *EditorScreen) key(m tea.KeyMsg) (core.Screen, core.Action) {
+	k := m.String()
+	if s.confirmExit {
+		switch k {
+		case "y", "Y":
+			return s, core.Action{Cmd: s.saveCmd()}
+		case "n", "N":
+			return s, core.Pop()
+		case "esc", "c":
+			s.confirmExit = false
+		}
+		return s, core.Action{}
+	}
+	switch k {
+	case "ctrl+x":
+		if !s.dirty {
+			return s, core.Pop()
+		}
+		s.confirmExit = true
+	case "shift+tab":
+		s.insertRunes('\t')
+	case "enter":
+		s.newline()
+	case "backspace", "ctrl+h":
+		s.backspace()
+	case "delete", "ctrl+d":
+		s.forwardDelete()
+	case "alt+backspace", "ctrl+w":
+		s.deleteWordBack()
+	case "alt+delete", "alt+d":
+		s.deleteWordForward()
+	case "ctrl+u":
+		s.deleteRange(s.curY, 0, s.curY, s.curX)
+		s.curX, s.wantX = 0, 0
+	case "ctrl+k":
+		if s.curX < len(s.lines[s.curY]) {
+			s.lines[s.curY] = s.lines[s.curY][:s.curX]
+			s.dirty = true
+		}
+	case "up":
+		s.moveVertical(-1)
+	case "down":
+		s.moveVertical(1)
+	case "left":
+		s.moveLeft()
+	case "right":
+		s.moveRight()
+	case "alt+left", "ctrl+left", "alt+b":
+		s.moveWordBack()
+	case "alt+right", "ctrl+right", "alt+f":
+		s.moveWordForward()
+	case "home", "ctrl+a":
+		s.curX, s.wantX = 0, 0
+	case "end", "ctrl+e":
+		s.curX = len(s.lines[s.curY])
+		s.wantX = s.curX
+	default:
+		if len(m.Runes) > 0 {
+			s.insertRunes(m.Runes...)
+		}
+	}
+	s.clampScroll()
+	return s, core.Action{}
+}
+
+// ---------- buffer editing ----------
+
+// setContent replaces the buffer with loaded file content, marking it clean.
+func (s *EditorScreen) setContent(content string) {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	raw := strings.Split(content, "\n")
+	s.lines = make([][]rune, len(raw))
+	for i, l := range raw {
+		s.lines[i] = []rune(l)
+	}
+	s.curY, s.curX, s.wantX = 0, 0, 0
+	s.scrY, s.scrX = 0, 0
+	s.dirty = false
+}
+
+// insertRunes inserts rs at the cursor and advances past them.
+func (s *EditorScreen) insertRunes(rs ...rune) {
+	line := s.lines[s.curY]
+	tail := append([]rune{}, line[s.curX:]...)
+	line = append(line[:s.curX], rs...)
+	s.lines[s.curY] = append(line, tail...)
+	s.curX += len(rs)
+	s.wantX = s.curX
+	s.dirty = true
+}
+
+// newline splits the current line at the cursor; the tail moves to a new line below.
+func (s *EditorScreen) newline() {
+	line := s.lines[s.curY]
+	tail := append([]rune{}, line[s.curX:]...)
+	s.lines[s.curY] = line[:s.curX]
+	s.lines = append(s.lines, nil)
+	copy(s.lines[s.curY+2:], s.lines[s.curY+1:])
+	s.lines[s.curY+1] = tail
+	s.curY++
+	s.curX, s.wantX = 0, 0
+	s.dirty = true
+}
+
+// backspace deletes the rune before the cursor, or joins the line onto the previous
+// one at column 0.
+func (s *EditorScreen) backspace() {
+	if s.curX > 0 {
+		line := s.lines[s.curY]
+		s.lines[s.curY] = append(line[:s.curX-1], line[s.curX:]...)
+		s.curX--
+	} else if s.curY > 0 {
+		prev := s.lines[s.curY-1]
+		s.curX = len(prev)
+		s.lines[s.curY-1] = append(prev, s.lines[s.curY]...)
+		s.lines = append(s.lines[:s.curY], s.lines[s.curY+1:]...)
+		s.curY--
+	} else {
+		return
+	}
+	s.wantX = s.curX
+	s.dirty = true
+}
+
+// forwardDelete deletes the rune under the cursor (delete key), or pulls the next line
+// up at end of line.
+func (s *EditorScreen) forwardDelete() {
+	line := s.lines[s.curY]
+	if s.curX < len(line) {
+		s.lines[s.curY] = append(line[:s.curX], line[s.curX+1:]...)
+	} else if s.curY < len(s.lines)-1 {
+		s.lines[s.curY] = append(line, s.lines[s.curY+1]...)
+		s.lines = append(s.lines[:s.curY+1], s.lines[s.curY+2:]...)
+	} else {
+		return
+	}
+	s.wantX = s.curX
+	s.dirty = true
+}
+
+// ---------- word/line operations (the bubbles/textinput KeyMap mirror) ----------
+
+// isWordSpace delimits words: whitespace only, the same notion textinput uses (no
+// alnum/punct classes — keep it stupidly simple).
+func isWordSpace(r rune) bool { return unicode.IsSpace(r) }
+
+// wordBackPos is the position WordBackward would move to from the cursor: at column 0
+// the previous line's end (the caller treats that one as a plain join/move), else
+// past any spaces then the word before them.
+func (s *EditorScreen) wordBackPos() (int, int) {
+	y, x := s.curY, s.curX
+	if x == 0 {
+		if y == 0 {
+			return 0, 0
+		}
+		return y - 1, len(s.lines[y-1])
+	}
+	line := s.lines[y]
+	for x > 0 && isWordSpace(line[x-1]) {
+		x--
+	}
+	for x > 0 && !isWordSpace(line[x-1]) {
+		x--
+	}
+	return y, x
+}
+
+// wordForwardPos is the position WordForward would move to: at end of line the next
+// line's start, else past the rest of the current word then any spaces after it.
+func (s *EditorScreen) wordForwardPos() (int, int) {
+	y, x := s.curY, s.curX
+	line := s.lines[y]
+	if x >= len(line) {
+		if y >= len(s.lines)-1 {
+			return y, len(line)
+		}
+		return y + 1, 0
+	}
+	for x < len(line) && !isWordSpace(line[x]) {
+		x++
+	}
+	for x < len(line) && isWordSpace(line[x]) {
+		x++
+	}
+	return y, x
+}
+
+func (s *EditorScreen) moveWordBack() {
+	y, x := s.wordBackPos()
+	s.curY, s.curX, s.wantX = y, x, x
+}
+
+func (s *EditorScreen) moveWordForward() {
+	y, x := s.wordForwardPos()
+	s.curY, s.curX, s.wantX = y, x, x
+}
+
+// deleteRange removes the text from (y1, x1) to (y2, x2), merging the two line ends
+// into y1 and dropping the lines between. An empty range is a no-op (and stays
+// clean); the caller owns the cursor afterwards.
+func (s *EditorScreen) deleteRange(y1, x1, y2, x2 int) {
+	if y1 == y2 && x1 == x2 {
+		return
+	}
+	s.lines[y1] = append(s.lines[y1][:x1], s.lines[y2][x2:]...)
+	s.lines = append(s.lines[:y1+1], s.lines[y2+1:]...)
+	s.dirty = true
+}
+
+// deleteWordBack is DeleteWordBackward: deletes from wordBackPos to the cursor. At
+// column 0 it is a plain line join, exactly like backspace.
+func (s *EditorScreen) deleteWordBack() {
+	y, x := s.wordBackPos()
+	if y == s.curY && x == s.curX {
+		return // start of buffer
+	}
+	if x == len(s.lines[y]) && y == s.curY-1 {
+		s.backspace() // column 0: join, not a word delete
+		return
+	}
+	s.deleteRange(y, x, s.curY, s.curX)
+	s.curY, s.curX, s.wantX = y, x, x
+}
+
+// deleteWordForward is DeleteWordForward: deletes from the cursor to wordForwardPos,
+// which pulls the next line up when the cursor sits at end of line.
+func (s *EditorScreen) deleteWordForward() {
+	y, x := s.wordForwardPos()
+	s.deleteRange(s.curY, s.curX, y, x)
+}
+
+// ---------- cursor movement ----------
+
+func (s *EditorScreen) moveLeft() {
+	if s.curX > 0 {
+		s.curX--
+	} else if s.curY > 0 {
+		s.curY--
+		s.curX = len(s.lines[s.curY])
+	}
+	s.wantX = s.curX
+}
+
+func (s *EditorScreen) moveRight() {
+	if s.curX < len(s.lines[s.curY]) {
+		s.curX++
+	} else if s.curY < len(s.lines)-1 {
+		s.curY++
+		s.curX = 0
+	}
+	s.wantX = s.curX
+}
+
+// moveVertical moves the cursor delta lines, keeping the wantX target column so a
+// run of up/down moves across short lines returns to the column the user started from.
+func (s *EditorScreen) moveVertical(delta int) {
+	y := s.curY + delta
+	if y < 0 || y >= len(s.lines) {
+		return
+	}
+	s.curY = y
+	if s.curX = s.wantX; s.curX > len(s.lines[y]) {
+		s.curX = len(s.lines[y])
+	}
+}
+
+// clickAt maps a left press to a buffer position: terminal rows are absolute, so the
+// chrome rows (Shared.BodyY) and the in-body title bar come off first, then the scroll
+// offsets turn viewport cells into buffer coordinates (the column via colAtCell, since
+// clicks land in display cells but curX counts runes), clamped to the line.
+func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
+	rel := y - sh.BodyY() - s.titleH()
+	if rel < 0 {
+		return
+	}
+	row := s.scrY + rel
+	if row >= len(s.lines) {
+		row = len(s.lines) - 1
+	}
+	col := colAtCell(s.lines[row], s.scrX+x)
+	s.curY, s.curX, s.wantX = row, col, col
+	s.clampScroll()
+}
+
+// clampScroll scrolls the viewport just enough to keep the cursor visible, in both
+// axes (long lines scroll horizontally — no soft-wrap). Horizontal positions are in
+// display cells: the cursor's cell comes from cellOfCol, not the raw rune column.
+func (s *EditorScreen) clampScroll() {
+	if s.w < 1 || s.h < 1 {
+		return
+	}
+	if s.curY < s.scrY {
+		s.scrY = s.curY
+	}
+	if s.curY >= s.scrY+s.h {
+		s.scrY = s.curY - s.h + 1
+	}
+	curCell := cellOfCol(s.lines[s.curY], s.curX)
+	if curCell < s.scrX {
+		s.scrX = curCell
+	}
+	if curCell >= s.scrX+s.w {
+		s.scrX = curCell - s.w + 1
+	}
+}
+
+// ---------- rendering ----------
+
+// titleH is the title bar's rendered height, subtracted from the body (and from mouse
+// rows) the same way ModularScreen accounts for its own title.
+func (s *EditorScreen) titleH() int {
+	return lipgloss.Height(core.RenderTitleBar(s.titleText()))
+}
+
+func (s *EditorScreen) titleText() string {
+	if s.dirty {
+		return s.title + " [+]"
+	}
+	return s.title
+}
+
+// View renders the title bar (with a [+] modified marker), the visible line window
+// with the cursor cell in reverse video, and — while the exit prompt is up — the
+// prompt as the body's last line.
+func (s *EditorScreen) View(*core.Shared) string {
+	rows := s.h
+	if s.confirmExit {
+		rows-- // the prompt takes the last body row
+	}
+	var b strings.Builder
+	for i := 0; i < rows; i++ {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		row := s.scrY + i
+		if row >= len(s.lines) {
+			continue
+		}
+		b.WriteString(s.renderLine(row))
+	}
+	if s.confirmExit {
+		if rows > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel"))
+	}
+	return core.WithTitle(s.titleText(), b.String())
+}
+
+// renderLine renders one buffer row's horizontal window in display cells (tabs
+// expanded via expandLine — the raw '\t' never reaches the frame), with the cursor
+// cell (a reverse-video rune, or a blank at end of line) when the row holds the
+// cursor. A cursor sitting on a tab reverses the expansion's first cell.
+func (s *EditorScreen) renderLine(row int) string {
+	disp := expandLine(s.lines[row])
+	start := s.scrX
+	if start > len(disp) {
+		start = len(disp)
+	}
+	end := s.scrX + s.w
+	if end > len(disp) {
+		end = len(disp)
+	}
+	vis := disp[start:end]
+	if row != s.curY {
+		return string(vis)
+	}
+	c := cellOfCol(s.lines[row], s.curX) - s.scrX // clampScroll keeps this within [0, s.w)
+	if c < len(vis) {
+		return string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
+	}
+	return string(vis) + editorCursorStyle.Render(" ")
+}
+
+// HelpView shows the editing hints, swapped for the prompt's y/n/c answers while the
+// exit prompt is up.
+func (s *EditorScreen) HelpView(sh *core.Shared) string {
+	if s.confirmExit {
+		return sh.BindingHelp([]key.Binding{
+			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save & exit")),
+			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "discard & exit")),
+			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
+		})
+	}
+	return sh.BindingHelp([]key.Binding{
+		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
+		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧tab", "tab")),
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
+		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
+		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),
+		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("⌥⌫", "del word")),
+	})
+}
+
+// SetSize records the viewport dims (the body minus the title bar) and re-clamps the
+// scroll so a shrink can't leave the cursor off-screen.
+func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	s.w = width
+	s.h = bodyHeight - s.titleH()
+	if s.h < 1 {
+		s.h = 1
+	}
+	s.clampScroll()
+}
+
+// ---------- save ----------
+
+// saveCmd snapshots the buffer and writes it to Path asynchronously (IO in the cmd
+// lane); the result arrives as an editorSavedMsg. An empty path is an error — a
+// scratch buffer has nowhere to save to.
+func (s *EditorScreen) saveCmd() tea.Cmd {
+	path := s.path
+	var b strings.Builder
+	for i, l := range s.lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(string(l))
+	}
+	content := b.String()
+	return func() tea.Msg {
+		if path == "" {
+			return editorSavedMsg{err: errors.New("no file path")}
+		}
+		return editorSavedMsg{err: os.WriteFile(path, []byte(content), 0o644)}
+	}
+}

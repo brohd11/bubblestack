@@ -528,8 +528,8 @@ func TestWheelIgnoredWhenOutputHidden(t *testing.T) {
 	}
 }
 
-// TestMouseToggleKey checks m flips mouse capture both ways and emits a command each
-// time (tea.DisableMouse / tea.EnableMouseCellMotion).
+// TestMouseToggleKey checks ctrl+g flips mouse capture both ways and emits a command
+// each time (tea.DisableMouse / tea.EnableMouseCellMotion).
 func TestMouseToggleKey(t *testing.T) {
 	tm := sized(newCoreTestRouter())
 	if !tm.(Router).mouseOn {
@@ -538,7 +538,7 @@ func TestMouseToggleKey(t *testing.T) {
 
 	tm, cmd := tm.Update(keyMsg(Keys.Mouse.Keys()[0]))
 	if tm.(Router).mouseOn {
-		t.Fatal("m should toggle mouse capture off")
+		t.Fatal("ctrl+g should toggle mouse capture off")
 	}
 	if cmd == nil {
 		t.Fatal("toggling off should emit a command to stop mouse reporting")
@@ -546,23 +546,25 @@ func TestMouseToggleKey(t *testing.T) {
 
 	tm, cmd = tm.Update(keyMsg(Keys.Mouse.Keys()[0]))
 	if !tm.(Router).mouseOn {
-		t.Fatal("m should toggle mouse capture back on")
+		t.Fatal("ctrl+g should toggle mouse capture back on")
 	}
 	if cmd == nil {
 		t.Fatal("toggling on should emit a command to resume mouse reporting")
 	}
 }
 
-// TestMouseKeyPassesThroughWhileFiltering checks m is not swallowed by a screen that is
-// capturing filter text — it is typing a literal m (mirrors the w case).
-func TestMouseKeyPassesThroughWhileFiltering(t *testing.T) {
+// TestMouseKeyFiresWhileFiltering is the combo-bypass rule: ctrl+g types no text, so
+// the Filtering gate lets it through and it toggles mouse capture even over a screen
+// capturing input (a full-capture editor keeps its mouse toggle). A plain letter
+// shortcut under the same gate still passes through as text (the w case).
+func TestMouseKeyFiresWhileFiltering(t *testing.T) {
 	sh := NewShared(nil)
 	sh.Chrome = &Chrome{Output: &fakeOutput{}}
 	r := NewRouter(sh, []TabEntry{{Title: "Filter", New: func(*Shared) Screen { return filterScreen{} }}})
 
 	tm := pump(sized(r), keyMsg(Keys.Mouse.Keys()[0]))
-	if !tm.(Router).mouseOn {
-		t.Fatal("m must reach a filtering screen as a literal key, not toggle mouse capture")
+	if tm.(Router).mouseOn {
+		t.Fatal("ctrl+g is a combo: it must toggle mouse capture even while a screen filters")
 	}
 }
 
