@@ -158,6 +158,39 @@ func TestMarkdownBlockquote(t *testing.T) {
 	assertSpans(t, fenced, 1, wantSpan{"> code", mdCodeStyle})
 }
 
+// TestMarkdownListMarkers: only the MARKER carries the list style — its text is
+// left to whatever else claims it. ListItem.Pos() lands on the marker in every
+// shape goldmark produces, so nesting, indentation and a quote wrapper all work
+// off the same forward scan (listMarkerEnd).
+func TestMarkdownListMarkers(t *testing.T) {
+	withColor(t)
+
+	for _, bullet := range []string{"-", "*", "+"} {
+		doc := bullet + " item\n"
+		assertSpans(t, doc, 0, wantSpan{bullet, mdListStyle}, wantSpan{" item", mdNone})
+	}
+	// Ordered markers keep their digits and delimiter, multi-digit included.
+	assertSpans(t, "1. first\n", 0, wantSpan{"1.", mdListStyle}, wantSpan{" first", mdNone})
+	assertSpans(t, "1) paren\n10) ten\n", 1, wantSpan{"10)", mdListStyle}, wantSpan{" ten", mdNone})
+
+	// Nesting: the leading indent stays unstyled, the marker still lands.
+	nested := "- outer\n  - inner\n"
+	assertSpans(t, nested, 1,
+		wantSpan{"  ", mdNone}, wantSpan{"-", mdListStyle}, wantSpan{" inner", mdNone})
+
+	// Inside a blockquote the marker paints OVER the quote's block style.
+	assertSpans(t, "> - quoted\n", 0,
+		wantSpan{"> ", mdQuoteStyle}, wantSpan{"-", mdListStyle}, wantSpan{" quoted", mdQuoteStyle})
+
+	// The item's own inline constructs are untouched by the marker case.
+	assertSpans(t, "- *em* item\n", 0,
+		wantSpan{"-", mdListStyle}, wantSpan{" *", mdNone},
+		wantSpan{"em", mdEmphasisStyle}, wantSpan{"* item", mdNone})
+
+	// An empty item is still a marker, not a crash.
+	assertSpans(t, "- \n", 0, wantSpan{"-", mdListStyle}, wantSpan{" ", mdNone})
+}
+
 // TestMarkdownSetextUnderline documents a known gap rather than an intent: a setext
 // heading's Lines() cover the text row only, so the "=====" underline renders plain.
 func TestMarkdownSetextUnderline(t *testing.T) {
@@ -182,6 +215,11 @@ func TestMarkdownSpanInvariant(t *testing.T) {
 		"ünïcödé *émphasis* 日本語",
 		"> quote *em*",
 		"> more",
+		"",
+		"- bullet with `code`",
+		"  - nested bullet",
+		"1. ordered",
+		"12) also ordered",
 		"",
 		"```go",
 		"x := 1 // `not a code span`",

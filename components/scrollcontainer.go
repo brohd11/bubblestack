@@ -126,6 +126,11 @@ func (p *ScrollContainer) SetSize(width, height int) {
 	p.vp.Height = p.contentHeight()
 }
 
+// TextWidth is the width content must be wrapped to before SetLines: the viewport
+// clips rather than wraps, so a caller folding prose (or a rendered markdown page)
+// into this pane needs the box's inner measurement.
+func (p *ScrollContainer) TextWidth() int { return p.innerWidth() }
+
 // innerWidth is the text width inside the box (cell width minus side borders and
 // the 1-col padding on each side).
 func (p *ScrollContainer) innerWidth() int {

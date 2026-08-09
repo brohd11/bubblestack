@@ -132,23 +132,50 @@ func docTopics(pages []DocPage) string {
 	return strings.Join(topics, ", ")
 }
 
-// The pages are markdown, but only the handful of constructs below are honored — this
-// is a reader for prose we write ourselves, not a general markdown implementation (a
-// full renderer would drag in a dependency and bring its own theme, which would fight
-// core's). Everything is re-flowed to the width the DocScreen hands us:
+// The pages are markdown, but only the constructs below are honored — this is a
+// reader, not a general markdown implementation (a full renderer would drag in a
+// dependency and bring its own theme, which would fight core's). Everything is
+// re-flowed to the width the DocScreen hands us:
 //
+//	# heading       bold accent, blank line above
 //	## heading      bold accent, blank line above
 //	### heading     bold, muted
 //	- item          bulleted, wrapped with a hanging indent (an indented line continues it)
+//	1. item         same, keeping the author's number as the marker ("1)" too)
 //	```fence```     indented, muted, hard-wrapped (never re-flowed)
 //	`code`          accent, inline
+//	**bold**        bold
+//	*em*            italic ("_em_" is NOT honored: it would hit every snake_case name)
+//	[text](url)     the text, underlined; the target is dropped
 //	anything else   a paragraph: consecutive lines join, then wrap as one block
+//
+// Images (![alt](url)), tables, blockquotes and HTML pass through as their literal
+// source text — the deliberate "skip what we don't know" behavior, so an unsupported
+// construct is visible rather than silently swallowed. Two more known edges: a lone
+// "*" in prose can pair with a later one and italicize what's between them, and
+// backslash escapes (\*) are not honored.
 //
 // Styles are read per call (not cached) so a theme switch repaints the page — the same
 // rule core.StyleList follows.
 
-// inlineCode matches a `code span`; the capture is the text between the backticks.
-var inlineCode = regexp.MustCompile("`([^`]+)`")
+// inlineAny matches every inline construct in ONE alternation, which is what makes
+// the single pass in inline() possible. Running the patterns in sequence instead
+// would have each one matching the ANSI the previous one emitted — the link pattern
+// happily reads an escape sequence's "\x1b[" as a label bracket — so the passes have
+// to be mutually exclusive by construction, not by ordering.
+//
+// Alternation order IS priority (Go's regexp is leftmost-FIRST, like Perl): code
+// spans win over everything inside them, and "**" is tried before "*".
+// Images carry their "!" into the match so they are recognized and passed through
+// whole, rather than half-matched as a link.
+//
+// Only the "*em*" spelling is honored; "_em_" would italicize the middle of every
+// snake_case identifier the manual pages are full of.
+var inlineAny = regexp.MustCompile("`[^`]+`" + `|\*\*[^*]+\*\*|\*[^*]+\*|!?\[[^\]]+\]\([^)]*\)`)
+
+// orderedItem matches "1. " / "12) " at the start of a list line; the capture is the
+// marker, which is kept verbatim rather than renumbered.
+var orderedItem = regexp.MustCompile(`^(\d+[.)])\s+`)
 
 const (
 	bulletMark = "• "
@@ -180,7 +207,7 @@ type docRenderer struct {
 	out   []string
 
 	pending []string // the lines of the block being accumulated
-	bullet  bool     // the pending block is a bullet
+	marker  string   // the pending block is a list item hung under this marker; "" ⇒ paragraph
 	fence   bool     // inside a ``` code fence
 }
 
@@ -205,22 +232,38 @@ func (r *docRenderer) line(line string) {
 		r.heading(subheadingStyle().Render(strings.TrimPrefix(trimmed, "### ")))
 	case strings.HasPrefix(trimmed, "## "):
 		r.heading(headingStyle().Render(strings.TrimPrefix(trimmed, "## ")))
+	case strings.HasPrefix(trimmed, "# "):
+		r.heading(h1Style().Render(strings.TrimPrefix(trimmed, "# ")))
 	case strings.HasPrefix(trimmed, "- "):
-		r.flush()
-		r.bullet = true
-		r.pending = []string{strings.TrimPrefix(trimmed, "- ")}
-	case r.bullet && line != trimmed:
-		// An indented line under a bullet continues it rather than starting a paragraph.
+		r.item(bulletMark, strings.TrimPrefix(trimmed, "- "))
+	case orderedItem.MatchString(trimmed):
+		// The author's own number is kept rather than renumbered: the source is
+		// what they'll compare the preview against.
+		m := orderedItem.FindStringSubmatch(trimmed)
+		r.item(m[1]+" ", trimmed[len(m[0]):])
+	case r.marker != "" && line != trimmed:
+		// An indented line under a list item continues it rather than starting a paragraph.
 		r.pending = append(r.pending, trimmed)
 	default:
 		r.pending = append(r.pending, trimmed)
 	}
 }
 
+// item starts a list block: marker is the hanging prefix (already spaced), text its
+// first line.
+func (r *docRenderer) item(marker, text string) {
+	r.flush()
+	r.marker = marker
+	r.pending = []string{text}
+}
+
+// heading emits an already-styled heading under a separator. It is wrapped like any
+// other block: a heading longer than the pane is narrow — a preview beside an editor,
+// say — would otherwise be the one thing that overflows the box.
 func (r *docRenderer) heading(rendered string) {
 	r.flush()
 	r.blank()
-	r.emit(rendered)
+	r.emit(ansi.Wrap(rendered, r.width, wrapBreaks))
 }
 
 // flush wraps the accumulated block and empties it.
@@ -229,12 +272,12 @@ func (r *docRenderer) flush() {
 		return
 	}
 	text := inline(strings.Join(r.pending, " "))
-	if r.bullet {
-		r.emit(hang(bulletMark, text, r.width))
+	if r.marker != "" {
+		r.emit(hang(r.marker, text, r.width))
 	} else {
 		r.emit(ansi.Wrap(text, r.width, wrapBreaks))
 	}
-	r.pending, r.bullet = nil, false
+	r.pending, r.marker = nil, ""
 }
 
 func (r *docRenderer) emit(s string) { r.out = append(r.out, s) }
@@ -250,8 +293,11 @@ func (r *docRenderer) blank() {
 
 // hang wraps text under a marker, indenting the continuation rows to sit under the first
 // row's text so the entry still reads as one unit (the idiom LogPane's wrapped mode uses).
+// The continuation indent is the marker's own width, so a wide "10. " lines up as
+// readably as a bullet.
 func hang(marker, text string, width int) string {
-	w := width - lipgloss.Width(marker)
+	mw := lipgloss.Width(marker)
+	w := width - mw
 	if w < 1 {
 		w = 1
 	}
@@ -261,7 +307,7 @@ func hang(marker, text string, width int) string {
 			rows[i] = marker + row
 			continue
 		}
-		rows[i] = indent + row
+		rows[i] = strings.Repeat(" ", mw) + row
 	}
 	return strings.Join(rows, "\n")
 }
@@ -269,19 +315,76 @@ func hang(marker, text string, width int) string {
 // inline styles the spans inside a block of prose. Styling before wrapping is safe:
 // ansi.Wrap measures display cells, not bytes.
 func inline(s string) string {
-	return inlineCode.ReplaceAllStringFunc(s, func(m string) string {
-		return codeSpanStyle().Render(strings.Trim(m, "`"))
+	return inlineAny.ReplaceAllStringFunc(s, func(m string) string {
+		kind, text := inlineParts(m)
+		switch kind {
+		case inlineKindCode:
+			return codeSpanStyle().Render(text)
+		case inlineKindBold:
+			return boldStyle().Render(text)
+		case inlineKindEm:
+			return italicStyle().Render(text)
+		case inlineKindLink:
+			return linkStyle().Render(text)
+		}
+		return text // an image: its literal source
 	})
 }
 
+// The inline construct kinds inlineParts classifies a match into.
+const (
+	inlineKindCode = iota
+	inlineKindBold
+	inlineKindEm
+	inlineKindLink
+	inlineKindImage
+)
+
+// inlineParts splits one inlineAny match into its kind and the text that survives
+// into the output — the delimiters dropped, an image kept whole.
+func inlineParts(m string) (kind int, text string) {
+	switch {
+	case strings.HasPrefix(m, "`"):
+		return inlineKindCode, strings.Trim(m, "`")
+	case strings.HasPrefix(m, "**"):
+		return inlineKindBold, strings.Trim(m, "*")
+	case strings.HasPrefix(m, "*"):
+		return inlineKindEm, strings.Trim(m, "*")
+	case strings.HasPrefix(m, "!"):
+		return inlineKindImage, m
+	}
+	return inlineKindLink, m[1:strings.Index(m, "]")]
+}
+
 // plain strips the inline markup from a line, for places that show it unstyled (the
-// index's one-line descriptions).
+// index's one-line descriptions) — inline's pass without the styling.
 func plain(s string) string {
-	return inlineCode.ReplaceAllString(s, "$1")
+	return inlineAny.ReplaceAllStringFunc(s, func(m string) string {
+		_, text := inlineParts(m)
+		return text
+	})
+}
+
+// h1Style is the top-level heading: the accent heading underlined, so a page's "#"
+// still outranks the "##" sections under it in a terminal with no type sizes.
+func h1Style() lipgloss.Style {
+	return headingStyle().Underline(true)
 }
 
 func headingStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(core.FocusedColor)
+}
+
+func boldStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true)
+}
+
+func italicStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Italic(true)
+}
+
+func linkStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Underline(true).Foreground(core.FocusedColor)
 }
 
 func subheadingStyle() lipgloss.Style {

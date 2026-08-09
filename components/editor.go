@@ -47,7 +47,8 @@ type EditorScreen struct {
 	title string // title-bar text (defaults to the file's base name, else "Editor")
 	crumb string // breadcrumb segment; defaults to title
 
-	onExit func(*core.Shared) core.Action // embedded mode: replaces Pop on exit (nil ⇒ Pop)
+	onExit    func(*core.Shared) core.Action // embedded mode: replaces Pop on exit (nil ⇒ Pop)
+	onRelease func(*core.Shared) core.Action // esc: hand the keys back to the host (nil ⇒ esc ignored)
 
 	lines      [][]rune // the buffer; always at least one (possibly empty) line
 	curY, curX int      // cursor: line index and rune column within it
@@ -84,6 +85,14 @@ type EditorScreen struct {
 // ignores a Pop of the root screen, leaving the editor's capture with no keyboard
 // way out. Standalone use leaves it nil and keeps the Pop.
 //
+// OnRelease, when set, binds esc to "the keys go elsewhere, the buffer stays": the
+// hook's Action is returned and nothing about the buffer changes. It is the light
+// counterpart to OnExit — a pane host points it at its own focus move, so leaving a
+// capturing editor costs one key instead of a pane-nav chord, without closing what
+// you were editing. Left nil, esc is ignored (the editor types everything else, and
+// a bare esc that popped the host would be a trap). The exit prompt keeps its own
+// esc = cancel: that branch runs first.
+//
 // Border draws the shared frame (the ScrollContainer look) with the title as its
 // top-edge legend instead of the title bar, the same opt-in ListPanelOpts.Border
 // carries: which chrome an instance wears is the composing caller's choice, not the
@@ -105,6 +114,7 @@ type EditorOpts struct {
 	Crumb       string
 	Border      bool
 	OnExit      func(*core.Shared) core.Action
+	OnRelease   func(*core.Shared) core.Action
 	Highlighter Highlighter
 }
 
@@ -206,15 +216,16 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
 	}
 	return &EditorScreen{
-		path:     opts.Path,
-		title:    title,
-		crumb:    crumb,
-		onExit:   opts.OnExit,
-		lines:    [][]rune{{}},
-		bordered: opts.Border,
-		focused:  true, // standalone the editor is always focused; a panel blurs it
-		hl:       hl,
-		hlSeq:    -1, // nothing parsed yet, even before the first edit
+		path:      opts.Path,
+		title:     title,
+		crumb:     crumb,
+		onExit:    opts.OnExit,
+		onRelease: opts.OnRelease,
+		lines:     [][]rune{{}},
+		bordered:  opts.Border,
+		focused:   true, // standalone the editor is always focused; a panel blurs it
+		hl:        hl,
+		hlSeq:     -1, // nothing parsed yet, even before the first edit
 	}
 }
 
@@ -252,6 +263,20 @@ func (s *EditorScreen) SetEmbedded(on bool) { s.embedded = on }
 // (unbordered) mutes its title bar, so the pane reads as inactive; the router drives
 // the same transition on a standalone editor when the output pane takes the keys.
 func (s *EditorScreen) SetFocused(focused bool) { s.focused = focused }
+
+// Text is the live buffer as one string, lines joined with '\n' — what a save
+// would write, and what a host reads to do something with the content while it is
+// still being edited (a rendered preview beside the pane, a word count).
+func (s *EditorScreen) Text() string {
+	var b strings.Builder
+	for i, l := range s.lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(string(l))
+	}
+	return b.String()
+}
 
 // SetPaneOrigin implements PaneOriginer: ScreenPanel forwards the host layout's
 // rendered origin, which the save-as overlay anchors from (see saveAsEdit).
@@ -344,6 +369,10 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			return s, s.exit(sh)
 		}
 		s.confirmExit = true
+	case "esc":
+		if s.onRelease != nil {
+			return s, s.onRelease(sh)
+		}
 	case "tab", "shift+tab":
 		s.insertRunes('\t')
 	case "enter":
@@ -865,14 +894,7 @@ func (s *EditorScreen) renderLine(row int) string {
 // exactly — the check that keeps a buggy highlighter from corrupting the frame).
 func (s *EditorScreen) hlSpans(row int) []Span {
 	if s.hlSeq != s.editSeq {
-		var b strings.Builder
-		for i, l := range s.lines {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(string(l))
-		}
-		s.hl.Parse(b.String())
+		s.hl.Parse(s.Text())
 		s.hlSeq = s.editSeq
 	}
 	spans := s.hl.HighlightLine(row)
@@ -953,14 +975,19 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
 		})
 	}
-	return sh.BindingHelp([]key.Binding{
+	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
+	}
+	if s.onRelease != nil {
+		hints = append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave pane")))
+	}
+	return sh.BindingHelp(append(hints,
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("⌥⌫", "del word")),
-	})
+	))
 }
 
 // SetSize records the viewport dims — the args net of whatever chrome this editor

@@ -21,6 +21,7 @@ var (
 	mdCodeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	mdQuoteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	mdLinkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Underline(true)
+	mdListStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
 )
 
 // mdStyle IDs index mdStyles; 0 is the unstyled run. Intervals carry the ID, so
@@ -34,6 +35,7 @@ const (
 	mdStyleCode
 	mdStyleQuote
 	mdStyleLink
+	mdStyleList
 )
 
 var mdStyles = []lipgloss.Style{
@@ -44,6 +46,7 @@ var mdStyles = []lipgloss.Style{
 	mdCodeStyle,
 	mdQuoteStyle,
 	mdLinkStyle,
+	mdListStyle,
 }
 
 // mdInterval is a styled half-open rune-column range [lo, hi) on one line of
@@ -70,7 +73,8 @@ type markdownHighlighter struct {
 // NewMarkdownHighlighter returns a Highlighter for CommonMark markdown, styled
 // with the md*Style defaults: headings bold, *em* italic, **strong** bold,
 // `code` and code blocks (fenced and indented) in the code color, blockquotes
-// gray, links and autolinks underlined blue.
+// gray, links and autolinks underlined blue, and list markers (the "-" or "1.",
+// never the item's text) in the list color.
 func NewMarkdownHighlighter() Highlighter {
 	return &markdownHighlighter{}
 }
@@ -119,6 +123,10 @@ func (m *markdownHighlighter) Parse(doc string) {
 			// A container: its own Lines() is empty, so the range runs from the
 			// opening '>' to the deepest descendant's last line.
 			m.addBlock(m.rowOf(v.Pos()), m.lastRow(v), mdStyleQuote)
+		case *ast.ListItem:
+			// Only the MARKER is styled, not the item's text — the children keep
+			// walking so their own inline constructs still land.
+			m.addInline(v.Pos(), m.listMarkerEnd(v.Pos()), mdStyleList)
 		case *ast.Emphasis:
 			id := mdStyleEmphasis
 			if v.Level == 2 {
@@ -215,6 +223,30 @@ func (m *markdownHighlighter) addInline(start, stop int, id int) {
 			m.intervals[r] = append(m.intervals[r], mdInterval{lo: lo, hi: hi, id: id, prio: 1})
 		}
 	}
+}
+
+// listMarkerEnd is the byte offset just past the list marker starting at pos —
+// one bullet character ("-", "+", "*"), or a run of digits and the delimiter
+// closing it ("12."). ListItem.Pos() lands on the marker itself in every shape
+// goldmark produces (nested, indented, inside a blockquote), so scanning forward
+// from it is the whole extent calculation. Anything else answers pos, which
+// addInline discards as an empty range.
+func (m *markdownHighlighter) listMarkerEnd(pos int) int {
+	if pos < 0 || pos >= len(m.src) {
+		return pos
+	}
+	switch m.src[pos] {
+	case '-', '+', '*':
+		return pos + 1
+	}
+	i := pos
+	for i < len(m.src) && m.src[i] >= '0' && m.src[i] <= '9' {
+		i++
+	}
+	if i > pos && i < len(m.src) && (m.src[i] == '.' || m.src[i] == ')') {
+		return i + 1
+	}
+	return pos
 }
 
 // childRange is the byte range from the first to the last descendant Text
