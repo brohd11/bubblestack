@@ -574,6 +574,93 @@ func TestEditorDiscardExit(t *testing.T) {
 	}
 }
 
+// TestEditorSaveKey: ctrl+s writes and STAYS — no exit, no OnExit — and reports the
+// path it landed at through OnSaved. A save-as through the same box renames the buffer
+// under a live cursor, so the third case checks the caret and scroll survive it.
+func TestEditorSaveKey(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("saves without exiting", func(t *testing.T) {
+		path := filepath.Join(dir, "stay.txt")
+		exited, saved := 0, ""
+		s, sh := newEditor(EditorOpts{
+			Path:    path,
+			OnExit:  func(*core.Shared) core.Action { exited++; return core.Action{} },
+			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
+		})
+		typeRunes(s, 'h', 'i')
+		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		if s.confirmExit {
+			t.Fatal("ctrl+s must not raise the exit prompt")
+		}
+		s.saveAsEdit(sh).OnDone(sh, path)
+		s.Update(sh, s.saveCmd()())
+		if exited != 0 {
+			t.Fatalf("ctrl+s must not exit (hook fired %d)", exited)
+		}
+		if saved != path {
+			t.Fatalf("OnSaved should report the written path, got %q", saved)
+		}
+		if s.dirty {
+			t.Fatal("a completed save should clear the dirty marker")
+		}
+		if b, err := os.ReadFile(path); err != nil || string(b) != "hi" {
+			t.Fatalf("saved content = %q, err = %v", b, err)
+		}
+	})
+
+	t.Run("save-as adopts the new path", func(t *testing.T) {
+		saved := ""
+		s, sh := newEditor(EditorOpts{
+			Path:    filepath.Join(dir, "before.txt"),
+			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
+		})
+		typeRunes(s, 'x')
+		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		after := filepath.Join(dir, "nested", "after.txt") // a dir that does not exist yet
+		s.saveAsEdit(sh).OnDone(sh, after)
+		s.Update(sh, s.saveCmd()())
+		if s.path != after || s.title != "after.txt" {
+			t.Fatalf("save-as should rename the buffer, got path %q title %q", s.path, s.title)
+		}
+		if saved != after {
+			t.Fatalf("OnSaved should report the NEW path, got %q", saved)
+		}
+		if b, err := os.ReadFile(after); err != nil || string(b) != "x" {
+			t.Fatalf("the new path should hold the buffer: %q, err = %v", b, err)
+		}
+	})
+
+	t.Run("keeps the caret and the view", func(t *testing.T) {
+		s, sh := newEditor(EditorOpts{Path: filepath.Join(dir, "caret.txt")})
+		s.setContent(longDoc())
+		s.curY, s.curX, s.scrY = 60, 1, 55
+		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		s.saveAsEdit(sh).OnDone(sh, s.path)
+		s.Update(sh, s.saveCmd()())
+		if s.curY != 60 || s.curX != 1 || s.scrY != 55 {
+			t.Fatalf("a save must not move the caret or the view, got %d/%d scroll %d", s.curY, s.curX, s.scrY)
+		}
+	})
+
+	t.Run("renaming re-picks the highlighter", func(t *testing.T) {
+		s, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "plain.txt")})
+		if s.hl != nil {
+			t.Fatal(".txt has no registered highlighter")
+		}
+		s.applySaveName(filepath.Join(dir, "now.md"))
+		if s.hl == nil {
+			t.Fatal("a rename to .md should pick the markdown highlighter up")
+		}
+		explicit := NewMarkdownHighlighter()
+		s2, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "a.md"), Highlighter: explicit})
+		s2.applySaveName(filepath.Join(dir, "b.txt"))
+		if s2.hl != explicit {
+			t.Fatal("an explicitly configured highlighter must survive a rename")
+		}
+	})
+}
+
 // TestEditorOnExitHook: with EditorOpts.OnExit set (embedded use), every exit path —
 // clean ctrl+x, discard, and save — runs the hook instead of popping.
 func TestEditorOnExitHook(t *testing.T) {
@@ -610,6 +697,10 @@ func TestEditorOnExitHook(t *testing.T) {
 		s, sh := newEditor(EditorOpts{Path: path, OnExit: hook})
 		typeRunes(s, 'h', 'i')
 		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		// Through the real "y": it is what marks this save as the exit path's, and
+		// so what makes the write end in the hook rather than in a plain save. It
+		// needs the real Shared — the prompt it pushes anchors off the body.
+		s.key(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 		if act := s.saveAsEdit(sh).OnDone(sh, path); act.Msg == nil {
 			t.Fatal("enter on the filename prompt should navigate (pop + save)")
 		}
@@ -638,6 +729,7 @@ func TestEditorSaveAs(t *testing.T) {
 	typeRunes(s, '!')
 
 	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	s.key(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	edit := s.saveAsEdit(sh)
 	if got := edit.input.Value(); got != old {
 		t.Fatalf("the prompt should seed the full path, got %q", got)
@@ -662,6 +754,7 @@ func TestEditorSaveAs(t *testing.T) {
 	scratch, sh2 := newEditor(EditorOpts{})
 	typeRunes(scratch, 'n', 'o')
 	scratch.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	scratch.key(sh2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	edit2 := scratch.saveAsEdit(sh2)
 	if got := edit2.input.Value(); got != "" {
 		t.Fatalf("a scratch buffer's prompt starts empty, got %q", got)

@@ -47,8 +47,9 @@ type EditorScreen struct {
 	title string // title-bar text (defaults to the file's base name, else "Editor")
 	crumb string // breadcrumb segment; defaults to title
 
-	onExit    func(*core.Shared) core.Action // embedded mode: replaces Pop on exit (nil ⇒ Pop)
-	onRelease func(*core.Shared) core.Action // esc: hand the keys back to the host (nil ⇒ esc ignored)
+	onExit    func(*core.Shared) core.Action         // embedded mode: replaces Pop on exit (nil ⇒ Pop)
+	onRelease func(*core.Shared) core.Action         // esc: hand the keys back to the host (nil ⇒ esc ignored)
+	onSaved   func(*core.Shared, string) core.Action // ctrl+s landed: the path written (nil ⇒ nothing)
 
 	lines      [][]rune // the buffer; always at least one (possibly empty) line
 	curY, curX int      // cursor: line index and rune column within it
@@ -58,10 +59,12 @@ type EditorScreen struct {
 
 	dirty       bool // buffer differs from what was loaded/last saved
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
+	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
 
-	hl      Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
-	editSeq int         // bumped at every buffer mutation; hl reparses when hlSeq lags
-	hlSeq   int         // the edit sequence hl last parsed (-1 ⇒ never)
+	hl         Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
+	hlExplicit bool        // hl came from EditorOpts, not the registry: a rename must not replace it
+	editSeq    int         // bumped at every buffer mutation; hl reparses when hlSeq lags
+	hlSeq      int         // the edit sequence hl last parsed (-1 ⇒ never)
 
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
@@ -93,6 +96,15 @@ type EditorScreen struct {
 // a bare esc that popped the host would be a trap). The exit prompt keeps its own
 // esc = cancel: that branch runs first.
 //
+// OnSaved, when set, is called after a successful ctrl+s — the save that does NOT
+// exit — with the path actually written, which is the typed one when the save-as box
+// was pointed somewhere new. It is how a host keeps its own bookkeeping in step with a
+// buffer that renamed itself under it (a path-keyed open-file map, a doc list that has
+// a new file in it now). The exit prompt's save does not call it: that path ends in
+// OnExit, which the host is already handling. Left nil, a save is silent — the title
+// bar dropping its [+] marker is the only feedback, which is all a standalone editor
+// needs.
+//
 // Border draws the shared frame (the ScrollContainer look) with the title as its
 // top-edge legend instead of the title bar, the same opt-in ListPanelOpts.Border
 // carries: which chrome an instance wears is the composing caller's choice, not the
@@ -115,6 +127,7 @@ type EditorOpts struct {
 	Border      bool
 	OnExit      func(*core.Shared) core.Action
 	OnRelease   func(*core.Shared) core.Action
+	OnSaved     func(*core.Shared, string) core.Action
 	Highlighter Highlighter
 }
 
@@ -211,21 +224,23 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 	if crumb == "" {
 		crumb = title
 	}
-	hl := opts.Highlighter
+	hl, hlExplicit := opts.Highlighter, opts.Highlighter != nil
 	if hl == nil {
 		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
 	}
 	return &EditorScreen{
-		path:      opts.Path,
-		title:     title,
-		crumb:     crumb,
-		onExit:    opts.OnExit,
-		onRelease: opts.OnRelease,
-		lines:     [][]rune{{}},
-		bordered:  opts.Border,
-		focused:   true, // standalone the editor is always focused; a panel blurs it
-		hl:        hl,
-		hlSeq:     -1, // nothing parsed yet, even before the first edit
+		path:       opts.Path,
+		title:      title,
+		crumb:      crumb,
+		onExit:     opts.OnExit,
+		onRelease:  opts.OnRelease,
+		onSaved:    opts.OnSaved,
+		lines:      [][]rune{{}},
+		bordered:   opts.Border,
+		focused:    true, // standalone the editor is always focused; a panel blurs it
+		hl:         hl,
+		hlExplicit: hlExplicit,
+		hlSeq:      -1, // nothing parsed yet, even before the first edit
 	}
 }
 
@@ -314,7 +329,16 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		}
 		s.dirty = false
 		s.confirmExit = false
-		return s, s.exit(sh)
+		// Where a save lands depends on which key started it: the exit prompt's save
+		// is the last step of leaving, ctrl+s is a checkpoint that keeps the buffer,
+		// its cursor and its scroll exactly where they were.
+		if s.saveExits {
+			return s, s.exit(sh)
+		}
+		if s.onSaved != nil {
+			return s, s.onSaved(sh, s.path)
+		}
+		return s, core.Action{}
 	case tea.KeyMsg:
 		return s.key(sh, m)
 	case tea.MouseMsg:
@@ -354,6 +378,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
+			s.saveExits = true
 			return s, core.Push(s.saveAsEdit(sh))
 		case "n", "N":
 			s.confirmExit = false
@@ -369,6 +394,13 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			return s, s.exit(sh)
 		}
 		s.confirmExit = true
+	case "ctrl+s":
+		// The same save-as box the exit prompt's "y" raises, minus the exit: enter on
+		// the prefilled path is a plain save, editing it is a save-as that the buffer
+		// then belongs to. Offered even on a clean buffer — that is what makes it the
+		// way to fork a doc to a new name.
+		s.saveExits = false
+		return s, core.Push(s.saveAsEdit(sh))
 	case "esc":
 		if s.onRelease != nil {
 			return s, s.onRelease(sh)
@@ -976,6 +1008,7 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 		})
 	}
 	hints := []key.Binding{
+		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
 	}
 	if s.onRelease != nil {
@@ -1012,12 +1045,14 @@ func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 
 // ---------- save ----------
 
-// saveAsEdit builds the filename prompt "y" pushes: a floating line edit seeded
-// with the buffer's full path (an unchanged enter re-saves the same file), its
-// input row covering the y/n/c prompt row — nano's "File Name to Write". Enter
-// saves under the typed name (a different name is a save-as: the buffer takes the
-// new path and title); a blank entry or esc pops back to the prompt, which stays
-// up. A relative name resolves against the process CWD, nano's rule.
+// saveAsEdit builds the filename prompt both save keys push — the exit prompt's "y"
+// and ctrl+s — a floating line edit seeded with the buffer's full path (an unchanged
+// enter re-saves the same file), its input row covering the y/n/c prompt row — nano's
+// "File Name to Write". Enter saves under the typed name (a different name is a
+// save-as: the buffer takes the new path and title); a blank entry or esc pops back to
+// whatever raised it, so from the exit prompt that prompt is still up and from ctrl+s
+// nothing happened. A relative name resolves against the process CWD, nano's rule.
+// saveExits, set by the caller before the push, is what decides where the write lands.
 //
 // The anchor covers the bottom of just this editor: embedded, the host layout
 // pushes the pane's absolute origin and the box spans the pane's width (SetPaneOrigin);
@@ -1055,16 +1090,25 @@ func (s *EditorScreen) paneW() int {
 }
 
 // applySaveName points the buffer at name: a save-as renames it, so the title bar
-// and crumb follow the new base name.
+// and crumb follow the new base name — and so does the syntax coloring, since the
+// extension is what picks it. Only a registry-chosen highlighter is re-picked: one
+// passed through EditorOpts was a deliberate override and a rename must not undo it.
+// hlSeq is reset rather than bumped because the new highlighter has parsed nothing.
 func (s *EditorScreen) applySaveName(name string) {
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
+	if !s.hlExplicit {
+		s.hl = lookupHighlighter(strings.ToLower(filepath.Ext(name)))
+		s.hlSeq = -1
+	}
 }
 
 // saveCmd snapshots the buffer and writes it to Path asynchronously (IO in the cmd
 // lane); the result arrives as an editorSavedMsg. An empty path is an error — a
-// scratch buffer has nowhere to save to.
+// scratch buffer has nowhere to save to. Parent directories are created: a save-as
+// names a LOCATION, and refusing one because a folder in it doesn't exist yet would
+// make the box ask for something it won't accept.
 func (s *EditorScreen) saveCmd() tea.Cmd {
 	path := s.path
 	var b strings.Builder
@@ -1078,6 +1122,11 @@ func (s *EditorScreen) saveCmd() tea.Cmd {
 	return func() tea.Msg {
 		if path == "" {
 			return editorSavedMsg{err: errors.New("no file path")}
+		}
+		if dir := filepath.Dir(path); dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return editorSavedMsg{err: err}
+			}
 		}
 		return editorSavedMsg{err: os.WriteFile(path, []byte(content), 0o644)}
 	}
