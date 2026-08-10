@@ -80,9 +80,15 @@ func (s *PickerScreen) PopStop() bool { return s.popStop }
 // Terminal key opens a terminal there. Empty dir ⇒ no locator (the key falls through).
 func (s *PickerScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 
-// Receive lets a picker rebuild its rows on a PropagateAll broadcast when a Refresh
-// closure is configured; without one it's a no-op (the common case).
+// Receive restyles the live list on a theme broadcast: bubbles caches both its
+// delegate and list styles, so changing core's palette alone does not repaint a
+// picker already on the navigation stack. It also lets a picker rebuild its rows
+// on any broadcast claimed by a configured Refresh closure.
 func (s *PickerScreen) Receive(sh *core.Shared, payload any) core.Action {
+	if _, ok := payload.(core.MsgThemeChanged); ok {
+		s.list.SetDelegate(core.NewDelegate())
+		core.StyleList(&s.list)
+	}
 	if s.refresh != nil {
 		if items, ok := s.refresh(sh, payload); ok {
 			s.list.SetItems(items)

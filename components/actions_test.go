@@ -90,6 +90,29 @@ func TestActionsMenuRowActions(t *testing.T) {
 	}
 }
 
+// TestActionsMenuRestylesInPlace pins the nested theme-picker flow: the Actions
+// menu remains live underneath the picker, so it must consume the theme broadcast
+// and repaint without requiring the user to back out and reopen it.
+func TestActionsMenuRestylesInPlace(t *testing.T) {
+	prev := core.CurrentTheme()
+	t.Cleanup(func() { core.SetTheme(prev) })
+
+	core.SetTheme("godot")
+	s := NewActionsMenu(fakeHooks(SelfUpdateInfo{}, nil), "rescan things",
+		func(*core.Shared) core.Action { return core.Action{} }, nil)
+	s.SetSize(core.NewShared(nil), 80, 24)
+
+	core.SetTheme("mono")
+	s.Receive(core.NewShared(nil), core.MsgThemeChanged{})
+	fresh := NewActionsMenu(fakeHooks(SelfUpdateInfo{}, nil), "rescan things",
+		func(*core.Shared) core.Action { return core.Action{} }, nil)
+	fresh.SetSize(core.NewShared(nil), 80, 24)
+
+	if got, want := s.View(nil), fresh.View(nil); got != want {
+		t.Fatalf("live Actions menu did not repaint like a newly themed menu\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // TestDocsItem pins the standard row's shape: no pages, no row; the desc is the
 // lowercased page titles, capped at four topics with a trailing ellipsis.
 func TestDocsItem(t *testing.T) {
