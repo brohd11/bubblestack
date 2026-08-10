@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brohd11/bubblestack/core"
+
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -96,4 +99,75 @@ func TestCompactListPanelRowsAndPagination(t *testing.T) {
 	if v := p.View(false); !strings.Contains(v, "doc0.md  notes/") {
 		t.Fatalf("compact row should place suffix on the title line, got:\n%s", v)
 	}
+}
+
+func TestBorderedListPanelMouseRows(t *testing.T) {
+	sh := core.NewShared(nil)
+	click := func(y int) tea.MouseMsg {
+		return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: y}
+	}
+
+	t.Run("compact", func(t *testing.T) {
+		items := []list.Item{
+			compactTestItem{title: "zero"},
+			compactTestItem{title: "one"},
+			compactTestItem{title: "two"},
+			compactTestItem{title: "three"},
+		}
+		picked := ""
+		p := NewCompactListPanel(items, "Docs", ListPanelOpts{
+			Border: true,
+			OnSelect: func(_ *core.Shared, item list.Item) core.Action {
+				picked = item.(compactTestItem).title
+				return core.Action{}
+			},
+		})
+		p.SetSize(30, 8)
+		p.Focus()
+
+		for _, y := range []int{0, 1} { // frame, then the list's filter/title row
+			picked = ""
+			p.UpdatePanel(sh, click(y))
+			if picked != "" {
+				t.Fatalf("panel row %d should not pick an item, picked %q", y, picked)
+			}
+		}
+		for y, want := range map[int]string{2: "zero", 3: "one", 4: "two"} {
+			picked = ""
+			p.UpdatePanel(sh, click(y))
+			if picked != want {
+				t.Fatalf("panel row %d picked %q, want %q", y, picked, want)
+			}
+		}
+
+		// Select moves the paginator to page two. Its first item occupies the
+		// same rendered row as page one's first item.
+		p.List().Select(p.List().Paginator.PerPage)
+		picked = ""
+		p.UpdatePanel(sh, click(2))
+		if picked != "three" {
+			t.Fatalf("page-two first row picked %q, want three", picked)
+		}
+	})
+
+	t.Run("standard", func(t *testing.T) {
+		items := []list.Item{Item{Name: "zero"}, Item{Name: "one"}}
+		picked := ""
+		p := NewListPanel(items, "Docs", ListPanelOpts{
+			Border: true,
+			OnSelect: func(_ *core.Shared, item list.Item) core.Action {
+				picked = item.(Item).Name
+				return core.Action{}
+			},
+		})
+		p.SetSize(30, 12)
+		p.Focus()
+		for y, want := range map[int]string{2: "zero", 5: "one"} {
+			picked = ""
+			p.UpdatePanel(sh, click(y))
+			if picked != want {
+				t.Fatalf("panel row %d picked %q, want %q", y, picked, want)
+			}
+		}
+	})
 }

@@ -20,8 +20,9 @@ import (
 // lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
 // three-way prompt when the buffer is dirty (n = discard & exit, esc/c = cancel, and
 // y = a filename prompt seeded with the current name — nano's "File Name to Write",
-// so saving under a different name is a save-as). Enter splits lines, tab (or
-// shift+tab) inserts a tab, the arrows
+// so saving under a different name is a save-as). Enter splits lines (and may be
+// extended by a handler registered for the file type), tab (or shift+tab) inserts a
+// tab, the arrows
 // move the cursor, and a left click places it. The wheel scrolls the view without
 // moving the cursor (a cursor move then snaps the view back to it), and when the
 // buffer overflows the viewport a proportional scrollbar takes the rightmost column.
@@ -62,10 +63,11 @@ type EditorScreen struct {
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
 
-	hl         Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
-	hlExplicit bool        // hl came from EditorOpts, not the registry: a rename must not replace it
-	editSeq    int         // bumped at every buffer mutation; hl reparses when hlSeq lags
-	hlSeq      int         // the edit sequence hl last parsed (-1 ⇒ never)
+	hl         Highlighter      // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
+	hlExplicit bool             // hl came from EditorOpts, not the registry: a rename must not replace it
+	editSeq    int              // bumped at every buffer mutation; hl reparses when hlSeq lags
+	hlSeq      int              // the edit sequence hl last parsed (-1 ⇒ never)
+	keyHandler editorKeyHandler // file-type-specific key diversion; nil ⇒ ordinary editing
 
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
@@ -254,6 +256,7 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		focused:    true, // standalone the editor is always focused; a panel blurs it
 		hl:         hl,
 		hlExplicit: hlExplicit,
+		keyHandler: lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
 		hlSeq:      -1,   // nothing parsed yet, even before the first edit
 		wrapDirty:  true, // no rows measured yet, even before the first edit
 	}
@@ -379,8 +382,10 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	return s, core.Action{}
 }
 
-// key routes one keystroke. Editor-local keys are matched as raw strings: ctrl+x /
-// tab / enter are this screen's own keys with no core.Keys binding, and the arrows
+// key routes one keystroke. After the exit prompt, a handler registered for the
+// buffer's file extension gets first refusal; returning false preserves every default
+// below. Editor-local keys are matched as raw strings: ctrl+x / tab / enter are this
+// screen's own keys with no core.Keys binding, and the arrows
 // match only the raw keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry
 // — those letters must stay typable). The word/line editing combos mirror
 // bubbles/textinput's KeyMap verbatim (alt+←→ word jumps, alt+⌫ word delete,
@@ -401,6 +406,11 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		case "esc", "c":
 			s.confirmExit = false
 		}
+		return s, core.Action{}
+	}
+	if s.keyHandler != nil && s.keyHandler(s, m) {
+		s.wrapDirty = true
+		s.clampScroll()
 		return s, core.Action{}
 	}
 	switch k {
@@ -1414,17 +1424,19 @@ func (s *EditorScreen) paneW() int {
 	return w
 }
 
-// applySaveName points the buffer at name: a save-as renames it, so the title bar
-// and crumb follow the new base name — and so does the syntax coloring, since the
-// extension is what picks it. Only a registry-chosen highlighter is re-picked: one
-// passed through EditorOpts was a deliberate override and a rename must not undo it.
-// hlSeq is reset rather than bumped because the new highlighter has parsed nothing.
+// applySaveName points the buffer at name: a save-as renames it, so the title bar,
+// crumb, file-type key handler and syntax coloring follow the new extension. Only a
+// registry-chosen highlighter is re-picked: one passed through EditorOpts was a
+// deliberate override and a rename must not undo it. hlSeq is reset rather than
+// bumped because the new highlighter has parsed nothing.
 func (s *EditorScreen) applySaveName(name string) {
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
+	ext := strings.ToLower(filepath.Ext(name))
+	s.keyHandler = lookupEditorKeyHandler(ext)
 	if !s.hlExplicit {
-		s.hl = lookupHighlighter(strings.ToLower(filepath.Ext(name)))
+		s.hl = lookupHighlighter(ext)
 		s.hlSeq = -1
 	}
 }

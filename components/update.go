@@ -180,7 +180,14 @@ func listItemAtRows(l *list.Model, relY, itemRows int) (int, bool) {
 	if row < 0 {
 		return 0, false
 	}
-	idx := l.Paginator.Page*l.Paginator.PerPage + row/itemRows
+	pageRow := row / itemRows
+	// The content area is followed by blank fill and/or pagination. Without
+	// this page-local bound, the first row after the page selects the first item
+	// of the next page whenever more visible items exist.
+	if pageRow >= l.Paginator.PerPage {
+		return 0, false
+	}
+	idx := l.Paginator.Page*l.Paginator.PerPage + pageRow
 	if idx < 0 || idx >= len(l.VisibleItems()) {
 		return 0, false
 	}

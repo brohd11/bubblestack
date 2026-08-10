@@ -140,7 +140,14 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		}
 		return core.Action{}, false
 	}
-	return listDispatchRows(sh, &p.list, msg, 0, p.itemRows, onSelect, onKey), true
+	// ModularScreen has already translated a mouse event into panel-local
+	// coordinates. A bordered panel still has its own top frame row before the
+	// inner list, so remove that row as listDispatchRows does its list-local math.
+	mouseYOff := 0
+	if p.bordered {
+		mouseYOff = 1
+	}
+	return listDispatchRows(sh, &p.list, msg, mouseYOff, p.itemRows, onSelect, onKey), true
 }
 
 // PanelHelp contributes the list's select/filter hints plus any caller-supplied

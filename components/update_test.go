@@ -48,6 +48,9 @@ func TestListItemAt(t *testing.T) {
 	}
 
 	// Page two: the same view row names a different item.
+	if _, ok := listItemAt(&l, 1+l.Paginator.PerPage*listItemRows); ok {
+		t.Fatal("the row after the current page must not select the next page")
+	}
 	l.Paginator.Page = 1
 	if got, ok := listItemAt(&l, 1); !ok || got != 7 {
 		t.Errorf("page 1 row 1: got (%d, %v), want (7, true)", got, ok)
@@ -112,6 +115,9 @@ func TestCompactListGeometry(t *testing.T) {
 		if back, ok := listItemAtRows(&l, row, compactListItemRows); !ok || back != idx {
 			t.Fatalf("row %d maps back to (%d, %v), want (%d, true)", row, back, ok, idx)
 		}
+	}
+	if _, ok := listItemAtRows(&l, 1+l.Paginator.PerPage, compactListItemRows); ok {
+		t.Fatal("compact pagination/blank row must not select the next page")
 	}
 	firstNextPage := l.Paginator.PerPage
 	l.Paginator.Page = 1
