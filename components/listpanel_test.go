@@ -1,12 +1,19 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type compactTestItem struct{ title, suffix string }
+
+func (i compactTestItem) Title() string       { return i.title }
+func (i compactTestItem) SuffixText() string  { return i.suffix }
+func (i compactTestItem) FilterValue() string { return i.title }
 
 // TestListPanelBorder: with ListPanelOpts.Border the title moves out of the list's
 // own title bar and into the frame's legend, and the list is sized to the inner run
@@ -69,5 +76,24 @@ func TestListPanelFocusTint(t *testing.T) {
 	}
 	if !strings.HasPrefix(focused, "┌─ Docs ") {
 		t.Fatal("the legend should survive the focused tint")
+	}
+}
+
+func TestCompactListPanelRowsAndPagination(t *testing.T) {
+	items := make([]list.Item, 10)
+	for i := range items {
+		items[i] = compactTestItem{title: fmt.Sprintf("doc%d.md", i), suffix: "notes/"}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	p.SetSize(30, 8)
+
+	if got := p.List().Paginator.PerPage; got != 3 {
+		t.Fatalf("compact per-page count = %d, want 3", got)
+	}
+	if lines := strings.Split(p.View(false), "\n"); len(lines) != 8 {
+		t.Fatalf("compact bordered panel height = %d, want 8", len(lines))
+	}
+	if v := p.View(false); !strings.Contains(v, "doc0.md  notes/") {
+		t.Fatalf("compact row should place suffix on the title line, got:\n%s", v)
 	}
 }

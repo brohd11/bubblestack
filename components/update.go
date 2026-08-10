@@ -63,21 +63,41 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 // a root a root is only the two hooks below.
 func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 	onSelect := func() core.Action {
-		if it, ok := l.SelectedItem().(Item); ok && it.Pick != nil {
+		if pick := itemPick(l.SelectedItem()); pick != nil {
 			sh.ClearStatus()
-			return it.Pick(sh)
+			return pick(sh)
 		}
 		return core.Action{}
 	}
 	onKey := func(k string) (core.Action, bool) {
 		// Let a self-dispatching Item handle its own row keys (e.g. an addon
 		// row's "t" → open terminal); unhandled keys fall through to WrapNav/list.
-		if it, ok := l.SelectedItem().(Item); ok && it.Keys != nil {
-			return it.Keys(sh, k)
+		if keys := itemKeys(l.SelectedItem()); keys != nil {
+			return keys(sh, k)
 		}
 		return core.Action{}, false
 	}
 	return listDispatch(sh, l, msg, sh.BodyY(), onSelect, onKey)
+}
+
+func itemPick(item list.Item) func(*core.Shared) core.Action {
+	switch it := item.(type) {
+	case Item:
+		return it.Pick
+	case CompactItem:
+		return it.Pick
+	}
+	return nil
+}
+
+func itemKeys(item list.Item) func(*core.Shared, string) (core.Action, bool) {
+	switch it := item.(type) {
+	case Item:
+		return it.Keys
+	case CompactItem:
+		return it.Keys
+	}
+	return nil
 }
 
 // listDispatch is the dispatch skeleton shared by RootUpdate and PickerScreen.Update:
@@ -95,9 +115,14 @@ func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 // 0 for a panel whose host already made the coordinates slot-relative.
 func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
+	return listDispatchRows(sh, l, msg, mouseYOff, listItemRows, onSelect, onKey)
+}
+
+func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, itemRows int,
+	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
 	if m, ok := msg.(tea.MouseMsg); ok {
 		if m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
-			if idx, ok := listItemAt(l, m.Y-mouseYOff); ok {
+			if idx, ok := listItemAtRows(l, m.Y-mouseYOff, itemRows); ok {
 				l.Select(idx)
 				return onSelect()
 			}
@@ -137,8 +162,9 @@ func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 // inverses over these; a bubbles upgrade that changes either breaks the tests
 // loudly instead of misplacing clicks and overlays silently.
 const (
-	listItemRows   = 3 // core.NewDelegate: Height 2 + Spacing 1
-	listHeaderRows = 1 // bubbles renders a one-row titleView for NewSelectList lists
+	listItemRows        = 3 // core.NewDelegate: Height 2 + Spacing 1
+	compactListItemRows = 1 // core.CompactDelegate: Height 1 + Spacing 0
+	listHeaderRows      = 1 // bubbles renders a one-row titleView for NewSelectList lists
 )
 
 // listItemAt maps a row within the list's rendered view to a visible-item
@@ -146,11 +172,15 @@ const (
 // below the last item, the pagination row). Select takes a visible-item index
 // and paginates to it, so a click lands even mid-page.
 func listItemAt(l *list.Model, relY int) (int, bool) {
+	return listItemAtRows(l, relY, listItemRows)
+}
+
+func listItemAtRows(l *list.Model, relY, itemRows int) (int, bool) {
 	row := relY - listHeaderRows
 	if row < 0 {
 		return 0, false
 	}
-	idx := l.Paginator.Page*l.Paginator.PerPage + row/listItemRows
+	idx := l.Paginator.Page*l.Paginator.PerPage + row/itemRows
 	if idx < 0 || idx >= len(l.VisibleItems()) {
 		return 0, false
 	}
@@ -165,6 +195,15 @@ func listItemAt(l *list.Model, relY int) (int, bool) {
 // coordinates. ok is false when the item is scrolled off-page; the caller
 // picks the fallback (clamp to a visible row, or center).
 func ListItemRow(l *list.Model, idx int) (int, bool) {
+	return listItemRow(l, idx, listItemRows)
+}
+
+// CompactListItemRow is ListItemRow for NewCompactListPanel's one-row delegate.
+func CompactListItemRow(l *list.Model, idx int) (int, bool) {
+	return listItemRow(l, idx, compactListItemRows)
+}
+
+func listItemRow(l *list.Model, idx, itemRows int) (int, bool) {
 	if idx < 0 || idx >= len(l.VisibleItems()) {
 		return 0, false
 	}
@@ -172,7 +211,7 @@ func ListItemRow(l *list.Model, idx int) (int, bool) {
 	if idx < start || idx >= start+l.Paginator.PerPage {
 		return 0, false
 	}
-	return listHeaderRows + (idx-start)*listItemRows, true
+	return listHeaderRows + (idx-start)*itemRows, true
 }
 
 // WrapNav wraps the cursor at a list boundary: up on the first row selects the

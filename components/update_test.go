@@ -92,3 +92,30 @@ func TestListItemRow(t *testing.T) {
 		t.Errorf("page 1 idx 7: got (%d, %v), want (1, true)", got, ok)
 	}
 }
+
+func TestCompactListGeometry(t *testing.T) {
+	items := make([]list.Item, 10)
+	for i := range items {
+		items[i] = compactTestItem{title: fmt.Sprintf("item %d", i)}
+	}
+	l := core.NewCompactList(items, "Title")
+	l.SetSize(80, 8)
+
+	if got := l.Paginator.PerPage; got != 4 {
+		t.Fatalf("compact PerPage = %d, want 4", got)
+	}
+	for idx := 0; idx < l.Paginator.PerPage; idx++ {
+		row, ok := CompactListItemRow(&l, idx)
+		if !ok || row != 1+idx {
+			t.Fatalf("idx %d row = (%d, %v), want (%d, true)", idx, row, ok, 1+idx)
+		}
+		if back, ok := listItemAtRows(&l, row, compactListItemRows); !ok || back != idx {
+			t.Fatalf("row %d maps back to (%d, %v), want (%d, true)", row, back, ok, idx)
+		}
+	}
+	firstNextPage := l.Paginator.PerPage
+	l.Paginator.Page = 1
+	if row, ok := CompactListItemRow(&l, firstNextPage); !ok || row != 1 {
+		t.Fatalf("page-two first row = (%d, %v), want (1, true)", row, ok)
+	}
+}

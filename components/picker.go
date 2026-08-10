@@ -107,8 +107,8 @@ func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			return s.OnSelect(sh, s.list.SelectedItem())
 		}
 		// No screen-level handler: let a self-dispatching Item pick itself.
-		if it, ok := s.list.SelectedItem().(Item); ok && it.Pick != nil {
-			return it.Pick(sh)
+		if pick := itemPick(s.list.SelectedItem()); pick != nil {
+			return pick(sh)
 		}
 		return core.Action{}
 	}
@@ -121,8 +121,8 @@ func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			// doesn't handle one, the key falls to WrapNav, not to the Item's Keys.
 			return s.OnKey(sh, k, s.list.SelectedItem())
 		}
-		if it, ok := s.list.SelectedItem().(Item); ok && it.Keys != nil {
-			return it.Keys(sh, k)
+		if keys := itemKeys(s.list.SelectedItem()); keys != nil {
+			return keys(sh, k)
 		}
 		return core.Action{}, false
 	}

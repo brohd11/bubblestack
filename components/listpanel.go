@@ -26,6 +26,7 @@ type ListPanel struct {
 	title    string // kept for the border legend (the list's own title bar is off when bordered)
 	bordered bool   // ListPanelOpts.Border: draw the shared frame
 	width    int    // outer cell width, for the frame's inner run
+	itemRows int    // delegate height + spacing; drives mouse and overlay geometry
 }
 
 var _ Panel = (*ListPanel)(nil)
@@ -55,17 +56,33 @@ type ListPanelOpts struct {
 
 // NewListPanel builds a sidebar list with the shared select-list styling.
 func NewListPanel(items []list.Item, title string, opts ListPanelOpts) *ListPanel {
+	return newListPanel(core.NewSelectList, items, title, opts, listItemRows)
+}
+
+// CompactListPanel is the single-line ListPanel variant. It preserves the panel's
+// selection, filtering, help, mouse, wrapping, border, and pagination behavior.
+type CompactListPanel struct{ *ListPanel }
+
+var _ Panel = (*CompactListPanel)(nil)
+
+// NewCompactListPanel builds a sidebar whose items implement core.SuffixItem.
+func NewCompactListPanel(items []list.Item, title string, opts ListPanelOpts) *CompactListPanel {
+	return &CompactListPanel{newListPanel(core.NewCompactList, items, title, opts, compactListItemRows)}
+}
+
+func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, items []list.Item, title string, opts ListPanelOpts, itemRows int) *ListPanel {
 	listTitle := title
 	if opts.Border {
 		listTitle = "" // the title moves to the border legend; an empty one hides the bar
 	}
 	return &ListPanel{
-		list:     core.NewSelectList(items, listTitle, opts.Help...),
+		list:     build(items, listTitle, opts.Help...),
 		onSelect: opts.OnSelect,
 		onKey:    opts.OnKey,
 		help:     opts.Help,
 		title:    title,
 		bordered: opts.Border,
+		itemRows: itemRows,
 	}
 }
 
@@ -109,8 +126,8 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 			return p.onSelect(sh, p.list.SelectedItem())
 		}
 		// No panel-level handler: let a self-dispatching Item pick itself.
-		if it, ok := p.list.SelectedItem().(Item); ok && it.Pick != nil {
-			return it.Pick(sh)
+		if pick := itemPick(p.list.SelectedItem()); pick != nil {
+			return pick(sh)
 		}
 		return core.Action{}
 	}
@@ -118,12 +135,12 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		if p.onKey != nil {
 			return p.onKey(sh, k, p.list.SelectedItem())
 		}
-		if it, ok := p.list.SelectedItem().(Item); ok && it.Keys != nil {
-			return it.Keys(sh, k)
+		if keys := itemKeys(p.list.SelectedItem()); keys != nil {
+			return keys(sh, k)
 		}
 		return core.Action{}, false
 	}
-	return listDispatch(sh, &p.list, msg, 0, onSelect, onKey), true
+	return listDispatchRows(sh, &p.list, msg, 0, p.itemRows, onSelect, onKey), true
 }
 
 // PanelHelp contributes the list's select/filter hints plus any caller-supplied

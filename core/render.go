@@ -1,11 +1,15 @@
 package core
 
 import (
+	"fmt"
+	"io"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---------- header ----------
@@ -140,7 +144,26 @@ func HelpView(l list.Model) string {
 // separately, esc/enter hints) for the versions and submenu screens. It's sized
 // to zero; the owning screen's SetSize gives it real dimensions.
 func NewSelectList(items []list.Item, title string, extra ...key.Binding) list.Model {
-	l := list.New(items, NewDelegate(), 0, 0)
+	return newSelectList(items, title, NewDelegate(), extra...)
+}
+
+// SuffixItem is the row contract for a compact list. Title is the primary value;
+// SuffixText is optional context rendered after it in the theme's muted color.
+type SuffixItem interface {
+	list.Item
+	Title() string
+	SuffixText() string
+}
+
+// NewCompactList builds the single-line counterpart of NewSelectList. It keeps
+// the same title, filtering, keymap, help, and pagination behavior; only the row
+// delegate changes to a one-cell-high title plus optional muted suffix.
+func NewCompactList(items []list.Item, title string, extra ...key.Binding) list.Model {
+	return newSelectList(items, title, CompactDelegate{}, extra...)
+}
+
+func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, extra ...key.Binding) list.Model {
+	l := list.New(items, delegate, 0, 0)
 	if title != "" {
 		l.Title = title
 	} else {
@@ -156,6 +179,60 @@ func NewSelectList(items []list.Item, title string, extra ...key.Binding) list.M
 	l.AdditionalShortHelpKeys = keys
 	l.AdditionalFullHelpKeys = keys
 	return l
+}
+
+// CompactDelegate renders one item per terminal row with no inter-item spacing.
+// The title is given width priority; any suffix is fitted into the cells left over.
+type CompactDelegate struct{}
+
+func (CompactDelegate) Height() int                         { return 1 }
+func (CompactDelegate) Spacing() int                        { return 0 }
+func (CompactDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+
+func (CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	i, ok := item.(SuffixItem)
+	if !ok || m.Width() <= 0 {
+		return
+	}
+
+	styles := list.NewDefaultItemStyles()
+	styles.SelectedTitle = styles.SelectedTitle.Foreground(FocusedColor).BorderForeground(FocusedColor)
+	styles.NormalDesc = styles.NormalDesc.Foreground(MutedColor)
+	styles.DimmedDesc = styles.DimmedDesc.Foreground(MutedColor)
+
+	textWidth := m.Width() - styles.NormalTitle.GetPaddingLeft() - styles.NormalTitle.GetPaddingRight()
+	if textWidth < 1 {
+		textWidth = 1
+	}
+	title := ansi.Truncate(i.Title(), textWidth, "…")
+	suffix := ""
+	if raw := i.SuffixText(); raw != "" {
+		remaining := textWidth - lipgloss.Width(title) - 2
+		if remaining > 0 {
+			suffix = "  " + ansi.Truncate(raw, remaining, "…")
+		}
+	}
+
+	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
+	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
+	isSelected := index == m.Index() && m.FilterState() != list.Filtering
+
+	titleStyle := styles.NormalTitle
+	if emptyFilter {
+		titleStyle = styles.DimmedTitle
+	} else if isSelected {
+		titleStyle = styles.SelectedTitle
+	}
+	if isFiltered && !emptyFilter && index < len(m.VisibleItems()) {
+		matched := titleStyle.Inline(true).Inherit(styles.FilterMatch)
+		title = lipgloss.StyleRunes(title, m.MatchesForItem(index), matched, titleStyle.Inline(true))
+	}
+
+	muted := lipgloss.NewStyle().Foreground(MutedColor)
+	if emptyFilter {
+		muted = styles.DimmedDesc.Inline(true)
+	}
+	fmt.Fprint(w, titleStyle.Render(title)+muted.Render(suffix)) //nolint:errcheck
 }
 
 // newDelegate is the shared list delegate with brightened description text and the

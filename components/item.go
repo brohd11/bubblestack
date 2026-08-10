@@ -20,6 +20,23 @@ type Item struct {
 	Keys               func(*core.Shared, string) (core.Action, bool)
 }
 
+// CompactItem is Item's single-line counterpart for NewCompactListPanel. Suffix
+// is optional context rendered after Name in the muted theme color.
+type CompactItem struct {
+	Name, Suffix, Filter string
+	Pick                 func(*core.Shared) core.Action
+	Keys                 func(*core.Shared, string) (core.Action, bool)
+}
+
+func (i CompactItem) Title() string      { return i.Name }
+func (i CompactItem) SuffixText() string { return i.Suffix }
+func (i CompactItem) FilterValue() string {
+	if i.Filter != "" {
+		return i.Filter
+	}
+	return i.Name
+}
+
 func (i Item) Title() string       { return i.Name }
 func (i Item) Description() string { return i.Desc }
 func (i Item) FilterValue() string {
