@@ -11,6 +11,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -22,8 +23,8 @@ import (
 // y = a filename prompt seeded with the current name — nano's "File Name to Write",
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
-// tab, the arrows
-// move the cursor, and a left click places it. The wheel scrolls the view without
+// tab, the arrows move the cursor, and a left click places it. Dragging selects the
+// swept character cells and copies them to the system clipboard on release. The wheel scrolls the view without
 // moving the cursor (a cursor move then snaps the view back to it), and when the
 // buffer overflows the viewport a proportional scrollbar takes the rightmost column.
 //
@@ -42,8 +43,7 @@ import (
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
 // because tabs have to be stored raw but never rendered raw (see expandLine).
-// Deliberately minimal: no soft-wrap (long lines scroll horizontally), no cut/paste,
-// no search.
+// Deliberately minimal: no keyboard cut/paste and no search.
 type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
@@ -83,7 +83,15 @@ type EditorScreen struct {
 	wrapRows  []wrapRow // the wrapped display rows scrY indexes while wrap is on
 	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
 	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
+
+	dragging                  bool    // a left-button gesture is active
+	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
+	selStart, selEnd          textPos // normalized half-open selected buffer range
 }
+
+// textPos is an insertion position in the rune buffer. Selection ranges are stored as
+// [start,end); mouse endpoint cells are converted to these positions before sorting.
+type textPos struct{ y, x int }
 
 // wrapRow is one display row of a soft-wrapped buffer line: the half-open chunk
 // [start, end) of that line's display cells (expandLine's output) the row shows. Every
@@ -155,6 +163,14 @@ type editorLoadedMsg struct {
 
 // editorSavedMsg carries the async write from the exit prompt back to Update.
 type editorSavedMsg struct{ err error }
+
+// editorCopiedMsg reports the asynchronous system-clipboard write.
+type editorCopiedMsg struct {
+	n   int
+	err error
+}
+
+var writeEditorClipboard = clipboard.WriteAll
 
 var (
 	editorCursorStyle = lipgloss.NewStyle().Reverse(true)
@@ -357,24 +373,41 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			return s, s.onSaved(sh, s.path)
 		}
 		return s, core.Action{}
+	case editorCopiedMsg:
+		if m.err != nil {
+			return s, core.SetStatusAndLog("copy failed: " + m.err.Error())
+		}
+		return s, core.SetStatus(fmt.Sprintf("copied %d characters", m.n))
 	case tea.KeyMsg:
 		return s.key(sh, m)
 	case tea.MouseMsg:
-		if s.confirmExit || m.Action != tea.MouseActionPress {
+		if s.confirmExit {
 			return s, core.Action{}
 		}
-		switch m.Button {
-		case tea.MouseButtonLeft:
-			s.clickAt(sh, m.X, m.Y)
-		case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
-			// The wheel is browse-only and only while focused: mouse msgs are
-			// broadcast to every pane, so an unfocused editor must not roll.
-			if s.focused {
-				if m.Button == tea.MouseButtonWheelUp {
-					s.scrollLines(-editorWheelStep)
-				} else {
-					s.scrollLines(editorWheelStep)
+		if m.Action == tea.MouseActionPress {
+			switch m.Button {
+			case tea.MouseButtonLeft:
+				s.startDrag(sh, m.X, m.Y)
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+				// The wheel is browse-only and only while focused: mouse msgs are
+				// broadcast to every pane, so an unfocused editor must not roll.
+				if s.focused {
+					if m.Button == tea.MouseButtonWheelUp {
+						s.scrollLines(-editorWheelStep)
+					} else {
+						s.scrollLines(editorWheelStep)
+					}
 				}
+			}
+		} else if s.dragging && m.Action == tea.MouseActionMotion {
+			s.extendDrag(sh, m.X, m.Y)
+		} else if s.dragging && m.Action == tea.MouseActionRelease {
+			s.extendDrag(sh, m.X, m.Y)
+			s.dragging = false
+			if text := s.selectedText(); text != "" {
+				return s, core.Async(func() tea.Msg {
+					return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text)}
+				})
 			}
 		}
 		return s, core.Action{}
@@ -395,6 +428,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 // shouldn't do nothing here.
 func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
 	k := m.String()
+	s.dragging = false
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
@@ -407,6 +441,25 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			s.confirmExit = false
 		}
 		return s, core.Action{}
+	}
+	if s.selectionActive() {
+		switch k {
+		case "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
+			"alt+delete", "alt+d", "ctrl+u", "ctrl+k":
+			s.deleteSelection()
+			s.wrapDirty = true
+			s.clampScroll()
+			return s, core.Action{}
+		case "tab", "shift+tab", "enter":
+			s.deleteSelection()
+		case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
+			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
+			s.clearSelection()
+		default:
+			if len(m.Runes) > 0 {
+				s.deleteSelection()
+			}
+		}
 	}
 	if s.keyHandler != nil && s.keyHandler(s, m) {
 		s.wrapDirty = true
@@ -490,6 +543,8 @@ func (s *EditorScreen) setContent(content string) {
 	}
 	s.curY, s.curX, s.wantX = 0, 0, 0
 	s.scrY, s.scrX = 0, 0
+	s.dragging = false
+	s.clearSelection()
 	s.dirty = false
 	s.editSeq++ // the buffer changed even though the load is clean: reparse
 	s.wrapDirty = true
@@ -686,27 +741,40 @@ func (s *EditorScreen) moveVertical(delta int) {
 	}
 }
 
-// clickAt maps a left press to a buffer position: the offsets (see insetX/insetY)
-// come off first, then the scroll offsets turn viewport cells into buffer coordinates
-// (the column via colAtCell, since clicks land in display cells but curX counts
-// runes), clamped to the line. A click left of the body reads as column 0; one above
-// it is ignored.
-func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
+// positionAt maps a mouse cell to a buffer position. Drag events may arrive beyond
+// the pane because ModularScreen keeps the gesture with its originating slot; clamp
+// keeps those endpoints on the nearest visible text cell without scrolling.
+func (s *EditorScreen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, bool) {
 	if x -= s.insetX(); x < 0 {
-		x = 0
+		x = 0 // a press left of text reads as column zero, preserving click behavior
 	}
 	if s.barVisible() && x >= s.textW() {
-		return // the scrollbar column carries no buffer position
+		if !clamp {
+			return textPos{}, false // a press/release on the scrollbar is not buffer text
+		}
+		x = s.textW() - 1
 	}
 	if x -= s.numGutterWidth(); x < 0 {
 		x = 0 // a click on the line number reads as column 0, as one left of the body does
+	}
+	if x >= s.contentW() {
+		x = s.contentW() - 1
 	}
 	rel := y - s.insetY()
 	if !s.embedded {
 		rel -= sh.BodyY() // absolute coordinates: the chrome rows come off too
 	}
 	if rel < 0 {
-		return
+		if !clamp {
+			return textPos{}, false
+		}
+		rel = 0
+	}
+	if rel >= s.h {
+		if !clamp {
+			return textPos{}, false
+		}
+		rel = s.h - 1
 	}
 	row, cell := s.scrY+rel, s.scrX+x
 	if s.wrap {
@@ -719,8 +787,97 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 		row = len(s.lines) - 1
 	}
 	col := colAtCell(s.lines[row], cell)
-	s.curY, s.curX, s.wantX = row, col, col
+	return textPos{row, col}, true
+}
+
+// clickAt preserves the editor's original single-click behavior. It is kept as a
+// small wrapper because tests and callers inside this package use it directly.
+func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
+	p, ok := s.positionAt(sh, x, y, false)
+	if !ok {
+		return
+	}
+	s.dragging = false
+	s.clearSelection()
+	s.curY, s.curX, s.wantX = p.y, p.x, p.x
 	s.clampScroll()
+}
+
+func (s *EditorScreen) startDrag(sh *core.Shared, x, y int) {
+	s.clickAt(sh, x, y)
+	p, ok := s.positionAt(sh, x, y, false)
+	if !ok {
+		return
+	}
+	s.dragAnchor = p
+	s.dragAnchorEnd = s.cellEnd(p)
+	s.dragging = true
+}
+
+func (s *EditorScreen) extendDrag(sh *core.Shared, x, y int) {
+	p, ok := s.positionAt(sh, x, y, true)
+	if !ok {
+		return
+	}
+	if p == s.dragAnchor {
+		s.clearSelection()
+		s.curY, s.curX, s.wantX = p.y, p.x, p.x
+		return
+	}
+	end := s.cellEnd(p)
+	if posLess(p, s.dragAnchor) {
+		s.selStart, s.selEnd = p, s.dragAnchorEnd
+		s.curY, s.curX = p.y, p.x
+	} else {
+		s.selStart, s.selEnd = s.dragAnchor, end
+		s.curY, s.curX = end.y, end.x
+	}
+	if !posLess(s.selStart, s.selEnd) {
+		s.clearSelection()
+	}
+	s.wantX = s.curX
+	s.clampScrollBounds()
+}
+
+func (s *EditorScreen) cellEnd(p textPos) textPos {
+	if p.x < len(s.lines[p.y]) {
+		return textPos{p.y, p.x + 1}
+	}
+	return p
+}
+
+func posLess(a, b textPos) bool { return a.y < b.y || a.y == b.y && a.x < b.x }
+
+func (s *EditorScreen) selectionActive() bool { return posLess(s.selStart, s.selEnd) }
+
+func (s *EditorScreen) clearSelection() { s.selStart, s.selEnd = textPos{}, textPos{} }
+
+func (s *EditorScreen) deleteSelection() {
+	if !s.selectionActive() {
+		return
+	}
+	start := s.selStart
+	s.deleteRange(start.y, start.x, s.selEnd.y, s.selEnd.x)
+	s.curY, s.curX, s.wantX = start.y, start.x, start.x
+	s.clearSelection()
+}
+
+func (s *EditorScreen) selectedText() string {
+	if !s.selectionActive() {
+		return ""
+	}
+	if s.selStart.y == s.selEnd.y {
+		return string(s.lines[s.selStart.y][s.selStart.x:s.selEnd.x])
+	}
+	var b strings.Builder
+	b.WriteString(string(s.lines[s.selStart.y][s.selStart.x:]))
+	for y := s.selStart.y + 1; y < s.selEnd.y; y++ {
+		b.WriteByte('\n')
+		b.WriteString(string(s.lines[y]))
+	}
+	b.WriteByte('\n')
+	b.WriteString(string(s.lines[s.selEnd.y][:s.selEnd.x]))
+	return b.String()
 }
 
 // scrollLines moves the viewport delta lines without touching the caret — the
@@ -1080,31 +1237,17 @@ func (s *EditorScreen) renderWrappedRow(idx int) string {
 	line := s.lines[r.line]
 	disp := expandLine(line)
 	start, end := min(r.start, len(disp)), min(r.end, len(disp))
-	vis := disp[start:end]
 	num := s.lineNumText(r.line, r.start == 0)
 	// A caret one cell past this chunk is only THIS row's to draw when the line ends
 	// here. Mid-line it belongs to the next row, at its column 0.
 	eol := s.lastRowOfLine(idx)
 
-	if !s.focused {
-		return num + lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
-	}
-	if s.hl != nil {
+	if s.focused && s.hl != nil {
 		if styled, ok := s.renderLineStyled(r.line, start, end, eol); ok {
 			return num + styled
 		}
 	}
-	if r.line != s.curY {
-		return num + string(vis)
-	}
-	c := cellOfCol(line, s.curX) - start
-	if c >= 0 && c < len(vis) {
-		return num + string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
-	}
-	if c == len(vis) && eol {
-		return num + string(vis) + editorCursorStyle.Render(" ")
-	}
-	return num + string(vis)
+	return num + s.renderLinePlain(r.line, start, end, eol)
 }
 
 // lastRowOfLine reports whether display row idx is the final one of its buffer line.
@@ -1138,27 +1281,86 @@ func (s *EditorScreen) renderLine(row int) string {
 	if end > len(disp) {
 		end = len(disp)
 	}
-	vis := disp[start:end]
 	num := s.lineNumText(row, true)
-	if !s.focused {
-		return num + lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
-	}
-	if s.hl != nil {
+	if s.focused && s.hl != nil {
 		if styled, ok := s.renderLineStyled(row, start, end, true); ok {
 			return num + styled
 		}
 	}
-	if row != s.curY {
-		return num + string(vis)
+	return num + s.renderLinePlain(row, start, end, true)
+}
+
+// renderLinePlain applies the muted/unfocused, selection, and caret layers to a
+// display-cell window. Selection is measured in rune columns but converted to cells,
+// so every cell of an expanded tab receives the same background.
+func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
+	disp := expandLine(s.lines[row])
+	vis := disp[start:end]
+	c := -1
+	if s.focused && row == s.curY {
+		c = cellOfCol(s.lines[row], s.curX) - start
 	}
-	c := cellOfCol(s.lines[row], s.curX) - start // clampScroll keeps this within [0, s.contentW())
-	if c >= 0 && c < len(vis) {
-		return num + string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
+	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
+	selected := lipgloss.NewStyle().Background(core.MutedColor).Foreground(core.OnFocusedColor)
+	var b strings.Builder
+	for i := 0; i < len(vis); {
+		if i == c {
+			b.WriteString(editorCursorStyle.Render(string(vis[i])))
+			i++
+			continue
+		}
+		sel := s.cellSelected(row, start+i)
+		j := i + 1
+		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel {
+			j++
+		}
+		style := lipgloss.NewStyle()
+		styled := false
+		if !s.focused {
+			style = muted
+			styled = true
+		}
+		if sel {
+			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
+			styled = true
+		}
+		if styled {
+			b.WriteString(style.Render(string(vis[i:j])))
+		} else {
+			b.WriteString(string(vis[i:j]))
+		}
+		i = j
 	}
-	if c == len(vis) { // end of line, inside the window
-		return num + string(vis) + editorCursorStyle.Render(" ")
+	if eol && end-start < s.contentW() {
+		switch {
+		case c == len(vis):
+			b.WriteString(editorCursorStyle.Render(" "))
+		case s.newlineSelected(row):
+			b.WriteString(selected.Render(" "))
+		}
 	}
-	return num + string(vis) // the caret is off the window (browse mode): draw none
+	return b.String()
+}
+
+func (s *EditorScreen) cellSelected(row, cell int) bool {
+	if !s.selectionActive() || row < s.selStart.y || row > s.selEnd.y {
+		return false
+	}
+	from, to := 0, len(s.lines[row])
+	if row == s.selStart.y {
+		from = s.selStart.x
+	}
+	if row == s.selEnd.y {
+		to = s.selEnd.x
+	}
+	return cell >= cellOfCol(s.lines[row], from) && cell < cellOfCol(s.lines[row], to)
+}
+
+// newlineSelected reports whether the half-open range crosses the newline following
+// row. Rendering one dim blank makes multiline selections and selected empty lines
+// visible without putting a newline rune into the terminal output.
+func (s *EditorScreen) newlineSelected(row int) bool {
+	return s.selectionActive() && row >= s.selStart.y && row < s.selEnd.y
 }
 
 // hlSpans answers the row's validated spans, reparsing the buffer first when it
@@ -1229,15 +1431,25 @@ func (s *EditorScreen) renderLineStyled(row, start, end int, eol bool) (string, 
 			i++
 			continue
 		}
+		sel := s.cellSelected(row, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && vidx[j] == vidx[i] {
+		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel {
 			j++
 		}
-		b.WriteString(spans[vidx[i]].Style.Render(string(vis[i:j])))
+		style := spans[vidx[i]].Style
+		if sel {
+			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
+		}
+		b.WriteString(style.Render(string(vis[i:j])))
 		i = j
 	}
-	if row == s.curY && c == len(vis) && eol { // only the window the line ends in
-		b.WriteString(editorCursorStyle.Render(" "))
+	if eol && end-start < s.contentW() {
+		switch {
+		case row == s.curY && c == len(vis): // only the window the line ends in
+			b.WriteString(editorCursorStyle.Render(" "))
+		case s.newlineSelected(row):
+			b.WriteString(lipgloss.NewStyle().Background(core.MutedColor).Foreground(core.OnFocusedColor).Render(" "))
+		}
 	}
 	return b.String(), true
 }

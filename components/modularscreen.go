@@ -40,6 +40,7 @@ type ModularScreen struct {
 	bodyH       int         // post-title body height, stashed by SetSize for ExpandV
 	colWidths   []int
 	focus       int  // index into flat; -1 when no slot is focusable
+	mouseSlot   int  // slot owning the current press/drag; -1 when no gesture is active
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
 	title       string
 	crumb       string
@@ -101,6 +102,7 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		cols:        columns,
 		colWidths:   opts.ColWidths,
 		focus:       -1,
+		mouseSlot:   -1,
 		hostFocused: true,
 		title:       opts.Title,
 		crumb:       opts.Crumb,
@@ -164,15 +166,16 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 // holding focus; a nav Msg is rare on this path, but the first non-nil one is
 // honored.
 //
-// Mouse presses are the exception to the broadcast: they are hit-tested against
+// Mouse gestures are the exception to the broadcast: presses are hit-tested against
 // the slot rects SetSize recorded (coordinates translated via Shared.BodyY — the
 // same problem the router solves for the output pane with inOutput), and a press
 // inside a Focusable slot moves focus there and goes to that panel alone, with
 // the coordinates made slot-relative first so a panel maps clicks against its
 // own layout. That's what makes a pane scrollable when keyboard focus can't
 // reach it — a sibling form may be capturing every key, but the wheel still
-// works over its neighbor. Presses that miss every slot (or hit a non-focusable
-// one) fall through to the broadcast, as do motion/release events.
+// works over its neighbor. A left press also owns its following motion/release,
+// even beyond the pane. Presses that miss every slot (or hit a non-focusable one)
+// fall through to the broadcast.
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
@@ -195,20 +198,26 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		}
 		return s, core.Action{}
 	}
-	if mm, ok := msg.(tea.MouseMsg); ok && mm.Action == tea.MouseActionPress {
-		if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
-			s.focusSlot(i)
-			// Forward with slot-relative coordinates: a panel that maps clicks
-			// to its own layout (a ListPanel picking the clicked row) works in
-			// local space rather than knowing the screen's geometry.
-			r := s.slotRect(i)
-			mm.X -= r.x
-			mm.Y -= sh.BodyY() + r.y
-			if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
-				act, _ := u.UpdatePanel(sh, mm)
+	if mm, ok := msg.(tea.MouseMsg); ok {
+		if mm.Action == tea.MouseActionPress {
+			s.mouseSlot = -1
+		}
+		if mm.Action == tea.MouseActionPress {
+			if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
+				if mm.Button == tea.MouseButtonLeft {
+					s.mouseSlot = i
+				}
+				s.focusSlot(i)
+				act := s.updateMouseSlot(sh, i, mm)
 				return s, act
 			}
-			return s, core.Action{}
+		} else if s.mouseSlot >= 0 {
+			i := s.mouseSlot
+			act := s.updateMouseSlot(sh, i, mm)
+			if mm.Action == tea.MouseActionRelease {
+				s.mouseSlot = -1
+			}
+			return s, act
 		}
 	}
 	var cmds []tea.Cmd
@@ -227,6 +236,21 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		}
 	}
 	return s, core.Action{Msg: nav, Cmd: tea.Batch(cmds...)}
+}
+
+// updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates.
+// Keeping this translation for the full press/motion/release gesture lets a drag leave
+// its pane without changing owners or exposing absolute terminal coordinates to the
+// panel that began it.
+func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {
+	r := s.slotRect(i)
+	mm.X -= r.x
+	mm.Y -= sh.BodyY() + r.y
+	if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
+		act, _ := u.UpdatePanel(sh, mm)
+		return act
+	}
+	return core.Action{}
 }
 
 // Filtering keeps the router's global single-key shortcuts (O, q, [ ]) from

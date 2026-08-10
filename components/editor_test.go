@@ -36,6 +36,137 @@ func buffer(s *EditorScreen) string {
 	return b.String()
 }
 
+func selectRange(s *EditorScreen, y1, x1, y2, x2 int) {
+	s.selStart, s.selEnd = textPos{y1, x1}, textPos{y2, x2}
+	s.curY, s.curX, s.wantX = y2, x2, x2
+}
+
+func TestEditorSelectedText(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("alpha\tbeta\ngamma\nlast")
+	selectRange(s, 0, 2, 2, 3)
+	if got, want := s.selectedText(), "pha\tbeta\ngamma\nlas"; got != want {
+		t.Fatalf("selected text = %q, want %q", got, want)
+	}
+
+	selectRange(s, 1, 1, 1, 4)
+	if got, want := s.selectedText(), "amm"; got != want {
+		t.Fatalf("single-line selected text = %q, want %q", got, want)
+	}
+}
+
+func TestEditorSelectionEditing(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+		want string
+	}{
+		{"typing replaces", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")}, "aXef"},
+		{"enter replaces", tea.KeyMsg{Type: tea.KeyEnter}, "a\nef"},
+		{"tab replaces", tea.KeyMsg{Type: tea.KeyTab}, "a\tef"},
+		{"backspace deletes", tea.KeyMsg{Type: tea.KeyBackspace}, "aef"},
+		{"delete deletes", tea.KeyMsg{Type: tea.KeyDelete}, "aef"},
+		{"word delete deletes", tea.KeyMsg{Type: tea.KeyCtrlW}, "aef"},
+		{"line delete deletes", tea.KeyMsg{Type: tea.KeyCtrlK}, "aef"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(EditorOpts{})
+			s.setContent("abcdef")
+			selectRange(s, 0, 1, 0, 4)
+			s.key(nil, tc.key)
+			if got := buffer(s); got != tc.want {
+				t.Fatalf("buffer = %q, want %q", got, tc.want)
+			}
+			if s.selectionActive() {
+				t.Fatal("an edit should consume the selection")
+			}
+		})
+	}
+}
+
+func TestEditorCaretMoveClearsSelection(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("abcdef")
+	selectRange(s, 0, 1, 0, 4)
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+	if s.selectionActive() {
+		t.Fatal("caret movement should clear the selection")
+	}
+	if s.curX != 5 {
+		t.Fatalf("right should move from the active endpoint to column 5, got %d", s.curX)
+	}
+}
+
+func TestEditorMouseDragCopiesInclusiveRange(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("abcdef")
+	oldWrite := writeEditorClipboard
+	defer func() { writeEditorClipboard = oldWrite }()
+	var copied string
+	writeEditorClipboard = func(text string) error { copied = text; return nil }
+	y := s.titleH()
+
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 3, Y: y})
+	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 3, Y: y})
+	if act.Cmd == nil {
+		t.Fatal("releasing a non-empty drag should issue one clipboard command")
+	}
+	msg := act.Cmd()
+	if _, ok := msg.(editorCopiedMsg); !ok {
+		t.Fatalf("clipboard command returned %T, want editorCopiedMsg", msg)
+	}
+	if copied != "bcd" {
+		t.Fatalf("copied %q, want inclusive endpoint range %q", copied, "bcd")
+	}
+	if s.curX != 4 || !s.selectionActive() {
+		t.Fatalf("caret/selection after drag = %d/%v, want active end 4 and retained selection", s.curX, s.selectionActive())
+	}
+}
+
+func TestEditorClickDoesNotCopyOrSelect(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("abc")
+	y := s.titleH()
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
+	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
+	if act.Cmd != nil || s.selectionActive() {
+		t.Fatal("a press/release in one cell should remain an ordinary caret click")
+	}
+}
+
+func TestEditorReverseAndMultilineDrag(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("abc\ndef")
+	y := s.titleH()
+	s.startDrag(sh, 1, y+1) // e
+	s.extendDrag(sh, 1, y)  // b
+	if got, want := s.selectedText(), "bc\nde"; got != want {
+		t.Fatalf("reverse multiline drag = %q, want %q", got, want)
+	}
+	if s.curY != 0 || s.curX != 1 {
+		t.Fatalf("reverse drag caret = (%d,%d), want active endpoint (0,1)", s.curY, s.curX)
+	}
+}
+
+func TestEditorSelectionRenderKeepsGeometry(t *testing.T) {
+	withColor(t)
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("a\tb\nnext")
+	selectRange(s, 0, 1, 1, 2)
+	row := s.renderLine(0)
+	if strings.Contains(row, "\t") {
+		t.Fatal("selection rendering must keep tabs expanded")
+	}
+	if lipgloss.Width(row) != 7 { // a + four tab cells + b + selected newline cell
+		t.Fatalf("selected row width = %d, want 7", lipgloss.Width(row))
+	}
+	if !strings.Contains(row, "\x1b[") {
+		t.Fatal("selected cells should carry an ANSI background style")
+	}
+}
+
 // TestEditorTyping: printable runes land in the buffer — including letters the router
 // would otherwise treat as global shortcuts (q/j/k), which is why Filtering is always
 // true — and edits mark the buffer dirty.

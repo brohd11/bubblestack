@@ -130,6 +130,34 @@ func TestCaptureFollowsFocus(t *testing.T) {
 	}
 }
 
+func TestMouseDragStaysWithOriginatingPane(t *testing.T) {
+	left, right := &capturePanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: left, ExpandH: true}},
+		{{Panel: right, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{10, 10}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 20, 5)
+	m.View(sh)
+
+	m.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 0})
+	m.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 15, Y: 0})
+	m.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 16, Y: 0})
+	if len(left.got) != 3 {
+		t.Fatalf("originating pane received %d events, want press/motion/release", len(left.got))
+	}
+	if len(right.got) != 0 {
+		t.Fatalf("the pane crossed during a drag received %d events, want none", len(right.got))
+	}
+	motion := left.got[1].(tea.MouseMsg)
+	if motion.X != 15 {
+		t.Fatalf("motion x = %d, want coordinates relative to the originating pane", motion.X)
+	}
+	if m.mouseSlot != -1 {
+		t.Fatal("release should clear the pane gesture owner")
+	}
+}
+
 // paneKey builds the tea.KeyMsg for a pane binding's first keycode.
 func paneKey(t *testing.T, b key.Binding) tea.KeyMsg {
 	t.Helper()
