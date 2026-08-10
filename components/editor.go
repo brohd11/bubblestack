@@ -23,8 +23,9 @@ import (
 // y = a filename prompt seeded with the current name — nano's "File Name to Write",
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
-// tab, the arrows move the cursor, and a left click places it. Dragging selects the
-// swept character cells and copies them to the system clipboard on release. The wheel scrolls the view without
+// tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
+// and a left click places the cursor. Dragging selects the swept character cells and
+// copies them to the system clipboard on release. The wheel scrolls the view without
 // moving the cursor (a cursor move then snaps the view back to it), and when the
 // buffer overflows the viewport a proportional scrollbar takes the rightmost column.
 //
@@ -87,11 +88,24 @@ type EditorScreen struct {
 	dragging                  bool    // a left-button gesture is active
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	selStart, selEnd          textPos // normalized half-open selected buffer range
+
+	undoStack, redoStack                  []editorSnapshot
+	revision, savedRevision, nextRevision uint64
 }
 
 // textPos is an insertion position in the rune buffer. Selection ranges are stored as
 // [start,end); mouse endpoint cells are converted to these positions before sorting.
 type textPos struct{ y, x int }
+
+// editorSnapshot is one logical edit boundary. Lines are deep-copied because the
+// editor's mutation helpers edit rune slices in place; the remaining fields restore
+// the exact insertion/selection state without treating viewport browsing as history.
+type editorSnapshot struct {
+	lines             [][]rune
+	curY, curX, wantX int
+	selStart, selEnd  textPos
+	revision          uint64
+}
 
 // wrapRow is one display row of a soft-wrapped buffer line: the half-open chunk
 // [start, end) of that line's display cells (expandLine's output) the row shows. Every
@@ -161,8 +175,12 @@ type editorLoadedMsg struct {
 	err     error
 }
 
-// editorSavedMsg carries the async write from the exit prompt back to Update.
-type editorSavedMsg struct{ err error }
+// editorSavedMsg carries the async write and the revision it snapshotted back to
+// Update, so an edit made while the write is in flight remains dirty.
+type editorSavedMsg struct {
+	err      error
+	revision uint64
+}
 
 // editorCopiedMsg reports the asynchronous system-clipboard write.
 type editorCopiedMsg struct {
@@ -182,6 +200,9 @@ var (
 // renderer measures it as zero-width, so the padded frame line overflows, wraps, and
 // every later frame shifts (the "screen advances a line" corruption).
 const editorTabWidth = 4
+
+// editorHistoryLimit bounds each of the whole-buffer snapshot stacks.
+const editorHistoryLimit = 100
 
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
@@ -261,20 +282,21 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
 	}
 	return &EditorScreen{
-		path:       opts.Path,
-		title:      title,
-		crumb:      crumb,
-		onExit:     opts.OnExit,
-		onRelease:  opts.OnRelease,
-		onSaved:    opts.OnSaved,
-		lines:      [][]rune{{}},
-		bordered:   opts.Border,
-		focused:    true, // standalone the editor is always focused; a panel blurs it
-		hl:         hl,
-		hlExplicit: hlExplicit,
-		keyHandler: lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
-		hlSeq:      -1,   // nothing parsed yet, even before the first edit
-		wrapDirty:  true, // no rows measured yet, even before the first edit
+		path:         opts.Path,
+		title:        title,
+		crumb:        crumb,
+		onExit:       opts.OnExit,
+		onRelease:    opts.OnRelease,
+		onSaved:      opts.OnSaved,
+		lines:        [][]rune{{}},
+		bordered:     opts.Border,
+		focused:      true, // standalone the editor is always focused; a panel blurs it
+		hl:           hl,
+		hlExplicit:   hlExplicit,
+		keyHandler:   lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
+		hlSeq:        -1,   // nothing parsed yet, even before the first edit
+		wrapDirty:    true, // no rows measured yet, even before the first edit
+		nextRevision: 1,
 	}
 }
 
@@ -361,7 +383,8 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			sh.Log("editor: save failed: " + m.err.Error())
 			return s, core.SetStatus("save failed: " + m.err.Error())
 		}
-		s.dirty = false
+		s.savedRevision = m.revision
+		s.dirty = s.revision != s.savedRevision
 		s.confirmExit = false
 		// Where a save lands depends on which key started it: the exit prompt's save
 		// is the last step of leaving, ctrl+s is a checkpoint that keeps the buffer,
@@ -441,6 +464,22 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			s.confirmExit = false
 		}
 		return s, core.Action{}
+	}
+	if k == "ctrl+z" {
+		s.undo()
+		return s, core.Action{}
+	}
+	if k == "ctrl+y" {
+		s.redo()
+		return s, core.Action{}
+	}
+	if editorEditKey(k, m) {
+		before, seq := s.snapshot(), s.editSeq
+		defer func() {
+			if s.editSeq != seq {
+				s.recordEdit(before)
+			}
+		}()
 	}
 	if s.selectionActive() {
 		switch k {
@@ -546,8 +585,90 @@ func (s *EditorScreen) setContent(content string) {
 	s.dragging = false
 	s.clearSelection()
 	s.dirty = false
+	s.undoStack, s.redoStack = nil, nil
+	s.revision, s.savedRevision, s.nextRevision = 0, 0, 1
 	s.editSeq++ // the buffer changed even though the load is clean: reparse
 	s.wrapDirty = true
+}
+
+// editorEditKey identifies keys worth snapshotting before dispatch. A no-op still
+// allocates a temporary snapshot, but recordEdit only retains it when editSeq changed.
+func editorEditKey(k string, m tea.KeyMsg) bool {
+	if len(m.Runes) > 0 {
+		return true
+	}
+	switch k {
+	case "tab", "shift+tab", "enter", "backspace", "ctrl+h", "delete", "ctrl+d",
+		"alt+backspace", "ctrl+w", "alt+delete", "alt+d", "ctrl+u", "ctrl+k":
+		return true
+	}
+	return false
+}
+
+func cloneEditorLines(lines [][]rune) [][]rune {
+	cloned := make([][]rune, len(lines))
+	for i := range lines {
+		cloned[i] = append([]rune(nil), lines[i]...)
+	}
+	return cloned
+}
+
+func (s *EditorScreen) snapshot() editorSnapshot {
+	return editorSnapshot{
+		lines: cloneEditorLines(s.lines), curY: s.curY, curX: s.curX, wantX: s.wantX,
+		selStart: s.selStart, selEnd: s.selEnd, revision: s.revision,
+	}
+}
+
+func pushEditorSnapshot(stack []editorSnapshot, snap editorSnapshot) []editorSnapshot {
+	if len(stack) == editorHistoryLimit {
+		copy(stack, stack[1:])
+		stack[len(stack)-1] = snap
+		return stack
+	}
+	return append(stack, snap)
+}
+
+func (s *EditorScreen) recordEdit(before editorSnapshot) {
+	s.undoStack = pushEditorSnapshot(s.undoStack, before)
+	s.redoStack = nil
+	s.revision = s.nextRevision
+	s.nextRevision++
+	s.dirty = s.revision != s.savedRevision
+}
+
+func (s *EditorScreen) restoreSnapshot(snap editorSnapshot) {
+	s.lines = cloneEditorLines(snap.lines)
+	s.curY, s.curX, s.wantX = snap.curY, snap.curX, snap.wantX
+	s.selStart, s.selEnd = snap.selStart, snap.selEnd
+	s.revision = snap.revision
+	s.dirty = s.revision != s.savedRevision
+	s.dragging = false
+	s.editSeq++
+	s.wrapDirty = true
+	s.clampScroll()
+}
+
+func (s *EditorScreen) undo() {
+	if len(s.undoStack) == 0 {
+		return
+	}
+	last := len(s.undoStack) - 1
+	target := s.undoStack[last]
+	s.undoStack = s.undoStack[:last]
+	s.redoStack = pushEditorSnapshot(s.redoStack, s.snapshot())
+	s.restoreSnapshot(target)
+}
+
+func (s *EditorScreen) redo() {
+	if len(s.redoStack) == 0 {
+		return
+	}
+	last := len(s.redoStack) - 1
+	target := s.redoStack[last]
+	s.redoStack = s.redoStack[:last]
+	s.undoStack = pushEditorSnapshot(s.undoStack, s.snapshot())
+	s.restoreSnapshot(target)
 }
 
 // insertRunes inserts rs at the cursor and advances past them.
@@ -1480,6 +1601,8 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 		hints = append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave pane")))
 	}
 	return append(hints,
+		key.NewBinding(key.WithKeys("ctrl+z"), key.WithHelp("ctrl+z", "undo")),
+		key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "redo")),
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
@@ -1653,13 +1776,14 @@ func (s *EditorScreen) applySaveName(name string) {
 	}
 }
 
-// saveCmd snapshots the buffer and writes it to Path asynchronously (IO in the cmd
-// lane); the result arrives as an editorSavedMsg. An empty path is an error — a
+// saveCmd snapshots the buffer and its revision and writes it to Path asynchronously
+// (IO in the cmd lane); the result arrives as an editorSavedMsg. An empty path is an error — a
 // scratch buffer has nowhere to save to. Parent directories are created: a save-as
 // names a LOCATION, and refusing one because a folder in it doesn't exist yet would
 // make the box ask for something it won't accept.
 func (s *EditorScreen) saveCmd() tea.Cmd {
 	path := s.path
+	revision := s.revision
 	var b strings.Builder
 	for i, l := range s.lines {
 		if i > 0 {
@@ -1670,13 +1794,13 @@ func (s *EditorScreen) saveCmd() tea.Cmd {
 	content := b.String()
 	return func() tea.Msg {
 		if path == "" {
-			return editorSavedMsg{err: errors.New("no file path")}
+			return editorSavedMsg{err: errors.New("no file path"), revision: revision}
 		}
 		if dir := filepath.Dir(path); dir != "" && dir != "." {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return editorSavedMsg{err: err}
+				return editorSavedMsg{err: err, revision: revision}
 			}
 		}
-		return editorSavedMsg{err: os.WriteFile(path, []byte(content), 0o644)}
+		return editorSavedMsg{err: os.WriteFile(path, []byte(content), 0o644), revision: revision}
 	}
 }
