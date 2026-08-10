@@ -946,3 +946,232 @@ func TestEditorSaveAsAnchor(t *testing.T) {
 		t.Fatalf("embedded y = %d, want %d", edit.y, want)
 	}
 }
+
+// ---------- soft wrap and line numbers ----------
+
+// assertRowGeometry is the invariant every render owes the frame around it: exactly
+// s.h rows, none wider than s.w, and — once the scrollbar is up — every one of them
+// exactly s.w so the bar reads as a solid column. A row one cell over wraps in the
+// terminal and shifts every frame after it.
+func assertRowGeometry(t *testing.T, s *EditorScreen, ctx string) {
+	t.Helper()
+	rows := strings.Split(s.body(), "\n")
+	if len(rows) != s.h {
+		t.Fatalf("%s: body = %d rows, want %d", ctx, len(rows), s.h)
+	}
+	bar := s.barVisible()
+	for i, row := range rows {
+		w := lipgloss.Width(row)
+		if w > s.w {
+			t.Fatalf("%s: row %d overflows the frame: %d cells, want at most %d", ctx, i, w, s.w)
+		}
+		if bar && w != s.w {
+			t.Fatalf("%s: row %d = %d cells, want %d padded out to the bar", ctx, i, w, s.w)
+		}
+	}
+}
+
+// caretRow is the body row carrying the reverse-video caret (-1 for none). Only
+// meaningful under withColor — the Ascii profile renders every style as bare text.
+func caretRow(s *EditorScreen) int {
+	for i, row := range strings.Split(s.body(), "\n") {
+		if strings.Contains(row, "\x1b[7m") {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestEditorWrapGeometry is the regression wrap shipped without: nothing about the
+// wrapped render may recurse, panic, or overrun the frame. The original cycle ran
+// barVisible → wrapTotalRows → the rebuild → textW → barVisible and never terminated
+// (a stack overflow, which no recover can catch — the terminal is left raw); the row
+// pad then double-counted the number gutter and the scrollbar cell was written whether
+// or not the bar was up.
+func TestEditorWrapGeometry(t *testing.T) {
+	withColor(t)
+	for _, tc := range []struct{ name, doc string }{
+		{"empty", ""},
+		{"one wrapped line", strings.Repeat("z", 300)},
+		{"more lines than rows", longDoc()},
+		{"wrapped past the viewport", strings.Repeat(strings.Repeat("q", 250)+"\n", 30)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(EditorOpts{})
+			s.setContent(tc.doc)
+			s.ToggleWrap()
+			assertRowGeometry(t, s, "wrapped")
+			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE}) // caret to end of line
+			assertRowGeometry(t, s, "wrapped, caret at EOL")
+			s.ToggleLineNums()
+			assertRowGeometry(t, s, "wrapped, preference flipped")
+			s.ToggleWrap()
+			assertRowGeometry(t, s, "unwrapped with numbers")
+		})
+	}
+}
+
+// TestEditorWrapCaret: the caret is drawn on the row the scroll math scrolls to, for a
+// caret mid-line and at end of line — including at the end of a line that fills its
+// last row exactly, where the row the caret needs has to be made or the caret cell
+// lands one column past the frame.
+func TestEditorWrapCaret(t *testing.T) {
+	withColor(t)
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat("a", 500))
+	s.ToggleWrap()
+
+	for _, at := range []string{"home", "end"} {
+		if at == "home" {
+			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlA})
+		} else {
+			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+		}
+		if got, want := caretRow(s), s.wrapRowForCursor()-s.scrY; got != want {
+			t.Fatalf("caret at %s drawn on row %d, want %d", at, got, want)
+		}
+		if n := strings.Count(s.body(), "\x1b[7m"); n != 1 {
+			t.Fatalf("caret at %s: %d caret cells drawn, want exactly 1", at, n)
+		}
+	}
+
+	// A line filling its last row exactly: the trailing row is the caret's.
+	w := s.contentW()
+	s.setContent(strings.Repeat("b", w*2))
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if got := s.wrapTotalRows(); got != 3 {
+		t.Fatalf("a line of exactly %d cells = %d rows, want 3 (two full, one for the caret)", w*2, got)
+	}
+	if got, want := caretRow(s), 2; got != want {
+		t.Fatalf("caret at the end of a full line drawn on row %d, want %d", got, want)
+	}
+	assertRowGeometry(t, s, "caret at the end of an exactly-full line")
+}
+
+// TestEditorWrapCaretHighlighted: the styled render places the caret from its window's
+// origin, which wrapped is the CHUNK's start — reading scrX (which wrap never moves)
+// pinned the caret to the line's first row no matter which row it was really on.
+func TestEditorWrapCaretHighlighted(t *testing.T) {
+	withColor(t)
+	s, _ := newEditor(EditorOpts{Highlighter: NewMarkdownHighlighter()})
+	s.setContent(strings.Repeat("a", 300))
+	s.ToggleWrap()
+	if s.hl == nil {
+		t.Fatal("the highlighter should be in place: this test is about the styled path")
+	}
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if got, want := caretRow(s), s.wrapRowForCursor()-s.scrY; got != want {
+		t.Fatalf("highlighted caret drawn on row %d, want %d", got, want)
+	}
+	if n := strings.Count(s.body(), "\x1b[7m"); n != 1 {
+		t.Fatalf("%d caret cells drawn, want exactly 1", n)
+	}
+	assertRowGeometry(t, s, "highlighted and wrapped")
+
+	// The same for a line ending exactly on the margin, where the row before the
+	// caret's also sees a caret one cell past its own chunk.
+	s.setContent(strings.Repeat("b", s.contentW()*2))
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if n := strings.Count(s.body(), "\x1b[7m"); n != 1 {
+		t.Fatalf("exactly-full line: %d caret cells drawn, want exactly 1", n)
+	}
+	if got, want := caretRow(s), 2; got != want {
+		t.Fatalf("exactly-full line: caret on row %d, want %d", got, want)
+	}
+}
+
+// TestEditorWrapScroll: scrY counts display rows while wrapped, so the wheel's clamp
+// has to as well — clamping against the LINE count stopped the view a long way short
+// of the end of a wrapped document.
+func TestEditorWrapScroll(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat(strings.Repeat("m", 200)+"\n", 12))
+	s.ToggleWrap()
+	total := s.wrapTotalRows()
+	if total <= len(s.lines) {
+		t.Fatalf("this doc should wrap to more rows than lines: %d rows, %d lines", total, len(s.lines))
+	}
+	for i := 0; i < total; i++ {
+		wheel(s, sh, tea.MouseButtonWheelDown)
+	}
+	if want := total - s.h; s.scrY != want {
+		t.Fatalf("wheel to the bottom → scrY %d, want %d (the last full screen of rows)", s.scrY, want)
+	}
+	assertRowGeometry(t, s, "scrolled to the bottom")
+}
+
+// TestEditorWrapClick: a click on a continuation row lands in that chunk of its line,
+// not on the buffer line that happens to share the row's index.
+func TestEditorWrapClick(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("short\n" + strings.Repeat("c", 300))
+	s.ToggleWrap()
+	r := s.wrapRows[2] // row 0 is "short", row 1 the long line's first chunk
+	if r.line != 1 || r.start == 0 {
+		t.Fatalf("row 2 = %+v, want a continuation of line 1", r)
+	}
+	s.Update(sh, tea.MouseMsg{
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+		X: s.numGutterWidth() + 4, Y: s.titleH() + 2,
+	})
+	if s.curY != r.line || s.curX != r.start+4 {
+		t.Fatalf("click on a wrapped row = (%d,%d), want (%d,%d)", s.curY, s.curX, r.line, r.start+4)
+	}
+}
+
+// TestEditorLineNumbers: ctrl+l sets a sticky preference that decides the gutter while
+// wrap is off. Wrap forces the gutter on — soft breaks are indistinguishable from real
+// ones without it — without disturbing the preference, so unwrapping goes back to
+// whatever the user last chose.
+func TestEditorLineNumbers(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("alpha\nbeta")
+	first := func() string { return strings.Split(s.body(), "\n")[0] }
+
+	if got := first(); !strings.HasPrefix(got, "alpha") {
+		t.Fatalf("no gutter by default, got %q", got)
+	}
+	s.ToggleLineNums()
+	if got := first(); !strings.HasPrefix(got, "1 alpha") {
+		t.Fatalf("ctrl+l unwrapped should number the rows, got %q", got)
+	}
+	s.ToggleLineNums()
+	if got := first(); !strings.HasPrefix(got, "alpha") {
+		t.Fatalf("ctrl+l again should take the gutter away, got %q", got)
+	}
+
+	s.ToggleWrap()
+	if got := first(); !strings.HasPrefix(got, "1 alpha") {
+		t.Fatalf("wrap should number the rows whatever the preference, got %q", got)
+	}
+	if s.LineNumMode() {
+		t.Fatal("wrap must not change the preference itself")
+	}
+	s.ToggleWrap()
+	if got := first(); !strings.HasPrefix(got, "alpha") {
+		t.Fatalf("unwrapping should go back to the preference, got %q", got)
+	}
+}
+
+// TestEditorWrapToggleKeepsView: scrY means display rows one side of the toggle and
+// buffer lines the other, so it is translated across it. Reinterpreted, unwrapping
+// from deep in a document lands past the last line and the viewport goes blank.
+func TestEditorWrapToggleKeepsView(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat(strings.Repeat("k", 200)+"\n", 60))
+	s.ToggleWrap()
+	s.scrY = 40
+	top := s.wrapRows[40].line
+
+	s.ToggleWrap()
+	if s.scrY != top {
+		t.Fatalf("unwrapped top line = %d, want %d", s.scrY, top)
+	}
+	if s.scrY >= len(s.lines) {
+		t.Fatalf("scrY %d is past the last line (%d): the viewport would be blank", s.scrY, len(s.lines))
+	}
+	s.ToggleWrap()
+	if got := s.wrapRows[s.scrY].line; got != top {
+		t.Fatalf("re-wrapped top line = %d, want %d", got, top)
+	}
+}

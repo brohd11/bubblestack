@@ -2,6 +2,7 @@ package components
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +75,20 @@ type EditorScreen struct {
 	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
 
 	w, h int // viewport dims in cells (the body net of the title bar or frame), set by SetSize
+
+	wrap      bool      // soft-wrap long lines to the viewport width
+	lineNums  bool      // the sticky ctrl+l preference (see gutterOn: wrap forces the gutter on)
+	wrapRows  []wrapRow // the wrapped display rows scrY indexes while wrap is on
+	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
+	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 }
+
+// wrapRow is one display row of a soft-wrapped buffer line: the half-open chunk
+// [start, end) of that line's display cells (expandLine's output) the row shows. Every
+// buffer line contributes at least one row, and a line ending exactly on the wrap
+// margin contributes a trailing empty one so the caret at end of line has a cell to sit
+// in rather than a position one column past the frame.
+type wrapRow struct{ line, start, end int }
 
 // EditorOpts configures an EditorScreen. Path names the file to edit; a missing or
 // unreadable file starts an empty buffer that the first save creates (nano's
@@ -240,7 +254,8 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		focused:    true, // standalone the editor is always focused; a panel blurs it
 		hl:         hl,
 		hlExplicit: hlExplicit,
-		hlSeq:      -1, // nothing parsed yet, even before the first edit
+		hlSeq:      -1,   // nothing parsed yet, even before the first edit
+		wrapDirty:  true, // no rows measured yet, even before the first edit
 	}
 }
 
@@ -448,6 +463,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			s.insertRunes(m.Runes...)
 		}
 	}
+	s.wrapDirty = true
 	s.clampScroll()
 	return s, core.Action{}
 }
@@ -466,6 +482,7 @@ func (s *EditorScreen) setContent(content string) {
 	s.scrY, s.scrX = 0, 0
 	s.dirty = false
 	s.editSeq++ // the buffer changed even though the load is clean: reparse
+	s.wrapDirty = true
 }
 
 // insertRunes inserts rs at the cursor and advances past them.
@@ -671,6 +688,9 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	if s.barVisible() && x >= s.textW() {
 		return // the scrollbar column carries no buffer position
 	}
+	if x -= s.numGutterWidth(); x < 0 {
+		x = 0 // a click on the line number reads as column 0, as one left of the body does
+	}
 	rel := y - s.insetY()
 	if !s.embedded {
 		rel -= sh.BodyY() // absolute coordinates: the chrome rows come off too
@@ -678,11 +698,17 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	if rel < 0 {
 		return
 	}
-	row := s.scrY + rel
-	if row >= len(s.lines) {
+	row, cell := s.scrY+rel, s.scrX+x
+	if s.wrap {
+		// The clicked row is a wrapped chunk: it names the line, and its start is the
+		// origin the click's column counts from.
+		s.rebuildWrapRows()
+		r := s.wrapRows[min(row, len(s.wrapRows)-1)]
+		row, cell = r.line, r.start+x
+	} else if row >= len(s.lines) {
 		row = len(s.lines) - 1
 	}
-	col := colAtCell(s.lines[row], s.scrX+x)
+	col := colAtCell(s.lines[row], cell)
 	s.curY, s.curX, s.wantX = row, col, col
 	s.clampScroll()
 }
@@ -702,7 +728,7 @@ func (s *EditorScreen) scrollLines(delta int) {
 // view back on every wheel tick and browse mode could never leave the caret behind.
 // Typing or moving the caret re-asserts visibility through key's clampScroll.
 func (s *EditorScreen) clampScrollBounds() {
-	if m := len(s.lines) - s.h; s.scrY > m {
+	if m := s.rowCount() - s.h; s.scrY > m {
 		s.scrY = m
 	}
 	if s.scrY < 0 {
@@ -713,11 +739,21 @@ func (s *EditorScreen) clampScrollBounds() {
 	}
 }
 
-// clampScroll scrolls the viewport just enough to keep the cursor visible, in both
-// axes (long lines scroll horizontally — no soft-wrap). Horizontal positions are in
-// display cells: the cursor's cell comes from cellOfCol, not the raw rune column.
+// clampScroll scrolls the viewport just enough to keep the cursor visible. In normal
+// mode it tracks the cursor in both axes; with wrap enabled it keeps only the row on
+// screen (soft wrap means the whole wrapped line is visible horizontally).
 func (s *EditorScreen) clampScroll() {
 	if s.w < 1 || s.h < 1 {
+		return
+	}
+	if s.wrap {
+		row := s.wrapRowForCursor()
+		if row < s.scrY {
+			s.scrY = row
+		}
+		if row >= s.scrY+s.h {
+			s.scrY = row - s.h + 1
+		}
 		return
 	}
 	if s.curY < s.scrY {
@@ -730,14 +766,22 @@ func (s *EditorScreen) clampScroll() {
 	if curCell < s.scrX {
 		s.scrX = curCell
 	}
-	if w := s.textW(); curCell >= s.scrX+w {
+	if w := s.contentW(); curCell >= s.scrX+w {
 		s.scrX = curCell - w + 1
 	}
 }
 
 // barVisible reports whether the scrollbar column is drawn: only when the buffer
-// overflows the viewport.
-func (s *EditorScreen) barVisible() bool { return len(s.lines) > s.h }
+// overflows the viewport. Wrapped, the answer is the one rebuildWrapRows settled while
+// measuring the rows — asking again from the row count here would be the same question
+// the rebuild already had to answer to pick its width.
+func (s *EditorScreen) barVisible() bool {
+	if s.wrap {
+		s.rebuildWrapRows()
+		return s.wrapBar
+	}
+	return len(s.lines) > s.h
+}
 
 // textW is the width the text window gets — one column short of s.w while the
 // scrollbar takes the rightmost cell, so the caret can never hide under the bar.
@@ -748,15 +792,23 @@ func (s *EditorScreen) textW() int {
 	return s.w
 }
 
+// contentW is what the buffer text itself gets: the text window net of the line-number
+// gutter. It is the horizontal window renderLine cuts and clampScroll scrolls, and the
+// width buildWrapRows breaks lines at.
+func (s *EditorScreen) contentW() int {
+	return max(s.textW()-s.numGutterWidth(), 1)
+}
+
 // scrollbarCell renders row i of the scrollbar: a thumb sized to the viewport's
 // share of the buffer and placed proportionally to scrY, on a full-height track.
 // The styles are built per call so a theme switch repaints, as renderLine's muted
 // style does.
 func (s *EditorScreen) scrollbarCell(row int) string {
-	thumb := max(s.h*s.h/len(s.lines), 1)
+	total := max(s.rowCount(), 1) // rows, not lines: wrapped, one line can be many
+	thumb := max(s.h*s.h/total, 1)
 	top := 0
-	if d := len(s.lines) - s.h; d > 0 {
-		top = s.scrY * (s.h - thumb) / d
+	if d := total - s.h; d > 0 {
+		top = min(s.scrY, d) * (s.h - thumb) / d
 	}
 	color, glyph := core.MutedColor, "│"
 	if row >= top && row < top+thumb {
@@ -830,17 +882,23 @@ func (s *EditorScreen) gutter() int {
 	return 0
 }
 
-// body is the viewport itself: s.h rows of the visible line window and — while the
+// body is the viewport itself: s.h rows of the visible row window and — while the
 // exit prompt is up — the prompt as the last row, each indented by the gutter. When
 // the buffer overflows, the rightmost column is the scrollbar (rows padded up to it,
-// so the bar reads as one solid column). Always exactly s.h lines tall, so the frame
-// around it stays rectangular.
+// so the bar reads as one solid column). Always exactly s.h lines tall AND exactly
+// s.w cells wide, so the frame around it stays rectangular: a row one cell over
+// wraps in the terminal and shifts every frame after it.
+//
+// What a "row" is depends on the mode — a buffer line, or one wrapped chunk of one —
+// but only rowCount and renderRow know that, so the two modes cannot drift apart in
+// how they pad or where they put the bar.
 func (s *EditorScreen) body() string {
 	rows := s.h
 	if s.confirmExit {
 		rows-- // the prompt takes the last body row
 	}
 	bar := s.barVisible()
+	total := s.rowCount()
 	pad := strings.Repeat(" ", s.gutter())
 	var b strings.Builder
 	for i := 0; i < rows; i++ {
@@ -848,11 +906,11 @@ func (s *EditorScreen) body() string {
 			b.WriteByte('\n')
 		}
 		b.WriteString(pad)
-		if row := s.scrY + i; row < len(s.lines) {
-			line := s.renderLine(row)
+		if row := s.scrY + i; row < total {
+			line := s.renderRow(row)
 			b.WriteString(line)
 			if bar {
-				b.WriteString(strings.Repeat(" ", s.textW()-lipgloss.Width(line)))
+				b.WriteString(strings.Repeat(" ", max(s.textW()-lipgloss.Width(line), 0)))
 			}
 		} else if bar {
 			b.WriteString(strings.Repeat(" ", s.textW()))
@@ -875,8 +933,177 @@ func (s *EditorScreen) body() string {
 	return b.String()
 }
 
+// rowCount is how many rows the viewport scrolls through — what scrY indexes and what
+// the scrollbar measures itself against: wrapped display rows while wrap is on, buffer
+// lines while it is off.
+func (s *EditorScreen) rowCount() int {
+	if s.wrap {
+		return s.wrapTotalRows()
+	}
+	return len(s.lines)
+}
+
+// renderRow renders row i of rowCount's sequence.
+func (s *EditorScreen) renderRow(i int) string {
+	if s.wrap {
+		return s.renderWrappedRow(i)
+	}
+	return s.renderLine(i)
+}
+
+// gutterOn reports whether the line-number column is drawn: the sticky ctrl+l
+// preference, or unconditionally while wrapped — in wrapped text the numbers are the
+// only thing separating a soft break from a real line, so wrap turns them on without
+// disturbing the preference the toggle goes back to.
+func (s *EditorScreen) gutterOn() bool { return s.lineNums || s.wrap }
+
+// numGutterWidth returns the fixed width of the line-number prefix when it is drawn.
+// It is just wide enough for the highest line number in the buffer, so short docs do
+// not waste columns and tall docs stay aligned. A viewport too narrow to hold the
+// numbers and any text gets none: the text wins.
+//
+// It must not consult textW — that reads barVisible, which under wrap reads the row
+// cache, which is measured against this width.
+func (s *EditorScreen) numGutterWidth() int {
+	if !s.gutterOn() {
+		return 0
+	}
+	digits := 1
+	for n := len(s.lines); n >= 10; n /= 10 {
+		digits++
+	}
+	w := digits + 1 // a trailing space separates the number from the text
+	if w > s.w-2 {
+		return 0
+	}
+	return w
+}
+
+// lineNumText is the gutter cell for one display row: the 1-based line number on a
+// line's first row, blanks on its wrapped continuations.
+func (s *EditorScreen) lineNumText(line int, first bool) string {
+	w := s.numGutterWidth()
+	if w == 0 {
+		return ""
+	}
+	if !first {
+		return strings.Repeat(" ", w)
+	}
+	return fmt.Sprintf("%*d ", w-1, line+1)
+}
+
+// rebuildWrapRows recomputes the display rows, and with them whether the scrollbar
+// column is needed. Nothing it calls may consult textW or barVisible: the text width
+// derives from the bar, the bar derives from the row count, and the row count is what
+// this builds — reading either here recurses until the stack gives out. So the width is
+// settled directly instead: measure at the full width, and if the document overflows,
+// measure again one column narrower to make room for the bar. Narrowing can only add
+// rows, never remove them, so an overflow at the full width is still an overflow at the
+// narrower one and the second pass is final.
+//
+// The cache is invalidated (wrapDirty) by every edit, resize and toggle.
+func (s *EditorScreen) rebuildWrapRows() {
+	if !s.wrapDirty {
+		return
+	}
+	s.wrapDirty = false // cleared first: nothing below may re-enter the rebuild
+	s.wrapBar = false
+	s.buildWrapRows(s.w - s.numGutterWidth())
+	if len(s.wrapRows) > s.h {
+		s.wrapBar = true
+		s.buildWrapRows(s.w - 1 - s.numGutterWidth())
+	}
+}
+
+// buildWrapRows fills the row cache, breaking each buffer line into chunks of at most w
+// display cells. A line whose width is an exact multiple of w (an empty line included)
+// gets a trailing empty row: without it the caret at end of line would have to sit one
+// column past the last chunk, which is off the frame.
+func (s *EditorScreen) buildWrapRows(w int) {
+	if w < 1 {
+		w = 1
+	}
+	s.wrapRows = s.wrapRows[:0]
+	for i, line := range s.lines {
+		n := len(expandLine(line))
+		for start := 0; start < n; start += w {
+			s.wrapRows = append(s.wrapRows, wrapRow{i, start, min(start+w, n)})
+		}
+		if n%w == 0 {
+			s.wrapRows = append(s.wrapRows, wrapRow{i, n, n})
+		}
+	}
+}
+
+// wrapTotalRows is the number of display rows the wrapped buffer occupies.
+func (s *EditorScreen) wrapTotalRows() int {
+	s.rebuildWrapRows()
+	return len(s.wrapRows)
+}
+
+// wrapRowForCursor is the display row holding the caret, FOUND in the same cache the
+// render reads rather than recomputed from the wrap width — the two agreeing is what
+// keeps the caret on the row it is drawn on.
+func (s *EditorScreen) wrapRowForCursor() int {
+	s.rebuildWrapRows()
+	cell := cellOfCol(s.lines[s.curY], s.curX)
+	last := 0
+	for i, r := range s.wrapRows {
+		if r.line != s.curY {
+			continue
+		}
+		if cell < r.end {
+			return i
+		}
+		last = i // end of line: the line's last row owns the caret
+	}
+	return last
+}
+
+// renderWrappedRow renders display row idx: its line-number gutter (numbered on the
+// line's first row, blank on its continuations) and its chunk of the line, with the
+// caret when this is the row the caret is on. The chunk's start is the window origin
+// here, exactly as scrX is in the unwrapped render.
+func (s *EditorScreen) renderWrappedRow(idx int) string {
+	r := s.wrapRows[idx]
+	line := s.lines[r.line]
+	disp := expandLine(line)
+	start, end := min(r.start, len(disp)), min(r.end, len(disp))
+	vis := disp[start:end]
+	num := s.lineNumText(r.line, r.start == 0)
+	// A caret one cell past this chunk is only THIS row's to draw when the line ends
+	// here. Mid-line it belongs to the next row, at its column 0.
+	eol := s.lastRowOfLine(idx)
+
+	if !s.focused {
+		return num + lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
+	}
+	if s.hl != nil {
+		if styled, ok := s.renderLineStyled(r.line, start, end, eol); ok {
+			return num + styled
+		}
+	}
+	if r.line != s.curY {
+		return num + string(vis)
+	}
+	c := cellOfCol(line, s.curX) - start
+	if c >= 0 && c < len(vis) {
+		return num + string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
+	}
+	if c == len(vis) && eol {
+		return num + string(vis) + editorCursorStyle.Render(" ")
+	}
+	return num + string(vis)
+}
+
+// lastRowOfLine reports whether display row idx is the final one of its buffer line.
+func (s *EditorScreen) lastRowOfLine(idx int) bool {
+	return idx == len(s.wrapRows)-1 || s.wrapRows[idx+1].line != s.wrapRows[idx].line
+}
+
 // renderLine renders one buffer row's horizontal window in display cells (tabs
-// expanded via expandLine — the raw '\t' never reaches the frame), with the cursor
+// expanded via expandLine — the raw '\t' never reaches the frame), behind the line
+// number gutter when it is on and narrowed by it (contentW), with the cursor
 // cell (a reverse-video rune, or a blank at end of line) when the row holds the
 // cursor. A cursor sitting on a tab reverses the expansion's first cell.
 //
@@ -896,27 +1123,31 @@ func (s *EditorScreen) renderLine(row int) string {
 	if start > len(disp) {
 		start = len(disp)
 	}
-	end := s.scrX + s.textW()
+	end := s.scrX + s.contentW()
 	if end > len(disp) {
 		end = len(disp)
 	}
 	vis := disp[start:end]
+	num := s.lineNumText(row, true)
 	if !s.focused {
-		return lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
+		return num + lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(vis))
 	}
 	if s.hl != nil {
-		if styled, ok := s.renderLineStyled(row, start, end); ok {
-			return styled
+		if styled, ok := s.renderLineStyled(row, start, end, true); ok {
+			return num + styled
 		}
 	}
 	if row != s.curY {
-		return string(vis)
+		return num + string(vis)
 	}
-	c := cellOfCol(s.lines[row], s.curX) - s.scrX // clampScroll keeps this within [0, s.textW())
-	if c < len(vis) {
-		return string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
+	c := cellOfCol(s.lines[row], s.curX) - start // clampScroll keeps this within [0, s.contentW())
+	if c >= 0 && c < len(vis) {
+		return num + string(vis[:c]) + editorCursorStyle.Render(string(vis[c])) + string(vis[c+1:])
 	}
-	return string(vis) + editorCursorStyle.Render(" ")
+	if c == len(vis) { // end of line, inside the window
+		return num + string(vis) + editorCursorStyle.Render(" ")
+	}
+	return num + string(vis) // the caret is off the window (browse mode): draw none
 }
 
 // hlSpans answers the row's validated spans, reparsing the buffer first when it
@@ -937,11 +1168,14 @@ func (s *EditorScreen) hlSpans(row int) []Span {
 }
 
 // renderLineStyled renders the row's window [start, end) through the
-// highlighter's spans: per-rune span indexes ride through the tab expansion
+// highlighter's spans — start being the window's origin in display cells, scrX
+// unwrapped and the chunk's start wrapped, so the caret lands in the right window
+// either way. Per-rune span indexes ride through the tab expansion
 // (a tab's cells take its span's style), contiguous same-span runs render in
 // one style.Render, and the cursor cell splices in reverse-video — at end of
-// line, as the appended styled blank. ok=false falls back to the plain render.
-func (s *EditorScreen) renderLineStyled(row, start, end int) (string, bool) {
+// line, as the appended styled blank, which only a window the line actually ends
+// in (eol) may draw. ok=false falls back to the plain render.
+func (s *EditorScreen) renderLineStyled(row, start, end int, eol bool) (string, bool) {
 	spans := s.hlSpans(row)
 	if spans == nil {
 		return "", false
@@ -975,7 +1209,7 @@ func (s *EditorScreen) renderLineStyled(row, start, end int) (string, bool) {
 	vis, vidx := drunes[start:end], didx[start:end]
 	c := -1 // no cursor splice off the cursor row
 	if row == s.curY {
-		c = cellOfCol(line, s.curX) - s.scrX
+		c = cellOfCol(line, s.curX) - start // start is the window origin in BOTH modes
 	}
 	var b strings.Builder
 	for i := 0; i < len(vis); {
@@ -991,7 +1225,7 @@ func (s *EditorScreen) renderLineStyled(row, start, end int) (string, bool) {
 		b.WriteString(spans[vidx[i]].Style.Render(string(vis[i:j])))
 		i = j
 	}
-	if row == s.curY && c >= len(vis) {
+	if row == s.curY && c == len(vis) && eol { // only the window the line ends in
 		b.WriteString(editorCursorStyle.Render(" "))
 	}
 	return b.String(), true
@@ -1023,6 +1257,62 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 	))
 }
 
+// ToggleWrap flips soft line wrapping, carrying the viewport across the switch: scrY
+// counts wrapped display rows one side of it and buffer lines the other, so the top
+// row is translated rather than reinterpreted — reinterpreted, an unwrap from deep in
+// a long document lands past the last line and shows nothing at all.
+//
+// The keys belong to whoever hosts the editor: the state lives here, the binding is the
+// app's to choose (ctrl+w is already delete-word-back in this screen).
+func (s *EditorScreen) ToggleWrap() {
+	top := s.topLine() // in the mode we are leaving
+	s.wrap = !s.wrap
+	s.wrapDirty = true // the gutter appears or goes: the whole geometry moved
+	if s.wrap {
+		s.scrY = s.firstRowOfLine(top)
+	} else {
+		s.scrY = top
+	}
+	s.clampScrollBounds()
+}
+
+// topLine is the buffer line showing at the top of the viewport, in either mode.
+func (s *EditorScreen) topLine() int {
+	if !s.wrap {
+		return s.scrY
+	}
+	s.rebuildWrapRows()
+	if s.scrY < len(s.wrapRows) {
+		return s.wrapRows[s.scrY].line
+	}
+	return len(s.lines) - 1
+}
+
+// firstRowOfLine is the display row a buffer line starts on.
+func (s *EditorScreen) firstRowOfLine(line int) int {
+	s.rebuildWrapRows()
+	for i, r := range s.wrapRows {
+		if r.line >= line {
+			return i
+		}
+	}
+	return 0
+}
+
+// ToggleLineNums flips the sticky line-number preference. It is what decides the gutter
+// while wrap is OFF; wrapped, the gutter is on either way (see gutterOn), so a flip
+// made there only shows once wrap goes back off.
+func (s *EditorScreen) ToggleLineNums() {
+	s.lineNums = !s.lineNums
+	s.wrapDirty = true // the gutter's width is part of the wrap geometry
+	s.clampScrollBounds()
+}
+
+// WrapMode and LineNumMode return the current toggle states, so hosts can keep their
+// own UI in sync.
+func (s *EditorScreen) WrapMode() bool    { return s.wrap }
+func (s *EditorScreen) LineNumMode() bool { return s.lineNums }
+
 // SetSize records the viewport dims — the args net of whatever chrome this editor
 // draws (see insetX/insetY, plus the frame's closing border on each axis) — and
 // re-clamps the scroll into the buffer's bounds. Bounds only, NOT to the caret: the
@@ -1040,6 +1330,7 @@ func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	if s.h < 1 {
 		s.h = 1
 	}
+	s.wrapDirty = true
 	s.clampScrollBounds()
 }
 
