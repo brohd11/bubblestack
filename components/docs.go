@@ -140,6 +140,7 @@ func docTopics(pages []DocPage) string {
 //	# heading       bold accent, blank line above
 //	## heading      bold accent, blank line above
 //	### heading     bold, muted
+//	---             a full-width rule (also *** and ___, three or more of one char)
 //	- item          bulleted, wrapped with a hanging indent (an indented line continues it)
 //	1. item         same, keeping the author's number as the marker ("1)" too)
 //	```fence```     indented, muted, hard-wrapped (never re-flowed), ruled off above and below
@@ -163,6 +164,15 @@ func docTopics(pages []DocPage) string {
 //
 // Styles are read per call (not cached) so a theme switch repaints the page — the same
 // rule core.StyleList follows.
+
+// CodeBlockRenderer, when non-nil, renders the content of a fenced code block: it gets
+// the fence's language tag ("" when the fence carries none), the raw content lines, and
+// the width to fold to, and returns the finished display lines, which are emitted
+// verbatim (indented, no rules — a highlighted block stands on its own). nil keeps the
+// default muted, hard-wrapped rendering with the rule above and below. This is the seam
+// that lets a consumer (gote) add syntax highlighting without the framework knowing any
+// language — set it at init, it is not for concurrent use.
+var CodeBlockRenderer func(lang string, code []string, width int) []string
 
 // inlineAny matches every inline construct in ONE alternation, which is what makes
 // the single pass in inline() possible. Running the patterns in sequence instead
@@ -194,6 +204,11 @@ var inlineAny = regexp.MustCompile(
 // orderedItem matches "1. " / "12) " at the start of a list line; the capture is the
 // marker, which is kept verbatim rather than renumbered.
 var orderedItem = regexp.MustCompile(`^(\d+[.)])\s+`)
+
+// themeBreak matches a thematic break: three or more of one of "-", "*", "_" and
+// nothing else. Standalone lines only — "***bold***" inline never reaches here. An
+// alternation rather than a backreference, which Go's regexp does not have.
+var themeBreak = regexp.MustCompile(`^(-{3,}|\*{3,}|_{3,})$`)
 
 const (
 	bulletMark = "• "
@@ -230,26 +245,51 @@ type docRenderer struct {
 	marker  string   // the pending block is a list item hung under this marker; "" ⇒ paragraph
 	quote   bool     // the pending block is a blockquote
 	fence   string   // the marker that opened the current code fence; "" ⇒ not in one
+	lang    string   // the current fence's language tag ("go" in "```go"); "" ⇒ none
+	code    []string // the fenced lines accumulated for CodeBlockRenderer (nil ⇒ streamed)
 }
 
 func (r *docRenderer) line(line string) {
 	trimmed := strings.TrimSpace(line)
 
 	if m := fenceMarker(trimmed); m != "" && (r.fence == "" || r.fence == m) {
+		if r.fence != "" && r.code != nil {
+			// Closing a highlighted block: the accumulated lines go through the
+			// injected renderer. (Pending is always empty while a fence is open, so
+			// there is nothing to flush first.)
+			lang, code := r.lang, r.code
+			r.fence, r.lang, r.code = "", "", nil
+			for _, l := range CodeBlockRenderer(lang, code, r.width-len(indent)) {
+				r.emit(indent + l)
+			}
+			r.blank()
+			return
+		}
 		r.flush()
 		if r.fence == "" {
 			r.fence = m
+			r.lang = fenceLang(trimmed[len(m):])
+			if CodeBlockRenderer != nil {
+				r.code = []string{}
+				r.blank()
+				return
+			}
 		} else {
 			r.fence = ""
 		}
 		// A dim rule on each side of the block. Blocks are the one thing here that
 		// isn't re-flowed, so without a boundary they read as ordinary indented prose
 		// — and a background (what the inline spans use) would break on the tabs a
-		// block renders literally.
+		// block renders literally. The highlighted path (CodeBlockRenderer set) skips
+		// the rules: a colored block stands on its own, separated by blank lines.
 		r.emit(ruleStyle().Render(strings.Repeat("─", r.width)))
 		return
 	}
 	if r.fence != "" {
+		if r.code != nil {
+			r.code = append(r.code, line)
+			return
+		}
 		r.emit(codeStyle().Render(indent + core.HardWrap(line, r.width-len(indent))))
 		return
 	}
@@ -258,6 +298,9 @@ func (r *docRenderer) line(line string) {
 	case trimmed == "":
 		r.flush()
 		r.blank()
+	case themeBreak.MatchString(trimmed):
+		r.flush()
+		r.emit(ruleStyle().Render(strings.Repeat("─", r.width)))
 	case strings.HasPrefix(trimmed, ">"):
 		// Consecutive "> " lines join into one re-flowed quote, like a paragraph.
 		if !r.quote {
@@ -307,6 +350,16 @@ func fenceMarker(trimmed string) string {
 	return ""
 }
 
+// fenceLang reads the language tag off an opening fence's info string — the first word
+// after the marker ("```go" → "go"); "" when the fence carries none.
+func fenceLang(info string) string {
+	fields := strings.Fields(info)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
 // quoteText strips a quote line's markers down to its text. Nested ">>" collapses to
 // one level — the markers come off together and the quote renders flat, which is as
 // much as a reader for our own prose needs.
@@ -327,8 +380,16 @@ func (r *docRenderer) heading(rendered string) {
 	r.emit(ansi.Wrap(rendered, r.width, wrapBreaks))
 }
 
-// flush wraps the accumulated block and empties it.
+// flush wraps the accumulated block and empties it. An unclosed fence is also ended
+// here (EOF): its accumulated lines render through CodeBlockRenderer exactly as if the
+// closing marker had arrived — the default path streams, so it has nothing pending.
 func (r *docRenderer) flush() {
+	if r.fence != "" && r.code != nil {
+		for _, l := range CodeBlockRenderer(r.lang, r.code, r.width-len(indent)) {
+			r.emit(indent + l)
+		}
+		r.fence, r.code, r.lang = "", nil, ""
+	}
 	if len(r.pending) == 0 {
 		return
 	}

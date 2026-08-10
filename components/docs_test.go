@@ -271,6 +271,90 @@ func TestRenderMarkdownCodeBlockRules(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdownThemeBreak: a line of three or more of one of "-", "*", "_" is a
+// thematic break — a dim rule across the full width, the same rule a default code
+// block is bracketed by. A line merely CONTAINING such a run is not one.
+func TestRenderMarkdownThemeBreak(t *testing.T) {
+	const width = 30
+	rule := strings.Repeat("─", width)
+
+	for _, marker := range []string{"---", "***", "___", "-----"} {
+		rows := strings.Split(render("above\n\n"+marker+"\n\nbelow\n", width), "\n")
+		found := false
+		for _, r := range rows {
+			if r == rule {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q should render the full-width rule, got %q", marker, rows)
+		}
+	}
+
+	if got := render("**bold**\n", width); strings.Contains(got, rule) {
+		t.Errorf("an emphasized line is not a thematic break, got %q", got)
+	}
+	if got := render("a --- b\n", width); strings.Contains(got, rule) {
+		t.Errorf("a run mid-line is not a thematic break, got %q", got)
+	}
+}
+
+// TestRenderMarkdownCodeBlockRenderer: with CodeBlockRenderer set, a fenced block's
+// lines accumulate and go through it once — language tag and fold width included —
+// and its output lands verbatim (indented), separated by blank lines instead of the
+// default path's rules. An unclosed fence still flushes through it at EOF. The
+// renderer is a process-global seam, so the test restores nil on the way out.
+func TestRenderMarkdownCodeBlockRenderer(t *testing.T) {
+	type call struct {
+		lang  string
+		code  []string
+		width int
+	}
+	var calls []call
+	CodeBlockRenderer = func(lang string, code []string, width int) []string {
+		calls = append(calls, call{lang, append([]string{}, code...), width})
+		out := make([]string, len(code))
+		for i, l := range code {
+			out[i] = "R:" + l
+		}
+		return out
+	}
+	t.Cleanup(func() { CodeBlockRenderer = nil })
+
+	const width = 30
+	rule := strings.Repeat("─", width)
+
+	rows := strings.Split(render("intro\n\n```go\nfmt.Println()\nx\n```\n\ntail\n", width), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("the block should go through the renderer once, got %d calls", len(calls))
+	}
+	if c := calls[0]; c.lang != "go" || c.width != width-len(indent) ||
+		len(c.code) != 2 || c.code[0] != "fmt.Println()" || c.code[1] != "x" {
+		t.Errorf("the renderer should get lang, raw lines and fold width, got %+v", c)
+	}
+	want := []string{"intro", "", indent + "R:fmt.Println()", indent + "R:x", "", "tail"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %q, want %q", rows, want)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Errorf("row %d = %q, want %q (all rows %q)", i, rows[i], want[i], rows)
+		}
+	}
+	if strings.Contains(strings.Join(rows, "\n"), rule) {
+		t.Error("the highlighted path draws no rules around the block")
+	}
+
+	// An unclosed fence flushes through the renderer at EOF (the source's trailing
+	// newline is a blank content line inside the still-open block).
+	calls = nil
+	render("```py\nunclosed\n", width)
+	if len(calls) != 1 || calls[0].lang != "py" ||
+		len(calls[0].code) != 2 || calls[0].code[0] != "unclosed" || calls[0].code[1] != "" {
+		t.Errorf("an unclosed fence should flush through the renderer, got %+v", calls)
+	}
+}
+
 // TestRenderMarkdownBorrowedAccent: under mono the page must not flatten — headings,
 // links and code spans render in the borrowed accent, not in mono's own near-white
 // FocusedColor which is what body text already is.
