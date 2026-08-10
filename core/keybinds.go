@@ -85,8 +85,8 @@ type KeyMap struct {
 }
 
 // Keys is the active keymap. Edit a WithKeys list here (e.g. add "w"/"s" to
-// Up/Down) to rebind everywhere at once. ctrl+c stays a hard-coded hard-quit in
-// the router and is intentionally not represented here.
+// Up/Down) to rebind everywhere at once. ctrl+c is handled directly in the
+// router (as a Quit alias) and is intentionally not represented here.
 var Keys = KeyMap{
 	Up:     key.NewBinding(key.WithKeys("up", "k", "alt+w")),
 	Down:   key.NewBinding(key.WithKeys("down", "j", "alt+s")),

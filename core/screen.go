@@ -44,6 +44,14 @@ type Screen interface {
 // shortcuts (O/c) don't steal keystrokes meant for the filter input.
 type Filterer interface{ Filtering() bool }
 
+// QuitGater is implemented by a screen that wants to intercept the global quit
+// keys (q, ctrl+c) — typically to confirm when unsaved work would be lost.
+// Returning (act, true) replaces the quit with act; (Action{}, false) abstains.
+// The stack is consulted top-down and the first handler wins. A screen pushed BY
+// a gate (the confirm popup) must answer for itself (see DialogScreen.OnQuit) —
+// otherwise the walk finds the same gate below it and stacks popup upon popup.
+type QuitGater interface{ QuitGate(sh *Shared) (Action, bool) }
+
 // FocusableScreen is a screen that can render a focused and an unfocused state
 // (a form tinting its box border, a ModularScreen dimming its active pane). The
 // router drives it on output-pane focus transitions: SetFocused(false) when the

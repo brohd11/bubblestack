@@ -201,11 +201,10 @@ func (r Router) resize() {
 			r.sh.Chrome.Output.GotoBottom()
 		}
 	}
-	// When an overlay (popup) is on top, the screen below it is still drawn as the
+	// While overlays are up, the base screen below them is still drawn as the
 	// background, so it must be kept sized too — otherwise it goes stale on resize.
-	if o, ok := r.Top().(Overlayer); ok && o.IsOverlay() && len(r.stack) >= 2 {
-		below := r.stack[len(r.stack)-2]
-		below.SetSize(r.sh, r.sh.width, r.bodyHeightFor(below))
+	if base, bi := r.overlayBase(); bi != len(r.stack)-1 {
+		base.SetSize(r.sh, r.sh.width, r.bodyHeightFor(base))
 	}
 	r.Top().SetSize(r.sh, r.sh.width, r.bodyHeightFor(r.Top()))
 }
@@ -240,18 +239,21 @@ func (r Router) frame(s Screen) string {
 }
 
 func (r Router) View() string {
-	// An overlay (popup) on top draws the screen below it as the background, then
-	// composites its own box over it — so the underlying screen stays visible
-	// around the box. Only the top screen receives input, so it's modal. The box
-	// is centered unless the overlay implements OverlayPositioner (a floating
-	// edit anchored over the element it covers); either way the position clamps
-	// into the frame so a box near an edge stays fully on screen.
-	if o, ok := r.Top().(Overlayer); ok && o.IsOverlay() && len(r.stack) >= 2 {
-		bg := r.frame(r.stack[len(r.stack)-2])
-		box := r.Top().View(r.sh)
+	// Overlays (popups, floating line edits) STACK: the base is the deepest screen
+	// below the top that isn't an overlay, framed whole, and each overlay above it
+	// is composited on bottom-first — so a popup pushed over a floating line edit
+	// lands over both, with the base's chrome and panes intact underneath. Only
+	// the top screen receives input, so the chain stays modal. A box is centered
+	// unless its overlay implements OverlayPositioner (a floating edit anchored
+	// over the element it covers); either way the position clamps into the frame
+	// so a box near an edge stays fully on screen.
+	base, bi := r.overlayBase()
+	out := r.frame(base)
+	for i := bi + 1; i < len(r.stack); i++ {
+		box := r.stack[i].View(r.sh)
 		bw, bh := lipgloss.Width(box), lipgloss.Height(box)
 		var x, y int
-		if p, ok := r.Top().(OverlayPositioner); ok {
+		if p, ok := r.stack[i].(OverlayPositioner); ok {
 			x, y = p.OverlayPos(bw, bh)
 		} else {
 			x = (r.sh.width - bw) / 2
@@ -259,7 +261,23 @@ func (r Router) View() string {
 		}
 		x = max(0, min(x, r.sh.width-bw))
 		y = max(0, min(y, r.sh.height-bh))
-		return Composite(bg, box, x, y)
+		out = Composite(out, box, x, y)
 	}
-	return r.frame(r.Top())
+	return out
+}
+
+// overlayBase returns the deepest screen below the top that is NOT an overlay —
+// the screen the overlay chain is composited over — and its stack index. It is
+// the top screen itself when the top isn't an overlay (the common case: no popup
+// up), so single-screen and single-overlay stacks render exactly as before.
+func (r Router) overlayBase() (Screen, int) {
+	i := len(r.stack) - 1
+	for i > 0 {
+		o, ok := r.stack[i].(Overlayer)
+		if !ok || !o.IsOverlay() {
+			break
+		}
+		i--
+	}
+	return r.stack[i], i
 }

@@ -1241,6 +1241,14 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
 		})
 	}
+	hints := s.HelpBindings()
+	return sh.BindingHelp(hints)
+}
+
+// HelpBindings is the editor's non-prompt shortcut set (save, exit, leave pane,
+// and the editing chords) — what HelpView renders, exported so a host's help
+// overlay can list the same chords without duplicating their strings.
+func (s *EditorScreen) HelpBindings() []key.Binding {
 	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
@@ -1248,14 +1256,18 @@ func (s *EditorScreen) HelpView(sh *core.Shared) string {
 	if s.onRelease != nil {
 		hints = append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave pane")))
 	}
-	return sh.BindingHelp(append(hints,
+	return append(hints,
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("⌥⌫", "del word")),
-	))
+	)
 }
+
+// Dirty reports unsaved changes in the buffer — what the [+] title marker shows —
+// exported so a host (a quit gate) can ask before discarding the buffer.
+func (s *EditorScreen) Dirty() bool { return s.dirty }
 
 // ToggleWrap flips soft line wrapping, carrying the viewport across the switch: scrY
 // counts wrapped display rows one side of it and buffer lines the other, so the top

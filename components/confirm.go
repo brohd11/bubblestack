@@ -28,9 +28,14 @@ type DialogScreen struct {
 	Render     func(*core.Shared) string
 	OnYes      func(*core.Shared) core.Action
 	OnKey      func(*core.Shared, string) core.Action // handles keys other than the reserved confirm/cancel keys
-	Help       []key.Binding
-	Overlay    bool // draw as a centered modal over the screen below (core.Overlayer)
-	Width      int  // overlay inner content width; 0 ⇒ size to content (overlay only)
+	// OnQuit, when set, answers the router's quit-gate consultation while the
+	// dialog is on top — a quit confirm uses it to keep q/ctrl+c as the
+	// force-quit (without it the stack walk would find the gate that pushed the
+	// dialog and stack another popup). Nil ⇒ the dialog abstains.
+	OnQuit  func(*core.Shared) (core.Action, bool)
+	Help    []key.Binding
+	Overlay bool // draw as a centered modal over the screen below (core.Overlayer)
+	Width   int  // overlay inner content width; 0 ⇒ size to content (overlay only)
 }
 
 type ConfirmSimple struct {
@@ -48,8 +53,18 @@ type ConfirmSimple struct {
 
 var _ core.Crumber = (*DialogScreen)(nil)
 var _ core.Overlayer = (*DialogScreen)(nil)
+var _ core.QuitGater = (*DialogScreen)(nil)
 
 func (s *DialogScreen) Init(*core.Shared) tea.Cmd { return nil }
+
+// QuitGate implements core.QuitGater: it delegates to OnQuit when set and
+// abstains otherwise, letting the router's stack walk continue below the dialog.
+func (s *DialogScreen) QuitGate(sh *core.Shared) (core.Action, bool) {
+	if s.OnQuit == nil {
+		return core.Action{}, false
+	}
+	return s.OnQuit(sh)
+}
 
 // IsOverlay reports whether the router should draw this dialog as a centered modal
 // over the screen below it (Overlay) rather than full-screen.

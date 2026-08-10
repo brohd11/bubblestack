@@ -14,6 +14,21 @@ func wrapperOutput(ch *Chrome) (Wrapper, bool) {
 	return w, ok
 }
 
+// quitAction resolves a global quit (q / ctrl+c): the stack is consulted top-down
+// for a QuitGater that handles it, so a modal pushed above the gating screen (a
+// save-as line edit over the editor) doesn't silence it. With no taker the quit
+// is an unconditional tea.Quit.
+func (r *Router) quitAction() Action {
+	for i := len(r.stack) - 1; i >= 0; i-- {
+		if g, ok := r.stack[i].(QuitGater); ok {
+			if act, handled := g.QuitGate(r.sh); handled {
+				return act
+			}
+		}
+	}
+	return Async(tea.Quit)
+}
+
 // dirKeyAction resolves a DirLocator-based global key (Terminal, OpenDir): when action is
 // wired, k matches b, the top screen isn't capturing text, and it advertises a directory,
 // it returns (action(dir), true). Otherwise (Action{}, false) so the key falls through to
@@ -41,7 +56,7 @@ func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Actio
 func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	k := msg.String()
 	if k == "ctrl+c" {
-		return Async(tea.Quit), true
+		return r.quitAction(), true
 	}
 
 	// Refresh fires from any screen/depth except while text is captured (a filtering
@@ -133,7 +148,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 			r.clearOutput()
 			return Action{}, true
 		case MatchKey(k, Keys.Quit):
-			return Async(tea.Quit), true
+			return r.quitAction(), true
 		case MatchKey(k, Keys.Top):
 			ch.Output.GotoTop()
 			return Action{}, true
@@ -180,7 +195,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		case MatchKey(k, Keys.Quit):
 			// q is the global quit, handled once here for every screen (the filter
 			// gate above keeps it from firing while a list/form is capturing text).
-			return Async(tea.Quit), true
+			return r.quitAction(), true
 		case MatchKey(k, Keys.NextTab):
 			return Action{}, r.switchTab(1)
 		case MatchKey(k, Keys.PrevTab):

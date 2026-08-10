@@ -149,6 +149,81 @@ func pump(tm tea.Model, msg tea.Msg) tea.Model {
 	return tm
 }
 
+// gateScreen is a stubScreen with a QuitGater: it records each consultation and,
+// when handled, swallows the quit (a real gate would push its confirm popup here —
+// a no-op action is enough to prove the interception).
+type gateScreen struct {
+	stubScreen
+	gates   int
+	handled bool
+}
+
+func (s *gateScreen) QuitGate(*Shared) (Action, bool) {
+	s.gates++
+	return Action{}, s.handled
+}
+
+func (s *gateScreen) Update(*Shared, tea.Msg) (Screen, Action) { return s, Action{} }
+
+// TestQuitGateIntercepts checks the global quit keys consult the top screen's
+// QuitGater: a handling gate swallows both q and ctrl+c (no tea.Quit command),
+// while a declining gate lets them through unchanged.
+func TestQuitGateIntercepts(t *testing.T) {
+	gate := &gateScreen{handled: true}
+	sh := NewShared(nil)
+	r := NewRouter(sh, []TabEntry{{Title: "Gate", New: func(*Shared) Screen { return gate }}})
+	tm := sized(r)
+
+	if _, cmd := tm.Update(keyMsg("q")); cmd != nil {
+		t.Fatal("a handling QuitGater should swallow q")
+	}
+	if _, cmd := tm.Update(keyMsg("ctrl+c")); cmd != nil {
+		t.Fatal("a handling QuitGater should swallow ctrl+c")
+	}
+	if gate.gates != 2 {
+		t.Fatalf("the gate should have been consulted twice, got %d", gate.gates)
+	}
+
+	gate.handled = false
+	_, cmd := tm.Update(keyMsg("q"))
+	if cmd == nil {
+		t.Fatal("a declining QuitGater should let q through")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("a declined quit should still be tea.Quit")
+	}
+}
+
+// TestQuitWithoutGate: a screen without the QuitGater interface quits
+// unconditionally on q and ctrl+c, exactly as before the gate existed.
+func TestQuitWithoutGate(t *testing.T) {
+	tm := sized(newCoreTestRouter())
+	if _, cmd := tm.Update(keyMsg("q")); cmd == nil {
+		t.Fatal("q should quit when the top screen has no QuitGater")
+	}
+	if _, cmd := tm.Update(keyMsg("ctrl+c")); cmd == nil {
+		t.Fatal("ctrl+c should quit when the top screen has no QuitGater")
+	}
+}
+
+// TestQuitGateThroughPushedScreen: a modal pushed above the gating screen (a
+// save-as line edit over the editor) must not silence the gate — the stack walk
+// finds it below.
+func TestQuitGateThroughPushedScreen(t *testing.T) {
+	gate := &gateScreen{handled: true}
+	sh := NewShared(nil)
+	r := NewRouter(sh, []TabEntry{{Title: "Gate", New: func(*Shared) Screen { return gate }}})
+	tm := sized(r)
+	tm, _ = tm.Update(pushMsg{s: stubScreen{}})
+
+	if _, cmd := tm.Update(keyMsg("ctrl+c")); cmd != nil {
+		t.Fatal("the gate below a pushed screen should still swallow ctrl+c")
+	}
+	if gate.gates != 1 {
+		t.Fatalf("the gate should have been consulted once, got %d", gate.gates)
+	}
+}
+
 // TestRouterStackPushPop checks the stack semantics: push grows it, pop shrinks it,
 // and popping at the root (single screen) is ignored.
 func TestRouterStackPushPop(t *testing.T) {

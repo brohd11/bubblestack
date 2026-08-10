@@ -88,6 +88,38 @@ func (posOverlay) IsOverlay() bool                  { return true }
 func (p posOverlay) OverlayPos(int, int) (int, int) { return p.x, p.y }
 func (posOverlay) View(*Shared) string              { return "AB" }
 
+// labelOverlay is a posOverlay whose box text is configurable, so two stacked
+// overlays can be told apart in the composited frame.
+type labelOverlay struct {
+	posOverlay
+	label string
+}
+
+func (l labelOverlay) View(*Shared) string { return l.label }
+
+// TestOverlayStackCompositesOverBase: two stacked overlays both land over the
+// BASE screen's frame — the middle overlay must not be treated as the background
+// (a popup over a floating line edit must not collapse the screen beneath it).
+func TestOverlayStackCompositesOverBase(t *testing.T) {
+	tm := sized(newCoreTestRouter()) // 80x24
+	tm = pump(tm, Push(posOverlay{x: 4, y: 2}))
+	tm = pump(tm, Push(labelOverlay{posOverlay{x: 10, y: 6}, "CD"}))
+
+	lines := strings.Split(tm.(Router).View(), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("row count = %d, want 24 (frame height)", len(lines))
+	}
+	if got := ansi.Strip(lines[2]); got[4:6] != "AB" {
+		t.Errorf("row 2 = %q, want the first overlay anchored at (4,2)", got)
+	}
+	if got := ansi.Strip(lines[6]); got[10:12] != "CD" {
+		t.Errorf("row 6 = %q, want the second overlay anchored at (10,6)", got)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "stub") {
+		t.Error("the base screen's body should still be drawn under both overlays")
+	}
+}
+
 // TestOverlayPositioned asserts an OverlayPositioner's box lands at its anchor
 // rather than centered, and that an anchor past the frame's edge clamps so the
 // box stays fully on screen.
