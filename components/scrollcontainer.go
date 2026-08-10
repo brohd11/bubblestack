@@ -131,6 +131,24 @@ func (p *ScrollContainer) SetSize(width, height int) {
 // into this pane needs the box's inner measurement.
 func (p *ScrollContainer) TextWidth() int { return p.innerWidth() }
 
+// ScrollTo moves the content so line is the topmost visible row; the viewport
+// clamps it to the content's extent.
+func (p *ScrollContainer) ScrollTo(line int) { p.vp.SetYOffset(line) }
+
+// ScrollOffset is the current top row — what a scroll-syncing host (or a test)
+// reads back.
+func (p *ScrollContainer) ScrollOffset() int { return p.vp.YOffset }
+
+// LineCount is the content's total rows.
+func (p *ScrollContainer) LineCount() int { return p.vp.TotalLineCount() }
+
+// MaxScrollOffset is the furthest ScrollTo can take the content.
+func (p *ScrollContainer) MaxScrollOffset() int { return max(p.LineCount()-p.vp.Height, 0) }
+
+// VisibleRows is how many rows the pane shows at once — what a host centering content
+// in it has to know.
+func (p *ScrollContainer) VisibleRows() int { return p.vp.Height }
+
 // innerWidth is the text width inside the box (cell width minus side borders and
 // the 1-col padding on each side).
 func (p *ScrollContainer) innerWidth() int {

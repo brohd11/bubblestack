@@ -801,8 +801,9 @@ func (s *EditorScreen) contentW() int {
 
 // scrollbarCell renders row i of the scrollbar: a thumb sized to the viewport's
 // share of the buffer and placed proportionally to scrY, on a full-height track.
-// The styles are built per call so a theme switch repaints, as renderLine's muted
-// style does.
+// Track and thumb share the one glyph; the color does the talking — the track is
+// dimmed, the thumb wears the theme's focus color. The styles are built per call
+// so a theme switch repaints, as renderLine's muted style does.
 func (s *EditorScreen) scrollbarCell(row int) string {
 	total := max(s.rowCount(), 1) // rows, not lines: wrapped, one line can be many
 	thumb := max(s.h*s.h/total, 1)
@@ -810,14 +811,14 @@ func (s *EditorScreen) scrollbarCell(row int) string {
 	if d := total - s.h; d > 0 {
 		top = min(s.scrY, d) * (s.h - thumb) / d
 	}
-	color, glyph := core.MutedColor, "│"
+	color := core.MutedColor
 	if row >= top && row < top+thumb {
-		color, glyph = core.FocusedColor, "█"
+		color = core.FocusedColor
 	}
 	if !s.focused {
 		color = core.MutedColor
 	}
-	return lipgloss.NewStyle().Foreground(color).Render(glyph)
+	return lipgloss.NewStyle().Foreground(color).Render("│")
 }
 
 // ---------- rendering ----------
@@ -1277,7 +1278,7 @@ func (s *EditorScreen) Dirty() bool { return s.dirty }
 // The keys belong to whoever hosts the editor: the state lives here, the binding is the
 // app's to choose (ctrl+w is already delete-word-back in this screen).
 func (s *EditorScreen) ToggleWrap() {
-	top := s.topLine() // in the mode we are leaving
+	top := s.TopLine() // in the mode we are leaving
 	s.wrap = !s.wrap
 	s.wrapDirty = true // the gutter appears or goes: the whole geometry moved
 	if s.wrap {
@@ -1288,16 +1289,37 @@ func (s *EditorScreen) ToggleWrap() {
 	s.clampScrollBounds()
 }
 
-// topLine is the buffer line showing at the top of the viewport, in either mode.
-func (s *EditorScreen) topLine() int {
+// TopLine is the buffer line showing at the top of the viewport, in either mode.
+func (s *EditorScreen) TopLine() int { return s.lineAtRow(s.scrY) }
+
+// CenterLine is the buffer line showing at the MIDDLE of the viewport — the anchor a
+// synced view (gote's preview pane) centers itself on. Aligning the middles keeps the
+// correspondence readable across the whole of the other pane rather than only at its
+// first row, and leaves room at both ends for the two views to disagree about how many
+// rows the same text takes.
+func (s *EditorScreen) CenterLine() int { return s.lineAtRow(s.scrY + s.h/2) }
+
+// ScrollSpan reports the view's vertical position in display ROWS: the current offset,
+// the largest offset the buffer allows, and the viewport's height. Rows, not lines —
+// wrapped, one line is several — which is what makes it the honest measure of "how far
+// down are we" for a host syncing its own scroll to this one.
+func (s *EditorScreen) ScrollSpan() (offset, maxOffset, height int) {
+	return s.scrY, max(s.rowCount()-s.h, 0), s.h
+}
+
+// lineAtRow is the buffer line showing at a display row, in either mode.
+func (s *EditorScreen) lineAtRow(row int) int {
+	if row < 0 {
+		row = 0
+	}
 	if !s.wrap {
-		return s.scrY
+		return min(row, max(len(s.lines)-1, 0))
 	}
 	s.rebuildWrapRows()
-	if s.scrY < len(s.wrapRows) {
-		return s.wrapRows[s.scrY].line
+	if row < len(s.wrapRows) {
+		return s.wrapRows[row].line
 	}
-	return len(s.lines) - 1
+	return max(len(s.lines)-1, 0)
 }
 
 // firstRowOfLine is the display row a buffer line starts on.

@@ -490,3 +490,118 @@ func TestRenderMarkdownBlockquoteWrappedRowsStayMuted(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderMarkdownMapped: the mapped render is the same text plus, per source line,
+// the output row that line's block starts at. The marks are what a preview pane
+// scrolls to, so the two properties that matter are that they never go backwards and
+// that a heading's mark actually lands on the row carrying that heading.
+func TestRenderMarkdownMapped(t *testing.T) {
+	const width = 40
+	body := "# Title\n" +
+		"\n" +
+		"a paragraph hard-wrapped by its author\n" +
+		"across three source lines that the render\n" +
+		"re-flows into fewer rows than it was given\n" +
+		"\n" +
+		"## Section\n" +
+		"\n" +
+		"- one\n" +
+		"- two\n" +
+		"\n" +
+		"```go\n" +
+		"code()\n" +
+		"```\n" +
+		"\n" +
+		"### Tail\n"
+
+	got, marks := RenderMarkdownMapped(body, width)
+	if want := RenderMarkdown(body, width); got != want {
+		t.Fatalf("the mapped render must match RenderMarkdown's, got:\n%s\nwant:\n%s", got, want)
+	}
+
+	src := strings.Split(body, "\n")
+	if len(marks) != len(src) {
+		t.Fatalf("got %d marks for %d source lines", len(marks), len(src))
+	}
+
+	rows := strings.Split(got, "\n")
+	for i, m := range marks {
+		if i > 0 && m < marks[i-1] {
+			t.Fatalf("mark %d (%d) goes backwards from %d", i, m, marks[i-1])
+		}
+		if m > len(rows) {
+			t.Fatalf("mark %d is row %d, past the render's %d rows", i, m, len(rows))
+		}
+	}
+
+	// Headings and list items are the anchors worth pinning: they are exactly where a
+	// proportional estimate drifts, since the render adds rows (the blank above every
+	// heading) that the source does not have.
+	for i, line := range src {
+		text := ""
+		switch {
+		case strings.HasPrefix(line, "#"):
+			text = strings.TrimLeft(line, "# ")
+		case strings.HasPrefix(line, "- "):
+			text = strings.TrimPrefix(line, "- ")
+		default:
+			continue
+		}
+		if row := ansi.Strip(rows[marks[i]]); !strings.Contains(row, text) {
+			t.Errorf("source line %d (%q) marks row %d = %q, which does not carry it",
+				i, line, marks[i], row)
+		}
+	}
+
+	// A re-flowed paragraph has no row per source line, so its three lines share out the
+	// block's rows: each mark lands inside the block (line 5 is the blank after it) and
+	// they advance through it rather than all pinning to its first row.
+	for i := 2; i <= 4; i++ {
+		if marks[i] < marks[2] || marks[i] >= marks[5] {
+			t.Errorf("paragraph line %d marks row %d, outside the block's rows [%d,%d)",
+				i, marks[i], marks[2], marks[5])
+		}
+	}
+	if marks[4] == marks[2] {
+		t.Errorf("the paragraph's lines should advance through its rows, got %v", marks[2:5])
+	}
+	// The fence's own line and its content: the streaming path emits a row per code
+	// line, so the code line marks the row carrying it rather than the block's start.
+	if row := ansi.Strip(rows[marks[12]]); !strings.Contains(row, "code()") {
+		t.Errorf("the fenced line marks row %d = %q, which does not carry it", marks[12], row)
+	}
+}
+
+// TestRenderMarkdownMappedCodeBlock: the highlighted path accumulates a fenced block
+// and emits it in one go at the closing marker, so without emitCode's per-line credit
+// every line of a long block would anchor at the block's first row. It only holds when
+// the injected renderer answers a row per line, which is the contract it advertises.
+func TestRenderMarkdownMappedCodeBlock(t *testing.T) {
+	CodeBlockRenderer = func(_ string, code []string, _ int) []string {
+		out := make([]string, len(code))
+		for i, l := range code {
+			out[i] = "R:" + l
+		}
+		return out
+	}
+	t.Cleanup(func() { CodeBlockRenderer = nil })
+
+	body := "intro\n\n```go\none()\ntwo()\nthree()\n```\n\ntail\n"
+	got, marks := RenderMarkdownMapped(body, 30)
+	rows := strings.Split(ansi.Strip(got), "\n")
+
+	// Source lines 3..5 are the code; each should mark the row carrying it.
+	for i, want := range map[int]string{3: "one()", 4: "two()", 5: "three()"} {
+		if row := rows[marks[i]]; !strings.Contains(row, want) {
+			t.Errorf("code line %d marks row %d = %q, want it to carry %q", i, marks[i], row, want)
+		}
+	}
+	// The fence markers themselves have no row of their own: the opener falls back to
+	// the blank before the block, the closer to the block's last row — behind, not ahead.
+	if marks[2] > marks[3] || marks[6] < marks[5] {
+		t.Errorf("the fence markers should bracket their content, got %v", marks[2:7])
+	}
+	if row := rows[marks[8]]; !strings.Contains(row, "tail") {
+		t.Errorf("the line after the block marks row %d = %q, want the tail", marks[8], row)
+	}
+}

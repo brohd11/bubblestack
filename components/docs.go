@@ -222,15 +222,67 @@ const (
 
 // RenderMarkdown folds a page's markdown body to width display columns.
 func RenderMarkdown(body string, width int) string {
+	out, _ := RenderMarkdownMapped(body, width)
+	return out
+}
+
+// RenderMarkdownMapped renders body like RenderMarkdown and also answers, per source
+// line, the output row that line's block starts at — what a preview pane needs to
+// follow an editor's scroll exactly rather than proportionally (the render re-flows,
+// so no proportional estimate can land on the right row).
+//
+// A line that only accumulates into a pending block — a hard-wrapped paragraph's
+// second line, a bullet's continuation — has no row of its own, since the block is
+// re-flowed as one: those lines share out the block's rows in proportion. Every mark
+// therefore lands inside the block its line belongs to, and the marks are monotonic
+// non-decreasing, so a scroll anchored on one never runs ahead of the source.
+func RenderMarkdownMapped(body string, width int) (string, []int) {
 	if width < 20 {
 		width = 20
 	}
-	r := &docRenderer{width: width}
-	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+	src := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	marks := make([]int, len(src))
+	for i := range marks {
+		marks[i] = -1
+	}
+	r := &docRenderer{width: width, marks: marks, pendAt: -1}
+	for i, line := range src {
+		r.at, r.mark = i, i
 		r.line(line)
+		// Whatever is pending after the line was fed in belongs to this line too: the
+		// block's rows are credited to the whole run when it flushes.
+		if len(r.pending) > 0 {
+			if r.pendAt < 0 {
+				r.pendAt = i
+			}
+			r.pendTo = i
+		}
 	}
 	r.flush()
-	return strings.Trim(strings.Join(r.out, "\n"), "\n")
+
+	// Backfill the lines that emitted nothing of their own — a collapsed blank, a fence
+	// marker, code the renderer folded — onto the last row that did come from the
+	// source above them. Behind, never ahead: a preview anchored here shows the line
+	// the editor is on rather than something after it.
+	last := 0
+	for i, m := range marks {
+		if m < 0 {
+			marks[i] = last
+			continue
+		}
+		last = m
+	}
+
+	// The leading rows the trim takes off shift every mark with them. blank refuses to
+	// emit a leading separator, so this is normally a no-op — done anyway rather than
+	// leave the marks able to disagree with the text they index.
+	joined := strings.Join(r.out, "\n")
+	out := strings.TrimLeft(joined, "\n")
+	lead := len(joined) - len(out)
+	for i := range marks {
+		marks[i] = max(marks[i]-lead, 0)
+	}
+	return strings.TrimRight(out, "\n"), marks
 }
 
 // docRenderer walks the page a line at a time, accumulating the current block (a paragraph
@@ -240,6 +292,7 @@ func RenderMarkdown(body string, width int) string {
 type docRenderer struct {
 	width int
 	out   []string
+	rows  int // display rows emitted so far: one out entry can be a whole wrapped block
 
 	pending []string // the lines of the block being accumulated
 	marker  string   // the pending block is a list item hung under this marker; "" ⇒ paragraph
@@ -247,6 +300,15 @@ type docRenderer struct {
 	fence   string   // the marker that opened the current code fence; "" ⇒ not in one
 	lang    string   // the current fence's language tag ("go" in "```go"); "" ⇒ none
 	code    []string // the fenced lines accumulated for CodeBlockRenderer (nil ⇒ streamed)
+
+	// The source→row map (see RenderMarkdownMapped, the one place a docRenderer is
+	// built). marks is indexed by source line, -1 until that line's row is known.
+	marks   []int
+	at      int // the source line being fed to line()
+	mark    int // the line emit credits a row to: at, or -1 while a block is flushing
+	pendAt  int // the source line the pending block opened at; -1 ⇒ nothing pending
+	pendTo  int // the last source line to join it
+	fenceAt int // the source line the open fence's marker is on
 }
 
 func (r *docRenderer) line(line string) {
@@ -259,15 +321,14 @@ func (r *docRenderer) line(line string) {
 			// there is nothing to flush first.)
 			lang, code := r.lang, r.code
 			r.fence, r.lang, r.code = "", "", nil
-			for _, l := range CodeBlockRenderer(lang, code, r.width-len(indent)) {
-				r.emit(indent + l)
-			}
+			r.emitCode(lang, code)
 			r.blank()
 			return
 		}
 		r.flush()
 		if r.fence == "" {
 			r.fence = m
+			r.fenceAt = r.at
 			r.lang = fenceLang(trimmed[len(m):])
 			if CodeBlockRenderer != nil {
 				r.code = []string{}
@@ -385,15 +446,19 @@ func (r *docRenderer) heading(rendered string) {
 // closing marker had arrived — the default path streams, so it has nothing pending.
 func (r *docRenderer) flush() {
 	if r.fence != "" && r.code != nil {
-		for _, l := range CodeBlockRenderer(r.lang, r.code, r.width-len(indent)) {
-			r.emit(indent + l)
-		}
+		lang, code := r.lang, r.code
 		r.fence, r.code, r.lang = "", nil, ""
+		r.emitCode(lang, code)
 	}
 	if len(r.pending) == 0 {
 		return
 	}
 	joined := strings.Join(r.pending, " ")
+	// The block's rows belong to the lines that accumulated it — never to r.at, which
+	// is usually the line that ENDED it (the blank, the next heading) and has its own
+	// rows still to come.
+	start, mark := r.rows, r.mark
+	r.mark = -1
 	switch {
 	case r.quote:
 		r.emit(quoteBlock(joined, r.width))
@@ -402,7 +467,37 @@ func (r *docRenderer) flush() {
 	default:
 		r.emit(ansi.Wrap(inline(joined), r.width, wrapBreaks))
 	}
+	r.mark = mark
+	if r.pendAt >= 0 {
+		// Spread the block's rows across the lines that fed it rather than pinning them
+		// all to its first row. A hard-wrapped paragraph is the common case in these
+		// pages — three source lines re-flowing to two or three rows — and pinning left
+		// a synced view several rows behind for the whole of every paragraph. The result
+		// stays inside the block, so it can never run ahead of the source.
+		n, span := r.pendTo-r.pendAt+1, r.rows-start
+		for i := r.pendAt; i <= r.pendTo; i++ {
+			r.marks[i] = start + (i-r.pendAt)*span/n
+		}
+		r.pendAt = -1
+	}
 	r.pending, r.marker, r.quote = nil, "", false
+}
+
+// emitCode renders an accumulated fenced block through CodeBlockRenderer. The rows come
+// out one per source line unless the renderer folds or expands them, so that is the
+// condition for crediting each row to its own line rather than leaving the whole block
+// to the backfill.
+func (r *docRenderer) emitCode(lang string, code []string) {
+	rows := CodeBlockRenderer(lang, code, r.width-len(indent))
+	perLine := len(rows) == len(code)
+	mark := r.mark
+	for i, l := range rows {
+		if perLine {
+			r.mark = r.fenceAt + 1 + i // the fence marker itself is fenceAt
+		}
+		r.emit(indent + l)
+	}
+	r.mark = mark
 }
 
 // quoteBlock wraps a quote and bars EVERY row — unlike hang, which marks only the
@@ -429,7 +524,15 @@ func quoteBlock(text string, width int) string {
 	return strings.Join(rows, "\n")
 }
 
-func (r *docRenderer) emit(s string) { r.out = append(r.out, s) }
+// emit appends one entry — which may itself be a wrapped block of several rows, hence
+// the running row count — and credits the first row to the source line that produced it.
+func (r *docRenderer) emit(s string) {
+	if r.mark >= 0 && r.mark < len(r.marks) && r.marks[r.mark] < 0 {
+		r.marks[r.mark] = r.rows
+	}
+	r.rows += 1 + strings.Count(s, "\n")
+	r.out = append(r.out, s)
+}
 
 // blank appends a separator line, collapsing runs (the source's blank line before a
 // heading and the one the heading adds itself would otherwise double up).

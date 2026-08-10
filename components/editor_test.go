@@ -850,14 +850,18 @@ func TestEditorWheelFocus(t *testing.T) {
 // TestEditorScrollbar: a buffer taller than the viewport draws a proportional
 // scrollbar in the rightmost column — a thumb sized to the viewport's share of the
 // buffer, placed by scrY — and the text window narrows one column so the caret
-// never hides under the bar. A short buffer keeps the full width and no bar.
+// never hides under the bar. Track and thumb share the one "│" glyph; the color
+// splits them (thumb in the focus color, track dimmed). A short buffer keeps the
+// full width and no bar.
 func TestEditorScrollbar(t *testing.T) {
+	// The thumb/track split is color-only now: the styling has to be observable.
+	withColor(t)
 	s, _ := newEditor(EditorOpts{}) // standalone: no gutter, the bar is the last cell
 	s.setContent("a\nb\nc")
 	if s.barVisible() || s.textW() != s.w {
 		t.Fatalf("a buffer that fits: barVisible=%v textW=%d, want no bar and full %d", s.barVisible(), s.textW(), s.w)
 	}
-	if strings.ContainsRune(s.body(), '█') || strings.ContainsRune(s.body(), '│') {
+	if strings.ContainsRune(s.body(), '│') {
 		t.Fatal("no scrollbar cells without overflow")
 	}
 
@@ -866,7 +870,8 @@ func TestEditorScrollbar(t *testing.T) {
 		t.Fatalf("overflow: barVisible=%v textW=%d, want the bar and w-1 (%d)", s.barVisible(), s.textW(), s.w-1)
 	}
 	thumb := s.h * s.h / len(s.lines)
-	lastCell := func(row string) rune { rs := []rune(row); return rs[len(rs)-1] }
+	trackCell := lipgloss.NewStyle().Foreground(core.MutedColor).Render("│")
+	thumbCell := lipgloss.NewStyle().Foreground(core.FocusedColor).Render("│")
 	assertBar := func(top int) {
 		t.Helper()
 		rows := strings.Split(s.body(), "\n")
@@ -877,12 +882,12 @@ func TestEditorScrollbar(t *testing.T) {
 			if w := lipgloss.Width(row); w != s.w {
 				t.Fatalf("row %d width = %d, want %d (bar included)", i, w, s.w)
 			}
-			want := '│'
+			want := trackCell
 			if i >= top && i < top+thumb {
-				want = '█'
+				want = thumbCell
 			}
-			if got := lastCell(row); got != want {
-				t.Fatalf("row %d bar cell = %q, want %q (scrY %d)", i, got, want, s.scrY)
+			if !strings.HasSuffix(row, want) {
+				t.Fatalf("row %d bar cell = %q, want suffix %q (scrY %d)", i, row, want, s.scrY)
 			}
 		}
 	}
@@ -1173,5 +1178,63 @@ func TestEditorWrapToggleKeepsView(t *testing.T) {
 	s.ToggleWrap()
 	if got := s.wrapRows[s.scrY].line; got != top {
 		t.Fatalf("re-wrapped top line = %d, want %d", got, top)
+	}
+}
+
+// TestEditorScrollAnchors: what a host syncing its own scroll to the editor reads —
+// the line at the top, the line at the middle, and the scroll extent in display ROWS.
+// Wrapped, one line is several rows, so the two answers have to come off the wrap
+// cache rather than off the buffer index; unwrapped they are the same number.
+func TestEditorScrollAnchors(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(longDoc()) // 100 one-char lines, 20 rows of viewport
+
+	off, maxOff, height := s.ScrollSpan()
+	if off != 0 || maxOff != len(s.lines)-s.h || height != s.h {
+		t.Fatalf("at rest: ScrollSpan = (%d, %d, %d), want (0, %d, %d)",
+			off, maxOff, height, len(s.lines)-s.h, s.h)
+	}
+	if s.TopLine() != 0 || s.CenterLine() != s.h/2 {
+		t.Fatalf("at rest: top %d center %d, want 0 and %d", s.TopLine(), s.CenterLine(), s.h/2)
+	}
+
+	for i := 0; i < 10; i++ {
+		wheel(s, sh, tea.MouseButtonWheelDown)
+	}
+	off, _, _ = s.ScrollSpan()
+	if off == 0 {
+		t.Fatal("the wheel should have scrolled the view")
+	}
+	if got, want := s.CenterLine(), off+s.h/2; got != want {
+		t.Fatalf("unwrapped center line = %d, want %d (offset %d)", got, want, off)
+	}
+
+	// Bottomed out, both anchors clamp to the buffer rather than running past it.
+	for i := 0; i < 200; i++ {
+		wheel(s, sh, tea.MouseButtonWheelDown)
+	}
+	if off, maxOff, _ = s.ScrollSpan(); off != maxOff {
+		t.Fatalf("the wheel should bottom out at %d, got %d", maxOff, off)
+	}
+	if got := s.CenterLine(); got >= len(s.lines) {
+		t.Fatalf("center line %d is past the buffer's %d lines", got, len(s.lines))
+	}
+
+	// Wrapped: the span is measured in wrapped rows, and the anchors answer buffer
+	// lines — the same line for every row it wraps over.
+	s.setContent(strings.Repeat(strings.Repeat("q", 250)+"\n", 30))
+	s.ToggleWrap()
+	if _, maxOff, _ = s.ScrollSpan(); maxOff != s.wrapTotalRows()-s.h {
+		t.Fatalf("wrapped: max offset %d, want %d rows", maxOff, s.wrapTotalRows()-s.h)
+	}
+	for i := 0; i < 5; i++ {
+		wheel(s, sh, tea.MouseButtonWheelDown)
+	}
+	off, _, _ = s.ScrollSpan()
+	if got, want := s.TopLine(), s.wrapRows[off].line; got != want {
+		t.Fatalf("wrapped: top line = %d, want %d (row %d)", got, want, off)
+	}
+	if got, want := s.CenterLine(), s.wrapRows[off+s.h/2].line; got != want {
+		t.Fatalf("wrapped: center line = %d, want %d (row %d)", got, want, off+s.h/2)
 	}
 }
