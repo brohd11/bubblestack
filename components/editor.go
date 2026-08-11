@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -26,7 +27,10 @@ import (
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
 // tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
 // and a left click places the cursor. Dragging selects the swept character cells and
-// copies them to the system clipboard on release. The wheel scrolls the view without
+// copies them to the system clipboard on release; a double click selects the word under
+// it and a triple click the whole line, each copying the same way. Typing one of the
+// delimiters in editorPairs over a selection wraps the selection in it and keeps it
+// selected, so the key repeats to nest. The wheel scrolls the view without
 // moving the cursor (a cursor move then snaps the view back to it), and when the
 // buffer overflows the viewport a proportional scrollbar takes the rightmost column.
 //
@@ -90,6 +94,12 @@ type EditorScreen struct {
 	dragging                  bool    // a left-button gesture is active
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	selStart, selEnd          textPos // normalized half-open selected buffer range
+
+	clickPos   textPos   // where the previous left press landed
+	clickTime  time.Time // when it landed, for the multi-click window
+	clickCount int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
+
+	emphasisPairs bool // '*'/'_' auto-close here: a prose buffer, not code (see emphasisPairExt)
 
 	undoStack, redoStack                  []editorSnapshot
 	revision, savedRevision, nextRevision uint64
@@ -227,6 +237,11 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
+// editorMultiClickWindow is how long a left press stays eligible to be the second or
+// third click of a multi-click. tea.MouseMsg carries neither a timestamp nor a click
+// count, so the editor keeps both itself.
+const editorMultiClickWindow = 500 * time.Millisecond
+
 // editorControlPlaceholder stands in for a control rune that reached the buffer anyway —
 // a file loaded with a lone '\r' or a NUL, which setContent does not strip. One cell wide,
 // so cellOfCol/colAtCell (which count every non-tab rune as one) stay exact.
@@ -324,6 +339,7 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl:            hl,
 		hlExplicit:    hlExplicit,
 		keyHandler:    lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
+		emphasisPairs: emphasisPairExt(strings.ToLower(filepath.Ext(opts.Path))),
 		hlSeq:         -1,   // nothing parsed yet, even before the first edit
 		wrapDirty:     true, // no rows measured yet, even before the first edit
 		nextRevision:  1,
@@ -477,7 +493,9 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		if m.Action == tea.MouseActionPress {
 			switch m.Button {
 			case tea.MouseButtonLeft:
-				s.startDrag(sh, m.X, m.Y)
+				if text := s.pressLeft(sh, m.X, m.Y, time.Now()); text != "" {
+					return s, copySelectionCmd(text)
+				}
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 				// The wheel is browse-only and only while focused: mouse msgs are
 				// broadcast to every pane, so an unfocused editor must not roll.
@@ -495,14 +513,20 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			s.extendDrag(sh, m.X, m.Y)
 			s.dragging = false
 			if text := s.selectedText(); text != "" {
-				return s, core.Async(func() tea.Msg {
-					return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text)}
-				})
+				return s, copySelectionCmd(text)
 			}
 		}
 		return s, core.Action{}
 	}
 	return s, core.Action{}
+}
+
+// copySelectionCmd is the clipboard write every completed mouse gesture that leaves a
+// selection issues — a drag release and a multi-click alike.
+func copySelectionCmd(text string) core.Action {
+	return core.Async(func() tea.Msg {
+		return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text)}
+	})
 }
 
 // key routes one keystroke. After the exit prompt, a handler registered for the
@@ -519,6 +543,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
 	k := m.String()
 	s.dragging = false
+	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
@@ -550,6 +575,17 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 				s.recordEdit(before)
 			}
 		}()
+	}
+	// Wrapping the selection has to be decided before the pre-pass below, which deletes
+	// the selection for every rune-bearing key. The undo gate above has already taken its
+	// snapshot (a rune key is always an edit key), so both insertions land in one step.
+	if s.selectionActive() && len(m.Runes) == 1 && !m.Alt {
+		if closer, ok := editorPairs[m.Runes[0]]; ok {
+			s.surroundSelection(m.Runes[0], closer)
+			s.wrapDirty = true
+			s.clampScroll()
+			return s, core.Action{}
+		}
 	}
 	if s.selectionActive() {
 		switch k {
@@ -631,6 +667,17 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		s.curX = len(s.lines[s.curY])
 		s.wantX = s.curX
 	default:
+		// A single typed opening delimiter brings its closer with it and leaves the caret
+		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
+		// the whole payload) on the insertText path below.
+		if len(m.Runes) == 1 && !m.Alt {
+			if closer, ok := editorPairs[m.Runes[0]]; ok && (s.emphasisPairs || !emphasisPairRune(m.Runes[0])) {
+				s.insertRunes(m.Runes[0], closer)
+				s.curX--
+				s.wantX = s.curX
+				break
+			}
+		}
 		// Every rune-bearing key, typed or pasted: a bracketed paste is one KeyMsg whose
 		// Runes carry newlines, so this must go through insertText, not insertRunes.
 		if len(m.Runes) > 0 {
@@ -867,6 +914,65 @@ func (s *EditorScreen) forwardDelete() {
 	s.editSeq++
 }
 
+// ---------- delimiter pairs ----------
+
+// editorPairs maps an opening delimiter to the one that closes it. Typing a key in this
+// table over a selection wraps the selection in the pair; typing it with no selection
+// inserts both and leaves the caret between them. Nothing else in the pair story is
+// clever: backspace does not swallow the closer, and typing the closing delimiter over
+// an auto-inserted one inserts a second.
+var editorPairs = map[rune]rune{'(': ')', '[': ']', '{': '}', '*': '*', '_': '_'}
+
+// emphasisPairRune marks the pairs that only auto-close in prose. In code '*' is
+// multiplication or a pointer and '_' is an identifier character, so closing them on
+// every keystroke would fight ordinary typing; wrapping a SELECTION in them stays
+// available everywhere because that gesture is always deliberate.
+func emphasisPairRune(r rune) bool { return r == '*' || r == '_' }
+
+// emphasisPairExt reports the file types where emphasisPairRune delimiters auto-close.
+func emphasisPairExt(ext string) bool {
+	switch ext {
+	case ".md", ".markdown":
+		return true
+	}
+	return false
+}
+
+// surroundSelection wraps the selection in open/close and keeps the original text
+// selected, so repeating the key nests another pair: word → *word* → **word**. The
+// closer goes in first — inserting the opener first would shift a single-line
+// selection's end column out from under the second splice.
+func (s *EditorScreen) surroundSelection(open, close rune) {
+	start, end := s.selStart, s.selEnd
+	if end.x == 0 && end.y > start.y {
+		// A triple-clicked line takes the newline ending it, and a closer at column 0 of
+		// the next line reads as wrapping the break rather than the text. Pull it back to
+		// the end of the last selected line; the selection narrows to the text it wrapped.
+		end = textPos{end.y - 1, len(s.lines[end.y-1])}
+	}
+	s.lines[end.y] = spliceRune(s.lines[end.y], end.x, close)
+	s.lines[start.y] = spliceRune(s.lines[start.y], start.x, open)
+	s.selStart = textPos{start.y, start.x + 1}
+	if start.y == end.y {
+		s.selEnd = textPos{end.y, end.x + 1} // the opener pushed the closer along too
+	} else {
+		s.selEnd = textPos{end.y, end.x} // a different line: only the closer moved it
+	}
+	s.curY, s.curX, s.wantX = s.selEnd.y, s.selEnd.x, s.selEnd.x
+	s.dirty = true
+	s.editSeq++
+}
+
+// spliceRune inserts r at column x, returning a line that shares no backing array with
+// the original. The editing helpers splice in place around the cursor; this one is for
+// the two edits surroundSelection makes away from it.
+func spliceRune(line []rune, x int, r rune) []rune {
+	out := make([]rune, 0, len(line)+1)
+	out = append(out, line[:x]...)
+	out = append(out, r)
+	return append(out, line[x:]...)
+}
+
 // ---------- word/line operations (the bubbles/textinput KeyMap mirror) ----------
 
 // isWordSpace delimits words: whitespace only, the same notion textinput uses (no
@@ -879,6 +985,43 @@ func isWordSpace(r rune) bool { return unicode.IsSpace(r) }
 // user invokes when peeling a path or expression apart from right to left.
 func isBackwardDeleteSymbol(r rune) bool {
 	return strings.ContainsRune("()[]{}.,|/", r)
+}
+
+// editorWordClass groups runes for double-click selection. The whitespace-only split
+// word movement uses is too coarse here — it would take all of "foo.bar(baz)" as one
+// word — so punctuation forms its own runs and a double-click on the '.' in "foo.bar"
+// takes just the dot.
+func editorWordClass(r rune) int {
+	switch {
+	case isWordSpace(r):
+		return 0
+	case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
+		return 1
+	default:
+		return 2
+	}
+}
+
+// wordBoundsAt returns the half-open column range of the run of same-class runes around
+// col. Unlike wordBackPos/wordForwardPos it is a pure function of the line and does not
+// swallow the whitespace next to the word. A column past the end of the line takes the
+// last run, which is where a click in the empty space right of the text lands.
+func wordBoundsAt(line []rune, col int) (int, int) {
+	if len(line) == 0 {
+		return 0, 0
+	}
+	if col >= len(line) {
+		col = len(line) - 1
+	}
+	class := editorWordClass(line[col])
+	from, to := col, col+1
+	for from > 0 && editorWordClass(line[from-1]) == class {
+		from--
+	}
+	for to < len(line) && editorWordClass(line[to]) == class {
+		to++
+	}
+	return from, to
 }
 
 // wordBackPos is the position WordBackward would move to from the cursor: at column 0
@@ -1094,6 +1237,65 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	s.clearSelection()
 	s.curY, s.curX, s.wantX = p.y, p.x, p.x
 	s.clampScroll()
+}
+
+// pressLeft handles one left press. A press landing on the cell the previous one did,
+// inside editorMultiClickWindow, promotes to a word (second) or line (third) selection;
+// a fourth starts over as a plain caret click. It returns the text a completed
+// multi-click should copy, so a double-click puts a word on the clipboard the same way
+// sweeping it with a drag does — "" for an ordinary click, which begins a drag instead.
+// The clock is a parameter so tests can drive click cadence.
+func (s *EditorScreen) pressLeft(sh *core.Shared, x, y int, now time.Time) string {
+	p, ok := s.positionAt(sh, x, y, false)
+	if !ok {
+		s.clickCount = 0
+		return ""
+	}
+	if s.clickCount > 0 && p == s.clickPos && now.Sub(s.clickTime) < editorMultiClickWindow {
+		s.clickCount++
+	} else {
+		s.clickCount = 1
+	}
+	s.clickPos, s.clickTime = p, now
+	switch s.clickCount {
+	case 2:
+		s.selectWordAt(p)
+	case 3:
+		s.selectLineAt(p)
+	default:
+		s.clickCount = 1
+		s.startDrag(sh, x, y)
+		return ""
+	}
+	// The gesture is over: leaving dragging set would let the release extendDrag back
+	// onto the anchor and clear the selection this press just made.
+	s.dragging = false
+	s.clampScrollBounds()
+	return s.selectedText()
+}
+
+// selectWordAt selects the run of same-class runes under p. A blank line has no run, so
+// it stays an ordinary caret placement.
+func (s *EditorScreen) selectWordAt(p textPos) {
+	from, to := wordBoundsAt(s.lines[p.y], p.x)
+	if from == to {
+		s.clearSelection()
+		s.curY, s.curX, s.wantX = p.y, p.x, p.x
+		return
+	}
+	s.selStart, s.selEnd = textPos{p.y, from}, textPos{p.y, to}
+	s.curY, s.curX, s.wantX = p.y, to, to
+}
+
+// selectLineAt selects p's whole line including the newline ending it, so the selection
+// deletes as a line and copies as one. The last line has no newline to take.
+func (s *EditorScreen) selectLineAt(p textPos) {
+	end := textPos{p.y, len(s.lines[p.y])}
+	if p.y < len(s.lines)-1 {
+		end = textPos{p.y + 1, 0}
+	}
+	s.selStart, s.selEnd = textPos{p.y, 0}, end
+	s.curY, s.curX, s.wantX = end.y, end.x, end.x
 }
 
 func (s *EditorScreen) startDrag(sh *core.Shared, x, y int) {
@@ -2025,16 +2227,17 @@ func (s *EditorScreen) paneW() int {
 }
 
 // applySaveName points the buffer at name: a save-as renames it, so the title bar,
-// crumb, file-type key handler and syntax coloring follow the new extension. Only a
-// registry-chosen highlighter is re-picked: one passed through EditorOpts was a
-// deliberate override and a rename must not undo it. hlSeq is reset rather than
-// bumped because the new highlighter has parsed nothing.
+// crumb, file-type key handler, emphasis pairing and syntax coloring follow the new
+// extension. Only a registry-chosen highlighter is re-picked: one passed through
+// EditorOpts was a deliberate override and a rename must not undo it. hlSeq is reset
+// rather than bumped because the new highlighter has parsed nothing.
 func (s *EditorScreen) applySaveName(name string) {
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
 	ext := strings.ToLower(filepath.Ext(name))
 	s.keyHandler = lookupEditorKeyHandler(ext)
+	s.emphasisPairs = emphasisPairExt(ext)
 	if !s.hlExplicit {
 		s.hl = lookupHighlighter(ext)
 		s.hlSeq = -1
