@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // EditorScreen is the simple nano-like text editor: it loads a file (or starts empty),
@@ -44,7 +45,8 @@ import (
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
 // because tabs have to be stored raw but never rendered raw (see expandLine).
-// Deliberately minimal: no keyboard cut/paste and no search.
+// Deliberately minimal: no keyboard cut/paste; optional literal search is enabled by
+// the host through EditorOpts.Search.
 type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
@@ -91,11 +93,23 @@ type EditorScreen struct {
 
 	undoStack, redoStack                  []editorSnapshot
 	revision, savedRevision, nextRevision uint64
+
+	searchEnabled bool          // EditorOpts.Search: ctrl+f and match rendering are available
+	searchQuery   string        // live query; retained after enter
+	searchBefore  string        // query restored when an adjustment is cancelled
+	searchSeq     int           // editSeq represented by searchMatches (-1 means stale)
+	searchCached  string        // query represented by searchMatches
+	searchMatches [][]textRange // per-line, non-overlapping display-cell ranges
 }
 
 // textPos is an insertion position in the rune buffer. Selection ranges are stored as
 // [start,end); mouse endpoint cells are converted to these positions before sorting.
 type textPos struct{ y, x int }
+
+// textRange is a half-open range of display cells within one buffer line. Search
+// results are found in rune columns, then cached in cells so rendering does not
+// repeatedly walk every prefix of a tabbed line.
+type textRange struct{ from, to int }
 
 // editorSnapshot is one logical edit boundary. Lines are deep-copied because the
 // editor's mutation helpers edit rune slices in place; the remaining fields restore
@@ -158,6 +172,11 @@ type wrapRow struct{ line, start, end int }
 // render-only: styles never change cell widths, and a highlighter whose spans
 // don't reconstruct the line exactly is ignored (plain render), so the frame
 // contract — no raw tabs, rectangular body — can't be broken by one.
+//
+// Search enables the editor's ctrl+f literal search. A floating LineEditScreen opens
+// over the editor's top edge and every case-insensitive match is highlighted in the
+// buffer; the retained query is shown in the title row after the overlay closes. It
+// is opt-in so the shared editor does not change existing consumers' shortcuts.
 type EditorOpts struct {
 	Path        string
 	Title       string
@@ -167,6 +186,7 @@ type EditorOpts struct {
 	OnRelease   func(*core.Shared) core.Action
 	OnSaved     func(*core.Shared, string) core.Action
 	Highlighter Highlighter
+	Search      bool
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -292,21 +312,23 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
 	}
 	return &EditorScreen{
-		path:         opts.Path,
-		title:        title,
-		crumb:        crumb,
-		onExit:       opts.OnExit,
-		onRelease:    opts.OnRelease,
-		onSaved:      opts.OnSaved,
-		lines:        [][]rune{{}},
-		bordered:     opts.Border,
-		focused:      true, // standalone the editor is always focused; a panel blurs it
-		hl:           hl,
-		hlExplicit:   hlExplicit,
-		keyHandler:   lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
-		hlSeq:        -1,   // nothing parsed yet, even before the first edit
-		wrapDirty:    true, // no rows measured yet, even before the first edit
-		nextRevision: 1,
+		path:          opts.Path,
+		title:         title,
+		crumb:         crumb,
+		onExit:        opts.OnExit,
+		onRelease:     opts.OnRelease,
+		onSaved:       opts.OnSaved,
+		lines:         [][]rune{{}},
+		bordered:      opts.Border,
+		focused:       true, // standalone the editor is always focused; a panel blurs it
+		hl:            hl,
+		hlExplicit:    hlExplicit,
+		keyHandler:    lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
+		hlSeq:         -1,   // nothing parsed yet, even before the first edit
+		wrapDirty:     true, // no rows measured yet, even before the first edit
+		nextRevision:  1,
+		searchEnabled: opts.Search,
+		searchSeq:     -1,
 	}
 }
 
@@ -374,6 +396,41 @@ func (s *EditorScreen) Filtering() bool { return true }
 // when one was configured).
 func (s *EditorScreen) CrumbLabel(short bool) string {
 	return crumbSeg(short, "", s.crumb, s.title)
+}
+
+// searchEdit builds the floating line edit ctrl+f pushes over the editor's top
+// edge. The component owns text capture and its bordered overlay look; the editor
+// owns only the live query. A static cursor avoids a blinking box over the document.
+func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
+	s.searchBefore = s.searchQuery
+	x, y, w := 0, sh.BodyY(), sh.Width()
+	if s.hasOrigin {
+		x, y, w = s.originX, s.originY, s.paneW()
+	}
+	// LineEditScreen's input sits one row below its top border. Put that input over
+	// the title row when there is room above it; at terminal row zero the router
+	// clamps the whole box on-screen, so file mode still gets a top-edge overlay.
+	if y > 0 {
+		y--
+	}
+	edit := NewLineEdit("search", x, y, w,
+		func(_ *core.Shared, query string) core.Action {
+			s.searchQuery = query
+			return core.Pop()
+		}, func(*core.Shared) core.Action {
+			s.searchQuery = s.searchBefore
+			return core.Pop()
+		})
+	edit.SetPrompt("find: ")
+	edit.SetValue(s.searchQuery)
+	edit.SetCursorBlink(false)
+	edit.Help = []key.Binding{} // keep the overlay to the shared component's slim shape
+	edit.Crumb = "search"
+	edit.OnChange = func(_ *core.Shared, query string) core.Action {
+		s.searchQuery = query
+		return core.Action{}
+	}
+	return edit
 }
 
 // Update handles the async load/save results, mouse presses, and keystrokes — in the
@@ -474,6 +531,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			s.confirmExit = false
 		}
 		return s, core.Action{}
+	}
+	if s.searchEnabled && k == "ctrl+f" {
+		return s, core.Push(s.searchEdit(sh))
 	}
 	if k == "ctrl+z" {
 		s.undo()
@@ -1216,11 +1276,33 @@ func (s *EditorScreen) insetY() int {
 	return s.titleH()
 }
 
-func (s *EditorScreen) titleText() string {
+func (s *EditorScreen) baseTitleText() string {
 	if s.dirty {
 		return s.title + " [+]"
 	}
 	return s.title
+}
+
+// titleText keeps the retained query in the same row as the file name after the
+// floating editor closes. While it is open the overlay covers this row. The file
+// name is truncated first on narrow panes so the search remains visible.
+func (s *EditorScreen) titleText() string {
+	base := s.baseTitleText()
+	if !s.searchEnabled || s.searchQuery == "" {
+		return base
+	}
+	avail := max(s.w-2, 1) // title/frame decoration consumes at least the edge cells
+	queryW := lipgloss.Width("find: " + s.searchQuery)
+	// Give the query up to two thirds of the row; a short query leaves the remainder
+	// to the filename. ansi.Truncate is cell-aware and safe for styled text.
+	reserved := min(queryW, max(avail*2/3, 1))
+	baseW := max(avail-lipgloss.Width(" · ")-reserved, 0)
+	base = ansi.Truncate(base, baseW, "…")
+	prefix := base
+	if prefix != "" {
+		prefix += " · "
+	}
+	return ansi.Truncate(prefix+"find: "+s.searchQuery, avail, "…")
 }
 
 // View renders the buffer window under its title, both tracking focus: bordered, the
@@ -1503,8 +1585,9 @@ func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
 			continue
 		}
 		sel := s.cellSelected(row, start+i)
+		match := s.cellMatched(row, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel {
+		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel && s.cellMatched(row, start+j) == match {
 			j++
 		}
 		style := lipgloss.NewStyle()
@@ -1515,6 +1598,9 @@ func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
 		}
 		if sel {
 			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
+			styled = true
+		} else if match {
+			style = s.editorSearchStyle()
 			styled = true
 		}
 		if styled {
@@ -1554,6 +1640,67 @@ func (s *EditorScreen) cellSelected(row, cell int) bool {
 // visible without putting a newline rune into the terminal output.
 func (s *EditorScreen) newlineSelected(row int) bool {
 	return s.selectionActive() && row >= s.selStart.y && row < s.selEnd.y
+}
+
+// rebuildSearchMatches refreshes the per-line match cache when either the query or
+// buffer changes. Search is literal, case-insensitive and line-local because the
+// input itself is single-line. Advancing by the query width makes results
+// non-overlapping, matching conventional find behavior.
+func (s *EditorScreen) rebuildSearchMatches() {
+	if s.searchSeq == s.editSeq && s.searchCached == s.searchQuery {
+		return
+	}
+	s.searchSeq, s.searchCached = s.editSeq, s.searchQuery
+	s.searchMatches = make([][]textRange, len(s.lines))
+	query := []rune(s.searchQuery)
+	if !s.searchEnabled || len(query) == 0 {
+		return
+	}
+	for row, line := range s.lines {
+		for from := 0; from+len(query) <= len(line); {
+			to := from + len(query)
+			if strings.EqualFold(string(line[from:to]), s.searchQuery) {
+				s.searchMatches[row] = append(s.searchMatches[row], textRange{
+					from: cellOfCol(line, from),
+					to:   cellOfCol(line, to),
+				})
+				from = to
+				continue
+			}
+			from++
+		}
+	}
+}
+
+// cellMatched reports whether one display cell belongs to a search match. Cached
+// ranges are sorted, so the lookup narrows to the first range ending after cell
+// instead of scanning every match on a common-character search.
+func (s *EditorScreen) cellMatched(row, cell int) bool {
+	if s.searchQuery == "" || row < 0 || row >= len(s.lines) {
+		return false
+	}
+	s.rebuildSearchMatches()
+	matches := s.searchMatches[row]
+	lo, hi := 0, len(matches)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if matches[mid].to <= cell {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo < len(matches) && cell >= matches[lo].from
+}
+
+// editorSearchStyle is deliberately distinct from selection: a focused match uses
+// the accent, while an unfocused pane mutes it along with the rest of the editor.
+func (s *EditorScreen) editorSearchStyle() lipgloss.Style {
+	bg := core.FocusedColor
+	if !s.focused {
+		bg = core.MutedColor
+	}
+	return lipgloss.NewStyle().Background(bg).Foreground(core.OnFocusedColor)
 }
 
 // hlSpans answers the row's validated spans, reparsing the buffer first when it
@@ -1625,13 +1772,16 @@ func (s *EditorScreen) renderLineStyled(row, start, end int, eol bool) (string, 
 			continue
 		}
 		sel := s.cellSelected(row, start+i)
+		match := s.cellMatched(row, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel {
+		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel && s.cellMatched(row, start+j) == match {
 			j++
 		}
 		style := spans[vidx[i]].Style
 		if sel {
 			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
+		} else if match {
+			style = s.editorSearchStyle()
 		}
 		b.WriteString(style.Render(string(vis[i:j])))
 		i = j
@@ -1668,6 +1818,9 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
+	}
+	if s.searchEnabled {
+		hints = append(hints, key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search")))
 	}
 	if s.onRelease != nil {
 		hints = append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave pane")))

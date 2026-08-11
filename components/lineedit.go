@@ -5,6 +5,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,7 +29,9 @@ import (
 //
 // Enter runs OnDone with the value, esc runs OnCancel; either nil callback is a
 // plain Pop. Like DialogScreen's OnYes, a callback that keeps the flow going must
-// do its own navigation (usually core.Pop). Every other key feeds the textinput.
+// do its own navigation (usually core.Pop). Every other key feeds the textinput;
+// OnChange, when set, receives each resulting value change. SetCursorBlink(false)
+// keeps the caret visible and static for overlays that should not flash.
 type LineEditScreen struct {
 	input textinput.Model
 	x, y  int // box top-left anchor, absolute terminal cells
@@ -36,9 +39,10 @@ type LineEditScreen struct {
 	termW int // terminal width, from SetSize, for clamping
 
 	OnDone   func(*core.Shared, string) core.Action // enter; nil ⇒ plain Pop
-	OnCancel func(*core.Shared) core.Action          // esc; nil ⇒ plain Pop
-	Help     []key.Binding // rendered inside the box; nil ⇒ default enter/esc hints, empty ⇒ none
-	Crumb    string        // breadcrumb segment; default "edit"
+	OnCancel func(*core.Shared) core.Action         // esc; nil ⇒ plain Pop
+	OnChange func(*core.Shared, string) core.Action // value changed; nil ⇒ nothing
+	Help     []key.Binding                          // rendered inside the box; nil ⇒ default enter/esc hints, empty ⇒ none
+	Crumb    string                                 // breadcrumb segment; default "edit"
 }
 
 var _ core.Overlayer = (*LineEditScreen)(nil)
@@ -71,13 +75,32 @@ func NewLineEdit(placeholder string, x, y, width int, onDone func(*core.Shared, 
 	}
 }
 
-func (s *LineEditScreen) Init(*core.Shared) tea.Cmd { return textinput.Blink }
+func (s *LineEditScreen) Init(*core.Shared) tea.Cmd {
+	if s.input.Cursor.Mode() == cursor.CursorBlink {
+		return textinput.Blink
+	}
+	return nil
+}
 
 // SetValue seeds the input (the cursor lands at the end), for an edit that starts
 // from an existing value — a save-as prefilled with the current file name, say.
 func (s *LineEditScreen) SetValue(v string) {
 	s.input.SetValue(v)
 	s.input.SetCursor(len([]rune(v)))
+}
+
+// SetPrompt replaces textinput's default "> " prefix.
+func (s *LineEditScreen) SetPrompt(prompt string) { s.input.Prompt = prompt }
+
+// SetCursorBlink controls whether the input caret flashes. Static mode keeps a
+// visible caret without scheduling blink messages, which is useful for small
+// transient overlays where motion reads as noise.
+func (s *LineEditScreen) SetCursorBlink(blink bool) {
+	mode := cursor.CursorStatic
+	if blink {
+		mode = cursor.CursorBlink
+	}
+	s.input.Cursor.SetMode(mode)
 }
 
 // IsOverlay marks the screen for compositing over the screen below it.
@@ -112,9 +135,18 @@ func (s *LineEditScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core
 			return s, core.Pop()
 		}
 	}
+	before := s.input.Value()
 	var cmd tea.Cmd
 	s.input, cmd = s.input.Update(msg)
-	return s, core.Async(cmd)
+	act := core.Async(cmd)
+	if s.OnChange != nil && s.input.Value() != before {
+		changed := s.OnChange(sh, s.input.Value())
+		act.Msg = changed.Msg
+		if changed.Cmd != nil {
+			act.Cmd = tea.Batch(cmd, changed.Cmd)
+		}
+	}
+	return s, act
 }
 
 func (s *LineEditScreen) View(sh *core.Shared) string {
