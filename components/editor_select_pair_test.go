@@ -40,15 +40,14 @@ func TestEditorDoubleClickSelectsWord(t *testing.T) {
 	y := s.titleH()
 	now := time.Now()
 
-	if text := s.pressLeft(sh, 5, y, now); text != "" {
-		t.Fatalf("first press returned %q, want no copy", text)
-	}
+	s.pressSelection(sh, 5, y, tea.MouseButtonLeft, now)
 	if s.selectionActive() {
 		t.Fatal("a single press should not select")
 	}
-	text := s.pressLeft(sh, 5, y, now.Add(10*time.Millisecond))
+	s.pressSelection(sh, 5, y, tea.MouseButtonLeft, now.Add(10*time.Millisecond))
+	text := s.selectedText()
 	if text != "bar" {
-		t.Fatalf("double click copied %q, want %q", text, "bar")
+		t.Fatalf("double click selected %q, want %q", text, "bar")
 	}
 	if s.selStart != (textPos{0, 4}) || s.selEnd != (textPos{0, 7}) {
 		t.Fatalf("selection = %v..%v, want {0 4}..{0 7}", s.selStart, s.selEnd)
@@ -67,10 +66,8 @@ func TestEditorSlowSecondClickStaysCaret(t *testing.T) {
 	y := s.titleH()
 	now := time.Now()
 
-	s.pressLeft(sh, 1, y, now)
-	if text := s.pressLeft(sh, 1, y, now.Add(2*time.Second)); text != "" {
-		t.Fatalf("a press outside the multi-click window copied %q, want nothing", text)
-	}
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now)
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(2*time.Second))
 	if s.selectionActive() {
 		t.Fatal("two presses two seconds apart are two caret clicks, not a double click")
 	}
@@ -82,16 +79,14 @@ func TestEditorSecondClickElsewhereStaysCaret(t *testing.T) {
 	y := s.titleH()
 	now := time.Now()
 
-	s.pressLeft(sh, 1, y, now)
-	if text := s.pressLeft(sh, 5, y, now.Add(10*time.Millisecond)); text != "" {
-		t.Fatalf("a press on another cell copied %q, want nothing", text)
-	}
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now)
+	s.pressSelection(sh, 5, y, tea.MouseButtonLeft, now.Add(10*time.Millisecond))
 	if s.selectionActive() {
 		t.Fatal("a fast press on a different cell is a fresh first click")
 	}
 }
 
-func TestEditorDoubleClickSurvivesRelease(t *testing.T) {
+func TestEditorLeftDoubleClickSurvivesReleaseWithoutCopy(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent("foo bar")
 	oldWrite := writeEditorClipboard
@@ -103,18 +98,53 @@ func TestEditorDoubleClickSurvivesRelease(t *testing.T) {
 	down := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y}
 	s.Update(sh, down)
 	_, act := s.Update(sh, down)
-	if act.Cmd == nil {
-		t.Fatal("a double click should issue the clipboard command")
-	}
-	if _, ok := act.Cmd().(editorCopiedMsg); !ok {
-		t.Fatal("double click command should return an editorCopiedMsg")
-	}
-	if copied != "foo" {
-		t.Fatalf("copied %q, want %q", copied, "foo")
+	if act.Cmd != nil || copied != "" {
+		t.Fatal("a left double click should select without copying")
 	}
 	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
 	if !s.selectionActive() || s.selectedText() != "foo" {
 		t.Fatalf("the release cleared the word selection: active=%v text=%q", s.selectionActive(), s.selectedText())
+	}
+}
+
+func TestEditorRightMultiClickCopiesOnRelease(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("foo bar\nnext")
+	oldWrite := writeEditorClipboard
+	defer func() { writeEditorClipboard = oldWrite }()
+	var copied string
+	writeEditorClipboard = func(text string) error { copied = text; return nil }
+	y := s.titleH()
+	down := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 1, Y: y}
+	up := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y}
+
+	s.Update(sh, down)
+	if _, act := s.Update(sh, up); act.Cmd != nil {
+		t.Fatal("the first stationary right click outside a selection should not copy")
+	}
+	if _, act := s.Update(sh, down); act.Cmd != nil {
+		t.Fatal("right double-click press should select without copying")
+	}
+	_, wordCopy := s.Update(sh, up)
+	if wordCopy.Cmd == nil {
+		t.Fatal("right double-click release should copy the selected word")
+	}
+	wordCopy.Cmd()
+	if copied != "foo" || s.selectedText() != "foo" {
+		t.Fatalf("right double click copied/selected %q/%q, want %q", copied, s.selectedText(), "foo")
+	}
+
+	copied = ""
+	if _, act := s.Update(sh, down); act.Cmd != nil {
+		t.Fatal("right triple-click press should select without copying")
+	}
+	_, lineCopy := s.Update(sh, up)
+	if lineCopy.Cmd == nil {
+		t.Fatal("right triple-click release should copy the selected line")
+	}
+	lineCopy.Cmd()
+	if copied != "foo bar\n" || s.selectedText() != "foo bar\n" {
+		t.Fatalf("right triple click copied/selected %q/%q, want %q", copied, s.selectedText(), "foo bar\n")
 	}
 }
 
@@ -124,11 +154,12 @@ func TestEditorTripleClickSelectsLine(t *testing.T) {
 	now := time.Now()
 	y := s.titleH() + 1 // "beta"
 
-	s.pressLeft(sh, 1, y, now)
-	s.pressLeft(sh, 1, y, now.Add(10*time.Millisecond))
-	text := s.pressLeft(sh, 1, y, now.Add(20*time.Millisecond))
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now)
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(10*time.Millisecond))
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(20*time.Millisecond))
+	text := s.selectedText()
 	if text != "beta\n" {
-		t.Fatalf("triple click copied %q, want the line and its newline", text)
+		t.Fatalf("triple click selected %q, want the line and its newline", text)
 	}
 	if s.selStart != (textPos{1, 0}) || s.selEnd != (textPos{2, 0}) {
 		t.Fatalf("selection = %v..%v, want {1 0}..{2 0}", s.selStart, s.selEnd)
@@ -137,10 +168,11 @@ func TestEditorTripleClickSelectsLine(t *testing.T) {
 	// The last line has no newline to take.
 	s.clickCount = 0
 	last := s.titleH() + 2
-	s.pressLeft(sh, 1, last, now)
-	s.pressLeft(sh, 1, last, now.Add(10*time.Millisecond))
-	if text := s.pressLeft(sh, 1, last, now.Add(20*time.Millisecond)); text != "gamma" {
-		t.Fatalf("triple click on the last line copied %q, want %q", text, "gamma")
+	s.pressSelection(sh, 1, last, tea.MouseButtonLeft, now)
+	s.pressSelection(sh, 1, last, tea.MouseButtonLeft, now.Add(10*time.Millisecond))
+	s.pressSelection(sh, 1, last, tea.MouseButtonLeft, now.Add(20*time.Millisecond))
+	if text := s.selectedText(); text != "gamma" {
+		t.Fatalf("triple click on the last line selected %q, want %q", text, "gamma")
 	}
 	if s.selEnd != (textPos{2, 5}) {
 		t.Fatalf("last-line selection ends at %v, want {2 5}", s.selEnd)
@@ -154,11 +186,9 @@ func TestEditorFourthClickStartsOver(t *testing.T) {
 	now := time.Now()
 
 	for i := 0; i < 3; i++ {
-		s.pressLeft(sh, 1, y, now.Add(time.Duration(i)*10*time.Millisecond))
+		s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(time.Duration(i)*10*time.Millisecond))
 	}
-	if text := s.pressLeft(sh, 1, y, now.Add(30*time.Millisecond)); text != "" {
-		t.Fatalf("the fourth click copied %q, want a plain caret click", text)
-	}
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(30*time.Millisecond))
 	if s.selectionActive() || s.clickCount != 1 {
 		t.Fatalf("fourth click: active=%v count=%d, want a fresh first click", s.selectionActive(), s.clickCount)
 	}
@@ -170,11 +200,9 @@ func TestEditorTypingBreaksTheClickRun(t *testing.T) {
 	y := s.titleH()
 	now := time.Now()
 
-	s.pressLeft(sh, 1, y, now)
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now)
 	typeRunes(s, 'x')
-	if text := s.pressLeft(sh, 1, y, now.Add(10*time.Millisecond)); text != "" {
-		t.Fatalf("a click after typing copied %q, want a fresh first click", text)
-	}
+	s.pressSelection(sh, 1, y, tea.MouseButtonLeft, now.Add(10*time.Millisecond))
 	if s.selectionActive() {
 		t.Fatal("typing between two clicks must break the multi-click run")
 	}

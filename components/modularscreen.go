@@ -40,7 +40,7 @@ type ModularScreen struct {
 	bodyH       int         // post-title body height, stashed by SetSize for ExpandV
 	colWidths   []int
 	focus       int  // index into flat; -1 when no slot is focusable
-	mouseSlot   int  // slot owning the current press/drag; -1 when no gesture is active
+	mouseSlot   int  // slot owning the current left/right gesture; -1 when none is active
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
 	title       string
 	crumb       string
@@ -204,7 +204,7 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		}
 		if mm.Action == tea.MouseActionPress {
 			if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
-				if mm.Button == tea.MouseButtonLeft {
+				if mm.Button == tea.MouseButtonLeft || mm.Button == tea.MouseButtonRight {
 					s.mouseSlot = i
 				}
 				s.focusSlot(i)
@@ -239,7 +239,7 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 }
 
 // updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates.
-// Keeping this translation for the full press/motion/release gesture lets a drag leave
+// Keeping this translation for a full left- or right-button gesture lets a drag leave
 // its pane without changing owners or exposing absolute terminal coordinates to the
 // panel that began it.
 func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {

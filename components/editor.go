@@ -26,13 +26,14 @@ import (
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
 // tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
-// and a left click places the cursor. Dragging selects the swept character cells and
-// copies them to the system clipboard on release; a double click selects the word under
-// it and a triple click the whole line, each copying the same way. Typing one of the
-// delimiters in editorPairs over a selection wraps the selection in it and keeps it
-// selected, so the key repeats to nest. The wheel scrolls the view without
-// moving the cursor (a cursor move then snaps the view back to it), and when the
-// buffer overflows the viewport a proportional scrollbar takes the rightmost column.
+// and either mouse button places the cursor and selects with drag/double/triple click.
+// Left-button gestures only select. A right-button release copies its selection to the
+// system clipboard; a stationary right click inside an existing selection preserves
+// and copies it. Typing one of the delimiters in editorPairs over a selection wraps the
+// selection in it and keeps it selected, so the key repeats to nest. The wheel scrolls
+// the view without moving the cursor (a cursor move then snaps the view back to it), and
+// when the buffer overflows the viewport a proportional scrollbar takes the rightmost
+// column.
 //
 // It is a standalone screen owning the whole body, not a ModularScreen panel: it
 // captures every keystroke (Filtering reports true the whole time, so the router's
@@ -92,13 +93,16 @@ type EditorScreen struct {
 	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
 	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 
-	dragging                  bool    // a left-button gesture is active
+	dragging                  bool // the active mouse gesture is extending a selection
+	preserveSelection         bool // a right press inside the selection is still stationary
+	mouseButton               tea.MouseButton
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	selStart, selEnd          textPos // normalized half-open selected buffer range
 
-	clickPos   textPos   // where the previous left press landed
-	clickTime  time.Time // when it landed, for the multi-click window
-	clickCount int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
+	clickPos    textPos // where the previous selection-button press landed
+	clickButton tea.MouseButton
+	clickTime   time.Time // when it landed, for the multi-click window
+	clickCount  int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
 
 	emphasisPairs bool // '*'/'_' auto-close here: a prose buffer, not code (see emphasisPairExt)
 
@@ -240,9 +244,9 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
-// editorMultiClickWindow is how long a left press stays eligible to be the second or
-// third click of a multi-click. tea.MouseMsg carries neither a timestamp nor a click
-// count, so the editor keeps both itself.
+// editorMultiClickWindow is how long a selection-button press stays eligible to be the
+// second or third click of a same-button multi-click. tea.MouseMsg carries neither a
+// timestamp nor a click count, so the editor keeps both itself.
 const editorMultiClickWindow = 500 * time.Millisecond
 
 // editorControlPlaceholder stands in for a control rune that reached the buffer anyway —
@@ -493,10 +497,8 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		}
 		if m.Action == tea.MouseActionPress {
 			switch m.Button {
-			case tea.MouseButtonLeft:
-				if text := s.pressLeft(sh, m.X, m.Y, time.Now()); text != "" {
-					return s, copySelectionCmd(text)
-				}
+			case tea.MouseButtonLeft, tea.MouseButtonRight:
+				s.pressSelection(sh, m.X, m.Y, m.Button, time.Now())
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 				// The wheel is browse-only and only while focused: mouse msgs are
 				// broadcast to every pane, so an unfocused editor must not roll.
@@ -508,12 +510,13 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 					}
 				}
 			}
-		} else if s.dragging && m.Action == tea.MouseActionMotion {
-			s.extendDrag(sh, m.X, m.Y)
-		} else if s.dragging && m.Action == tea.MouseActionRelease {
-			s.extendDrag(sh, m.X, m.Y)
-			s.dragging = false
-			if text := s.selectedText(); text != "" {
+		} else if s.mouseButton != tea.MouseButtonNone && m.Action == tea.MouseActionMotion {
+			s.extendMouseGesture(sh, m.X, m.Y)
+		} else if s.mouseButton != tea.MouseButtonNone && m.Action == tea.MouseActionRelease {
+			s.extendMouseGesture(sh, m.X, m.Y)
+			copy := s.mouseButton == tea.MouseButtonRight
+			s.resetMouseGesture()
+			if text := s.selectedText(); copy && text != "" {
 				return s, copySelectionCmd(text)
 			}
 		}
@@ -522,8 +525,8 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	return s, core.Action{}
 }
 
-// copySelectionCmd is the clipboard write every completed mouse gesture that leaves a
-// selection issues — a drag release and a multi-click alike.
+// copySelectionCmd is the clipboard write issued by a right-button release that leaves
+// a selection.
 func copySelectionCmd(text string) core.Action {
 	return core.Async(func() tea.Msg {
 		return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text)}
@@ -543,8 +546,9 @@ func copySelectionCmd(text string) core.Action {
 // shouldn't do nothing here.
 func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
 	k := m.String()
-	s.dragging = false
+	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
+	s.clickButton = tea.MouseButtonNone
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
@@ -702,7 +706,9 @@ func (s *EditorScreen) setContent(content string) {
 	}
 	s.curY, s.curX, s.wantX = 0, 0, 0
 	s.scrY, s.scrX = 0, 0
-	s.dragging = false
+	s.resetMouseGesture()
+	s.clickCount = 0
+	s.clickButton = tea.MouseButtonNone
 	s.clearSelection()
 	s.dirty = false
 	s.undoStack, s.redoStack = nil, nil
@@ -763,7 +769,7 @@ func (s *EditorScreen) restoreSnapshot(snap editorSnapshot) {
 	s.selStart, s.selEnd = snap.selStart, snap.selEnd
 	s.revision = snap.revision
 	s.dirty = s.revision != s.savedRevision
-	s.dragging = false
+	s.resetMouseGesture()
 	s.editSeq++
 	s.wrapDirty = true
 	s.clampScroll()
@@ -1234,30 +1240,35 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	if !ok {
 		return
 	}
-	s.dragging = false
+	s.resetMouseGesture()
 	s.clearSelection()
 	s.curY, s.curX, s.wantX = p.y, p.x, p.x
 	s.clampScroll()
 }
 
-// pressLeft handles one left press. A press landing on the cell the previous one did,
-// inside editorMultiClickWindow, promotes to a word (second) or line (third) selection;
-// a fourth starts over as a plain caret click. It returns the text a completed
-// multi-click should copy, so a double-click puts a word on the clipboard the same way
-// sweeping it with a drag does — "" for an ordinary click, which begins a drag instead.
+// pressSelection handles a left or right selection press. Repeated presses from the
+// same button on the same character inside editorMultiClickWindow promote to word and
+// line selection; a fourth starts over as a caret/drag gesture. A right press inside
+// an existing selection preserves it unless the gesture moves to another character.
 // The clock is a parameter so tests can drive click cadence.
-func (s *EditorScreen) pressLeft(sh *core.Shared, x, y int, now time.Time) string {
+func (s *EditorScreen) pressSelection(sh *core.Shared, x, y int, button tea.MouseButton, now time.Time) {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
 		s.clickCount = 0
-		return ""
+		s.clickButton = tea.MouseButtonNone
+		s.resetMouseGesture()
+		return
 	}
-	if s.clickCount > 0 && p == s.clickPos && now.Sub(s.clickTime) < editorMultiClickWindow {
+	continued := s.clickCount > 0 && button == s.clickButton && p == s.clickPos &&
+		now.Sub(s.clickTime) < editorMultiClickWindow
+	if continued {
 		s.clickCount++
 	} else {
 		s.clickCount = 1
 	}
-	s.clickPos, s.clickTime = p, now
+	s.clickPos, s.clickButton, s.clickTime = p, button, now
+	s.resetMouseGesture()
+	s.mouseButton = button
 	switch s.clickCount {
 	case 2:
 		s.selectWordAt(p)
@@ -1265,14 +1276,25 @@ func (s *EditorScreen) pressLeft(sh *core.Shared, x, y int, now time.Time) strin
 		s.selectLineAt(p)
 	default:
 		s.clickCount = 1
-		s.startDrag(sh, x, y)
-		return ""
+		if button == tea.MouseButtonRight && s.positionSelected(p) {
+			s.dragAnchor = p
+			s.dragAnchorEnd = s.cellEnd(p)
+			s.preserveSelection = true
+			return
+		}
+		s.startDragAt(p)
+		return
 	}
-	// The gesture is over: leaving dragging set would let the release extendDrag back
-	// onto the anchor and clear the selection this press just made.
-	s.dragging = false
+	// Multi-click selection is complete on the press. Keep only mouseButton active so a
+	// right release can copy it without motion extending it back onto the anchor.
 	s.clampScrollBounds()
-	return s.selectedText()
+}
+
+// positionSelected reports whether the buffer character at p belongs to the current
+// half-open selection. For a multiline range, the insertion position after a line's
+// final rune represents its selected newline.
+func (s *EditorScreen) positionSelected(p textPos) bool {
+	return s.selectionActive() && !posLess(p, s.selStart) && posLess(p, s.selEnd)
 }
 
 // selectWordAt selects the run of same-class runes under p. A blank line has no run, so
@@ -1300,14 +1322,46 @@ func (s *EditorScreen) selectLineAt(p textPos) {
 }
 
 func (s *EditorScreen) startDrag(sh *core.Shared, x, y int) {
-	s.clickAt(sh, x, y)
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
 		return
 	}
+	s.startDragAt(p)
+}
+
+func (s *EditorScreen) startDragAt(p textPos) {
+	s.clearSelection()
+	s.curY, s.curX, s.wantX = p.y, p.x, p.x
+	s.clampScroll()
 	s.dragAnchor = p
 	s.dragAnchorEnd = s.cellEnd(p)
 	s.dragging = true
+}
+
+// extendMouseGesture advances an ordinary drag. A pending right click that began in
+// selected text changes into a new drag only after the pointer maps to another buffer
+// position; motion within another display cell of the same tab/wide rune preserves the
+// old selection.
+func (s *EditorScreen) extendMouseGesture(sh *core.Shared, x, y int) {
+	if s.preserveSelection {
+		p, ok := s.positionAt(sh, x, y, true)
+		if !ok || p == s.dragAnchor {
+			return
+		}
+		s.preserveSelection = false
+		s.clickCount = 0
+		s.clickButton = tea.MouseButtonNone
+		s.startDragAt(s.dragAnchor)
+	}
+	if s.dragging {
+		s.extendDrag(sh, x, y)
+	}
+}
+
+func (s *EditorScreen) resetMouseGesture() {
+	s.dragging = false
+	s.preserveSelection = false
+	s.mouseButton = tea.MouseButtonNone
 }
 
 func (s *EditorScreen) extendDrag(sh *core.Shared, x, y int) {
