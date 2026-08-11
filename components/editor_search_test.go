@@ -30,11 +30,16 @@ func setSearchQuery(s *EditorScreen, query string) {
 func TestEditorSearchInteraction(t *testing.T) {
 	s, sh := newEditor(EditorOpts{Title: "notes.md", Search: true})
 	s.setContent("Alpha alpha ALPHA\nalphabet\nbeta")
+	fullH := s.h
 
 	if act := editorSearchKey(s, sh, tea.KeyCtrlF); act.Msg == nil {
 		t.Fatal("ctrl+f should push a floating line edit")
 	}
 	edit := s.searchEdit(sh)
+	s.SetSize(sh, 80, 20)
+	if !s.searchEditing || s.h != fullH-editorSearchBarH {
+		t.Fatalf("open search should reserve %d bottom rows: editing=%v viewport=%d, want %d", editorSearchBarH, s.searchEditing, s.h, fullH-editorSearchBarH)
+	}
 	if cmd := edit.Init(sh); cmd != nil || edit.input.Cursor.Mode() != cursor.CursorStatic {
 		t.Fatal("search line edit should use a visible, non-blinking cursor")
 	}
@@ -49,15 +54,22 @@ func TestEditorSearchInteraction(t *testing.T) {
 	if got := len(s.searchMatches[1]); got != 1 {
 		t.Fatalf("prefix match on row 1 = %d, want 1", got)
 	}
-	if got := ansi.Strip(s.titleText()); !strings.Contains(got, "notes.md · find: alpha") {
-		t.Fatalf("editing title = %q, want file and live query", got)
+	if got := ansi.Strip(s.titleText()); got != "notes.md" {
+		t.Fatalf("search should not alter title, got %q", got)
+	}
+	if got := ansi.Strip(s.searchBar()); !strings.Contains(got, "find: alpha") {
+		t.Fatalf("editing bottom bar = %q, want live query", got)
 	}
 
 	if act := lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEnter}); act.Msg == nil || s.searchQuery != "alpha" {
 		t.Fatalf("enter should pop the overlay and retain alpha, query=%q", s.searchQuery)
 	}
-	if got := ansi.Strip(s.titleText()); !strings.Contains(got, "find: alpha") {
-		t.Fatalf("retained title = %q, want active query", got)
+	s.SetSize(sh, 80, 20)
+	if s.searchEditing || !s.searchBarVisible() || s.h != fullH-editorSearchBarH {
+		t.Fatalf("retained search should leave an inactive reserved bar: editing=%v visible=%v viewport=%d", s.searchEditing, s.searchBarVisible(), s.h)
+	}
+	if got := ansi.Strip(s.searchBar()); !strings.Contains(got, "find: alpha") {
+		t.Fatalf("retained bottom bar = %q, want active query", got)
 	}
 
 	edit = s.searchEdit(sh)
@@ -66,8 +78,8 @@ func TestEditorSearchInteraction(t *testing.T) {
 		t.Fatalf("clearing the input should clear live matches, query=%q", s.searchQuery)
 	}
 	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
-	if s.searchQuery != "alpha" {
-		t.Fatalf("escape should restore alpha, query=%q", s.searchQuery)
+	if s.searchQuery != "alpha" || s.searchEditing {
+		t.Fatalf("escape should restore alpha and unfocus the bar, query=%q editing=%v", s.searchQuery, s.searchEditing)
 	}
 
 	edit = s.searchEdit(sh)
@@ -76,8 +88,9 @@ func TestEditorSearchInteraction(t *testing.T) {
 	if s.searchQuery != "" {
 		t.Fatalf("submitting empty should stop search, query=%q", s.searchQuery)
 	}
-	if got := ansi.Strip(s.titleText()); got != "notes.md" {
-		t.Fatalf("cleared title = %q, want ordinary file title", got)
+	s.SetSize(sh, 80, 20)
+	if s.searchBarVisible() || s.h != fullH {
+		t.Fatalf("submitting empty should remove the bar and restore viewport %d, visible=%v viewport=%d", fullH, s.searchBarVisible(), s.h)
 	}
 }
 
@@ -168,18 +181,74 @@ func TestEditorSearchRenderingComposesWithEditorLayers(t *testing.T) {
 	assertRowGeometry(t, s, "search-highlighted horizontal scroll")
 }
 
-func TestEditorSearchTitleStaysWithinNarrowPane(t *testing.T) {
+func TestEditorSearchBarStaysWithinNarrowPaneAndAnchorsBottom(t *testing.T) {
 	s, _ := newEditor(EditorOpts{Title: "a-very-long-document-name.md", Search: true})
 	s.SetSize(nil, 24, 6)
 	setSearchQuery(s, "needle-that-is-also-long")
-	if got := lipgloss.Width(s.titleText()); got > s.w-2 {
-		t.Fatalf("retained search title width = %d, available %d", got, s.w-2)
+	s.SetSize(nil, 24, 6)
+	if got := lipgloss.Width(s.searchBar()); got != 24 {
+		t.Fatalf("retained search bar width = %d, pane width 24", got)
 	}
-	s.SetPaneOrigin(0, 0)
+	if got := lipgloss.Height(s.searchBar()); got != editorSearchBarH {
+		t.Fatalf("retained search bar height = %d, want %d", got, editorSearchBarH)
+	}
+	s.SetPaneOrigin(7, 4)
 	sh := core.NewShared(nil)
 	edit := s.searchEdit(sh)
 	edit.SetSize(nil, 24, 6)
 	if got := lipgloss.Width(edit.View(sh)); got > 24 {
 		t.Fatalf("search overlay width = %d, pane width 24", got)
+	}
+	if edit.x != 7 || edit.y != 4+6-editorSearchBarH {
+		t.Fatalf("search overlay anchor = (%d,%d), want (7,%d)", edit.x, edit.y, 4+6-editorSearchBarH)
+	}
+	if got, want := lipgloss.Width(edit.View(sh)), lipgloss.Width(s.searchBar()); got != want {
+		t.Fatalf("focused width = %d, retained width %d", got, want)
+	}
+}
+
+func TestEditorSearchBarReservesRowsWithoutChangingOuterGeometry(t *testing.T) {
+	tests := []struct {
+		name   string
+		border bool
+		pane   bool
+		width  int
+		height int
+	}{
+		{name: "standalone", width: 32, height: 10},
+		{name: "embedded", pane: true, width: 32, height: 10},
+		{name: "bordered pane", border: true, pane: true, width: 32, height: 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var s *EditorScreen
+			var sh *core.Shared
+			if tc.pane {
+				s, sh = newPaneEditor(EditorOpts{Title: "notes.md", Search: true, Border: tc.border})
+			} else {
+				s, sh = newEditor(EditorOpts{Title: "notes.md", Search: true, Border: tc.border})
+			}
+			s.SetSize(sh, tc.width, tc.height)
+			fullH := s.h
+			setSearchQuery(s, "needle")
+			s.SetSize(sh, tc.width, tc.height)
+			if s.h != fullH-editorSearchBarH {
+				t.Fatalf("viewport height = %d, want %d", s.h, fullH-editorSearchBarH)
+			}
+			if got := lipgloss.Height(s.View(sh)); got != tc.height {
+				t.Fatalf("editor render height = %d, assigned height %d", got, tc.height)
+			}
+			assertRowGeometry(t, s, "reserved search rows")
+		})
+	}
+
+	// The retained bar is display-only; a click in its rows must not move the caret.
+	s, sh := newEditor(EditorOpts{Search: true})
+	s.setContent("first\nsecond")
+	setSearchQuery(s, "first")
+	s.SetSize(sh, 80, 20)
+	s.clickAt(sh, 5, s.insetY()+s.h+1)
+	if s.curY != 0 || s.curX != 0 {
+		t.Fatalf("click in retained search bar moved caret to (%d,%d)", s.curY, s.curX)
 	}
 }

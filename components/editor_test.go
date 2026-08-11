@@ -1244,7 +1244,7 @@ func TestEditorSaveAsAnchor(t *testing.T) {
 	if edit.x != 0 || edit.width != sh.Width() {
 		t.Fatalf("standalone anchor = (%d, w %d), want (0, %d)", edit.x, edit.width, sh.Width())
 	}
-	if want := sh.BodyY() + s.insetY() + s.h - 2; edit.y != want {
+	if want := sh.BodyY() + s.paneH - 2; edit.y != want {
 		t.Fatalf("standalone y = %d, want %d (one row above the prompt row)", edit.y, want)
 	}
 
@@ -1257,8 +1257,17 @@ func TestEditorSaveAsAnchor(t *testing.T) {
 	if edit.x != 31 || edit.width != 40 {
 		t.Fatalf("embedded anchor = (%d, w %d), want (31, 40)", edit.x, edit.width)
 	}
-	if want := 4 + pane.insetY() + pane.h - 2; edit.y != want {
+	if want := 4 + pane.paneH - 2; edit.y != want {
 		t.Fatalf("embedded y = %d, want %d", edit.y, want)
+	}
+
+	// A retained search shrinks only the text viewport; save-as remains anchored to
+	// the pane's actual bottom and covers the search bar rather than drifting above it.
+	setSearchQuery(pane, "needle")
+	pane.SetSize(psh, 40, 10)
+	edit = pane.saveAsEdit(psh)
+	if want := 4 + pane.paneH - 2; edit.y != want {
+		t.Fatalf("embedded y with search = %d, want pane-bottom anchor %d", edit.y, want)
 	}
 }
 

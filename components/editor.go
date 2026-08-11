@@ -83,7 +83,8 @@ type EditorScreen struct {
 	originX, originY int  // the pane's absolute top-left (components.PaneOriginer)
 	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
 
-	w, h int // viewport dims in cells (the body net of the title bar or frame), set by SetSize
+	w, h  int // viewport dims in cells (the body net of editor chrome), set by SetSize
+	paneH int // full height assigned to the editor, including title/frame and search bar
 
 	wrap      bool      // soft-wrap long lines to the viewport width
 	lineNums  bool      // the sticky ctrl+l preference (see gutterOn: wrap forces the gutter on)
@@ -105,6 +106,7 @@ type EditorScreen struct {
 	revision, savedRevision, nextRevision uint64
 
 	searchEnabled bool          // EditorOpts.Search: ctrl+f and match rendering are available
+	searchEditing bool          // the modal line edit is open; keeps its bottom rows reserved even while empty
 	searchQuery   string        // live query; retained after enter
 	searchBefore  string        // query restored when an adjustment is cancelled
 	searchSeq     int           // editSeq represented by searchMatches (-1 means stale)
@@ -184,9 +186,10 @@ type wrapRow struct{ line, start, end int }
 // contract — no raw tabs, rectangular body — can't be broken by one.
 //
 // Search enables the editor's ctrl+f literal search. A floating LineEditScreen opens
-// over the editor's top edge and every case-insensitive match is highlighted in the
-// buffer; the retained query is shown in the title row after the overlay closes. It
-// is opt-in so the shared editor does not change existing consumers' shortcuts.
+// over a reserved bar at the editor's bottom edge and every case-insensitive match is
+// highlighted in the buffer. A non-empty query leaves the same bar visible but
+// unfocused after the overlay closes. It is opt-in so the shared editor does not
+// change existing consumers' shortcuts or viewport geometry.
 type EditorOpts struct {
 	Path        string
 	Title       string
@@ -414,27 +417,25 @@ func (s *EditorScreen) CrumbLabel(short bool) string {
 	return crumbSeg(short, "", s.crumb, s.title)
 }
 
-// searchEdit builds the floating line edit ctrl+f pushes over the editor's top
-// edge. The component owns text capture and its bordered overlay look; the editor
-// owns only the live query. A static cursor avoids a blinking box over the document.
+const editorSearchBarH = 3 // one input row plus the rounded box's top and bottom borders
+
+// searchEdit builds the floating line edit ctrl+f pushes over the editor's reserved
+// bottom bar. The component owns text capture and its bordered overlay look; the
+// editor owns only the live query. A static cursor avoids a blinking box over the
+// document.
 func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
 	s.searchBefore = s.searchQuery
-	x, y, w := 0, sh.BodyY(), sh.Width()
-	if s.hasOrigin {
-		x, y, w = s.originX, s.originY, s.paneW()
-	}
-	// LineEditScreen's input sits one row below its top border. Put that input over
-	// the title row when there is room above it; at terminal row zero the router
-	// clamps the whole box on-screen, so file mode still gets a top-edge overlay.
-	if y > 0 {
-		y--
-	}
+	s.searchEditing = true
+	x, y, w, h := s.paneGeometry(sh)
+	y += max(h-editorSearchBarH, 0)
 	edit := NewLineEdit("search", x, y, w,
 		func(_ *core.Shared, query string) core.Action {
 			s.searchQuery = query
+			s.searchEditing = false
 			return core.Pop()
 		}, func(*core.Shared) core.Action {
 			s.searchQuery = s.searchBefore
+			s.searchEditing = false
 			return core.Pop()
 		})
 	edit.SetPrompt("find: ")
@@ -1525,26 +1526,23 @@ func (s *EditorScreen) baseTitleText() string {
 	return s.title
 }
 
-// titleText keeps the retained query in the same row as the file name after the
-// floating editor closes. While it is open the overlay covers this row. The file
-// name is truncated first on narrow panes so the search remains visible.
-func (s *EditorScreen) titleText() string {
-	base := s.baseTitleText()
-	if !s.searchEnabled || s.searchQuery == "" {
-		return base
-	}
-	avail := max(s.w-2, 1) // title/frame decoration consumes at least the edge cells
-	queryW := lipgloss.Width("find: " + s.searchQuery)
-	// Give the query up to two thirds of the row; a short query leaves the remainder
-	// to the filename. ansi.Truncate is cell-aware and safe for styled text.
-	reserved := min(queryW, max(avail*2/3, 1))
-	baseW := max(avail-lipgloss.Width(" · ")-reserved, 0)
-	base = ansi.Truncate(base, baseW, "…")
-	prefix := base
-	if prefix != "" {
-		prefix += " · "
-	}
-	return ansi.Truncate(prefix+"find: "+s.searchQuery, avail, "…")
+func (s *EditorScreen) titleText() string { return s.baseTitleText() }
+
+// searchBarVisible reports whether the bottom rows belong to search: while the
+// modal editor is open (including its initially empty state), or afterward while a
+// retained query is still filtering the buffer.
+func (s *EditorScreen) searchBarVisible() bool {
+	return s.searchEnabled && (s.searchEditing || s.searchQuery != "")
+}
+
+// searchBar renders the non-interactive version beneath the viewport. The focused
+// LineEditScreen is composited directly over it, so both states use the same rounded
+// shell and full pane width. Its text is cell-truncated on narrow panes.
+func (s *EditorScreen) searchBar() string {
+	w := s.paneW()
+	contentW := max(w-4, 1) // two border cells and one padding cell on each side
+	content := ansi.Truncate("find: "+s.searchQuery, contentW, "…")
+	return lineEditBox().Width(contentW + 2).Render(content)
 }
 
 // View renders the buffer window under its title, both tracking focus: bordered, the
@@ -1552,10 +1550,16 @@ func (s *EditorScreen) titleText() string {
 // carries the tint; unbordered, it is the title bar above the body, muted while a
 // sibling pane holds the keys.
 func (s *EditorScreen) View(*core.Shared) string {
+	var editor string
 	if s.bordered {
-		return frame(s.titleText(), s.body(), s.w+s.gutter(), s.focused)
+		editor = frame(s.titleText(), s.body(), s.w+s.gutter(), s.focused)
+	} else {
+		editor = core.WithTitleFocused(s.titleText(), s.body(), s.focused)
 	}
-	return core.WithTitleFocused(s.titleText(), s.body(), s.focused)
+	if !s.searchBarVisible() {
+		return editor
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, editor, s.searchBar())
 }
 
 // gutter is the embedded body's one-column left indent (0 standalone) — the part of
@@ -2165,7 +2169,11 @@ func (s *EditorScreen) LineNumMode() bool { return s.lineNums }
 // router re-lays out after every message, so caret-chasing here would undo every
 // wheel scroll the same tick it happened.
 func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	s.paneH = bodyHeight
 	s.w, s.h = width-s.insetX(), bodyHeight-s.insetY()
+	if s.searchBarVisible() {
+		s.h -= editorSearchBarH
+	}
 	if s.bordered {
 		s.w-- // the right border
 		s.h-- // the bottom border
@@ -2197,11 +2205,8 @@ func (s *EditorScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 // body's bottom — the same look nano's full-width prompt has. y is one row above
 // the prompt row either way (the LineEdit draws its input one row below the anchor).
 func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
-	x, y, w := 0, sh.BodyY(), sh.Width()
-	if s.hasOrigin {
-		x, y, w = s.originX, s.originY, s.paneW()
-	}
-	edit := NewLineEdit("file name to write", x, y+s.insetY()+s.h-2, w,
+	x, y, w, h := s.paneGeometry(sh)
+	edit := NewLineEdit("file name to write", x, y+max(h-2, 0), w,
 		func(_ *core.Shared, name string) core.Action {
 			if strings.TrimSpace(name) == "" {
 				return core.Pop()
@@ -2214,6 +2219,17 @@ func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
 	}
 	edit.Crumb = "save as"
 	return edit
+}
+
+// paneGeometry is the editor's assigned outer rectangle in absolute terminal cells.
+// Unlike s.h it does not shrink when a search bar is visible, so every bottom-edge
+// overlay stays pinned to the pane rather than drifting up with the text viewport.
+func (s *EditorScreen) paneGeometry(sh *core.Shared) (x, y, w, h int) {
+	x, y, w, h = 0, sh.BodyY(), sh.Width(), s.paneH
+	if s.hasOrigin {
+		x, y, w = s.originX, s.originY, s.paneW()
+	}
+	return x, y, w, h
 }
 
 // paneW is the full width the pane gave SetSize — the text window plus the chrome
