@@ -1,6 +1,7 @@
 package components
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -216,9 +217,8 @@ func TestRenderMarkdownUnderscoreEm(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdownCodeSpanBackground: an inline span is tinted, a fenced block is
-// not — a background on the block would break on the tabs it renders literally, so
-// the two are told apart by the span carrying one and the block by its rules.
+// TestRenderMarkdownCodeSpanBackground: an inline span is tinted, while a fenced block
+// keeps foreground-only styling because a background would break on literal tabs.
 func TestRenderMarkdownCodeSpanBackground(t *testing.T) {
 	withColor(t)
 
@@ -234,46 +234,45 @@ func TestRenderMarkdownCodeSpanBackground(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdownCodeBlockRules: a fenced block is bracketed by a dim rule at the
-// width, so it reads as a block rather than as indented prose. An unclosed fence gets
-// its opening rule and no dangling closing one.
-func TestRenderMarkdownCodeBlockRules(t *testing.T) {
+// TestRenderMarkdownCodeBlockSpacing: fenced blocks use indentation and blank-line
+// separation, not the rules an older renderer drew around them. Closed and unclosed
+// fences share that rule-free layout.
+func TestRenderMarkdownCodeBlockSpacing(t *testing.T) {
 	const width = 30
 	rule := strings.Repeat("─", width)
 
 	rows := strings.Split(render("intro\n\n```\ncode\n```\n\ntail\n", width), "\n")
-	var ruleAt []int
-	for i, r := range rows {
-		if r == rule {
-			ruleAt = append(ruleAt, i)
-		}
+	want := []string{"intro", "", indent + "code", "", "tail"}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("closed fence rows = %q, want %q", rows, want)
 	}
-	if len(ruleAt) != 2 {
-		t.Fatalf("a closed fence should be bracketed by exactly 2 rules, got %d in %q", len(ruleAt), rows)
-	}
-	if rows[ruleAt[0]+1] != indent+"code" {
-		t.Errorf("the block body should sit between the rules, got %q", rows[ruleAt[0]+1])
-	}
-	if ruleAt[1] != ruleAt[0]+2 {
-		t.Errorf("the closing rule should follow the body, rules at %v", ruleAt)
+	if strings.Contains(strings.Join(rows, "\n"), rule) {
+		t.Fatalf("a fenced block should not draw boundary rules, got %q", rows)
 	}
 
-	// An unclosed fence: one rule, and the body still renders.
 	rows = strings.Split(render("```\ncode\n", width), "\n")
-	n := 0
-	for _, r := range rows {
-		if r == rule {
-			n++
-		}
+	want = []string{indent + "code", indent}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("unclosed fence rows = %q, want %q", rows, want)
 	}
-	if n != 1 {
-		t.Errorf("an unclosed fence should emit only its opening rule, got %d in %q", n, rows)
+	if strings.Contains(strings.Join(rows, "\n"), rule) {
+		t.Fatalf("an unclosed fence should not draw a boundary rule, got %q", rows)
+	}
+
+	body := "intro\n```go\ncode\n```\ntail\n"
+	defaultLayout := render(body, width)
+	CodeBlockRenderer = func(_ string, code []string, _ int) []string {
+		return append([]string(nil), code...)
+	}
+	t.Cleanup(func() { CodeBlockRenderer = nil })
+	if injectedLayout := render(body, width); injectedLayout != defaultLayout {
+		t.Fatalf("injecting a code renderer changed layout:\ndefault:  %q\ninjected: %q", defaultLayout, injectedLayout)
 	}
 }
 
 // TestRenderMarkdownThemeBreak: a line of three or more of one of "-", "*", "_" is a
-// thematic break — a dim rule across the full width, the same rule a default code
-// block is bracketed by. A line merely CONTAINING such a run is not one.
+// thematic break — a dim rule across the full width. A line merely CONTAINING such a
+// run is not one.
 func TestRenderMarkdownThemeBreak(t *testing.T) {
 	const width = 30
 	rule := strings.Repeat("─", width)
@@ -301,8 +300,8 @@ func TestRenderMarkdownThemeBreak(t *testing.T) {
 
 // TestRenderMarkdownCodeBlockRenderer: with CodeBlockRenderer set, a fenced block's
 // lines accumulate and go through it once — language tag and fold width included —
-// and its output lands verbatim (indented), separated by blank lines instead of the
-// default path's rules. An unclosed fence still flushes through it at EOF. The
+// and its output lands verbatim (indented), with the same blank-line separation as the
+// default path. An unclosed fence still flushes through it at EOF. The
 // renderer is a process-global seam, so the test restores nil on the way out.
 func TestRenderMarkdownCodeBlockRenderer(t *testing.T) {
 	type call struct {
@@ -379,28 +378,24 @@ func TestRenderMarkdownBorrowedAccent(t *testing.T) {
 // block (which is exactly what a block ABOUT markdown contains) would end it early.
 func TestRenderMarkdownTildeFence(t *testing.T) {
 	const width = 30
-	rule := strings.Repeat("─", width)
 
 	rows := strings.Split(render("~~~\ncode\n~~~\n", width), "\n")
-	if len(rows) != 3 || rows[0] != rule || rows[1] != indent+"code" || rows[2] != rule {
+	if !slices.Equal(rows, []string{indent + "code"}) {
 		t.Fatalf("a ~~~ block should render like a ``` one, got %q", rows)
 	}
 
 	// A ``` line inside a ~~~ block is content, not a terminator.
 	rows = strings.Split(render("~~~\n```\nstill inside\n~~~\nafter\n", width), "\n")
-	if rows[0] != rule {
-		t.Fatalf("expected an opening rule, got %q", rows)
-	}
-	if rows[1] != indent+"```" || rows[2] != indent+"still inside" {
+	if rows[0] != indent+"```" || rows[1] != indent+"still inside" {
 		t.Errorf("the other marker should stay block content, got %q", rows)
 	}
-	if rows[3] != rule || rows[len(rows)-1] != "after" {
+	if rows[len(rows)-1] != "after" {
 		t.Errorf("the matching marker should close the block, got %q", rows)
 	}
 
 	// And symmetrically: a ~~~ line inside a ``` block.
 	rows = strings.Split(render("```\n~~~\nstill inside\n```\nafter\n", width), "\n")
-	if rows[1] != indent+"~~~" || rows[2] != indent+"still inside" {
+	if rows[0] != indent+"~~~" || rows[1] != indent+"still inside" {
 		t.Errorf("the other marker should stay block content, got %q", rows)
 	}
 	if rows[len(rows)-1] != "after" {

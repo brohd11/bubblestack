@@ -143,7 +143,7 @@ func docTopics(pages []DocPage) string {
 //	---             a full-width rule (also *** and ___, three or more of one char)
 //	- item          bulleted, wrapped with a hanging indent (an indented line continues it)
 //	1. item         same, keeping the author's number as the marker ("1)" too)
-//	```fence```     indented, muted, hard-wrapped (never re-flowed), ruled off above and below
+//	```fence```     indented, muted, hard-wrapped (never re-flowed)
 //	~~~fence~~~     the same; only the marker that opened a block can close it
 //	> quote         re-flowed like a paragraph, muted, with a bar down every row
 //	`code`          accent on a tinted background, inline, a cell of tint each side
@@ -168,10 +168,10 @@ func docTopics(pages []DocPage) string {
 // CodeBlockRenderer, when non-nil, renders the content of a fenced code block: it gets
 // the fence's language tag ("" when the fence carries none), the raw content lines, and
 // the width to fold to, and returns the finished display lines, which are emitted
-// verbatim (indented, no rules — a highlighted block stands on its own). nil keeps the
-// default muted, hard-wrapped rendering with the rule above and below. This is the seam
-// that lets a consumer (gote) add syntax highlighting without the framework knowing any
-// language — set it at init, it is not for concurrent use.
+// verbatim and indented. nil keeps the default muted, hard-wrapped rendering. The
+// surrounding layout is the same either way; this seam only lets a consumer (gote) add
+// syntax highlighting without the framework knowing any language — set it at init, it
+// is not for concurrent use.
 var CodeBlockRenderer func(lang string, code []string, width int) []string
 
 // inlineAny matches every inline construct in ONE alternation, which is what makes
@@ -332,18 +332,13 @@ func (r *docRenderer) line(line string) {
 			r.lang = fenceLang(trimmed[len(m):])
 			if CodeBlockRenderer != nil {
 				r.code = []string{}
-				r.blank()
-				return
 			}
 		} else {
 			r.fence = ""
 		}
-		// A dim rule on each side of the block. Blocks are the one thing here that
-		// isn't re-flowed, so without a boundary they read as ordinary indented prose
-		// — and a background (what the inline spans use) would break on the tabs a
-		// block renders literally. The highlighted path (CodeBlockRenderer set) skips
-		// the rules: a colored block stands on its own, separated by blank lines.
-		r.emit(ruleStyle().Render(strings.Repeat("─", r.width)))
+		// A fenced block is separated from prose by blank lines in both rendering
+		// paths. CodeBlockRenderer changes only the block's styling, not its layout.
+		r.blank()
 		return
 	}
 	if r.fence != "" {
