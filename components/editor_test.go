@@ -219,6 +219,147 @@ func TestEditorTabsNeverRenderRaw(t *testing.T) {
 	}
 }
 
+// pasteText delivers text the way a bracketed paste arrives: one KeyMsg carrying the
+// whole payload, newlines and all.
+func pasteText(s *EditorScreen, text string) {
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune(text)})
+}
+
+// TestSplitPastedLines pins the line-break normalization and the control-rune filter:
+// tabs are the one control rune that survives, because expandLine gives it cells.
+func TestSplitPastedLines(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"plain", "abc", []string{"abc"}},
+		{"empty", "", []string{""}},
+		{"lf", "a\nb", []string{"a", "b"}},
+		{"crlf", "a\r\nb", []string{"a", "b"}},
+		{"lone cr", "a\rb", []string{"a", "b"}},
+		{"trailing newline", "a\n", []string{"a", ""}},
+		{"blank line", "a\n\nb", []string{"a", "", "b"}},
+		{"tab kept", "a\tb", []string{"a\tb"}},
+		{"controls dropped", "a\x00b\x1bc\x7fd", []string{"abcd"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitPastedLines(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("split(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if string(got[i]) != tc.want[i] {
+					t.Fatalf("split(%q)[%d] = %q, want %q", tc.in, i, string(got[i]), tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestEditorPasteSplitsLines is the core fix: a multi-line paste mid-line splits into
+// real buffer lines, the tail rides the last one, and the caret sits between them.
+func TestEditorPasteSplitsLines(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("head-tail")
+	s.curX, s.wantX = 4, 4 // between "head" and "-tail"
+	pasteText(s, "one\ntwo\r\nthree")
+	if got := buffer(s); got != "headone\ntwo\nthree-tail" {
+		t.Fatalf("buffer = %q, want %q", got, "headone\ntwo\nthree-tail")
+	}
+	if s.curY != 2 || s.curX != 5 { // end of "three", before the tail
+		t.Fatalf("cursor = (%d,%d), want (2,5)", s.curY, s.curX)
+	}
+	if s.wantX != s.curX {
+		t.Fatalf("wantX = %d, want %d", s.wantX, s.curX)
+	}
+	if !s.dirty {
+		t.Fatal("paste must mark the buffer dirty")
+	}
+}
+
+// TestEditorPasteSelectionAndUndo: a paste replaces the selection like typing does, and
+// the whole block is a single undo step (editorEditKey snapshots any rune-bearing key).
+func TestEditorPasteSelectionAndUndo(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("abc\ndef")
+	selectRange(s, 0, 1, 1, 2)
+	pasteText(s, "X\nY")
+	if got := buffer(s); got != "aX\nYf" {
+		t.Fatalf("buffer = %q, want %q", got, "aX\nYf")
+	}
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlZ})
+	if got := buffer(s); got != "abc\ndef" {
+		t.Fatalf("one undo should take back the whole paste, buffer = %q", got)
+	}
+}
+
+// TestEditorPasteKeepsGeometry is the rendering regression the user hit: newlines inside
+// a buffer line made View emit extra physical rows and shifted every later frame. The
+// view must keep its exact height and width after a paste, wrapped or not.
+func TestEditorPasteKeepsGeometry(t *testing.T) {
+	block := "short\n" + strings.Repeat("long ", 60) + "\n\ttabbed\nlast"
+	for _, wrap := range []bool{false, true} {
+		s, sh := newEditor(EditorOpts{})
+		if wrap {
+			s.ToggleWrap()
+		}
+		h := lipgloss.Height(s.View(sh))
+		pasteText(s, block)
+		after := s.View(sh)
+		if strings.Contains(after, "\t") {
+			t.Fatalf("wrap=%v: View must never emit a raw tab", wrap)
+		}
+		if got := lipgloss.Height(after); got != h {
+			t.Fatalf("wrap=%v: height after paste = %d, want %d", wrap, got, h)
+		}
+		for i, row := range strings.Split(after, "\n") {
+			if got := lipgloss.Width(row); got > s.w {
+				t.Fatalf("wrap=%v: row %d width = %d, overflows the %d-cell body", wrap, i, got, s.w)
+			}
+		}
+		if len(s.lines) != 4 {
+			t.Fatalf("wrap=%v: paste should yield 4 buffer lines, got %d", wrap, len(s.lines))
+		}
+	}
+}
+
+// TestEditorPasteSkipsExtensionHandler: a paste's String() is the bracketed form, so the
+// markdown list-continuation handler (which gates on "enter") leaves it alone — pasted
+// list items must not sprout extra markers.
+func TestEditorPasteSkipsExtensionHandler(t *testing.T) {
+	s, _ := newEditor(EditorOpts{Path: "notes.md"})
+	if s.keyHandler == nil {
+		t.Fatal("a .md buffer should carry the markdown key handler")
+	}
+	pasteText(s, "- a\n- b")
+	if got := buffer(s); got != "- a\n- b" {
+		t.Fatalf("buffer = %q, want %q", got, "- a\n- b")
+	}
+}
+
+// TestExpandLineControlPlaceholder: control runes that reach the buffer another way
+// (setContent only normalizes \r\n, so a lone \r or a NUL survives a file load) render as
+// a one-cell placeholder rather than escaping into the frame.
+func TestExpandLineControlPlaceholder(t *testing.T) {
+	p := string(editorControlPlaceholder)
+	got := string(expandLine([]rune("a\rb\x00c\n")))
+	want := "a" + p + "b" + p + "c" + p
+	if got != want {
+		t.Fatalf("expandLine = %q, want %q", got, want)
+	}
+	// The backstop that keeps the frame rectangular no matter what reaches a line: an
+	// embedded newline is one cell, not a second physical row.
+	if n := lipgloss.Height(string(expandLine([]rune("a\nb")))); n != 1 {
+		t.Fatalf("expanded line spans %d rows, want 1", n)
+	}
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("a\rb")
+	if v := s.View(sh); strings.Contains(v, "\r") {
+		t.Fatal("View must never emit a raw carriage return")
+	}
+}
+
 // TestEditorCellMapping: cursor cell and click column account for tab expansion —
 // curX counts runes, scrX/clicks count display cells.
 func TestEditorCellMapping(t *testing.T) {

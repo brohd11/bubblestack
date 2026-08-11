@@ -207,17 +207,27 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
-// expandLine renders a buffer line to display runes, tabs expanded to spaces. Display
+// editorControlPlaceholder stands in for a control rune that reached the buffer anyway —
+// a file loaded with a lone '\r' or a NUL, which setContent does not strip. One cell wide,
+// so cellOfCol/colAtCell (which count every non-tab rune as one) stay exact.
+const editorControlPlaceholder = '·'
+
+// expandLine renders a buffer line to display runes, tabs expanded to spaces and any
+// other control rune replaced by a placeholder — none of them may reach View, where the
+// terminal would act on them while the renderer measured them as zero-width. Display
 // cells then equal display-rune indexes (double-width runes are the accepted
 // limitation of this simple editor).
 func expandLine(line []rune) []rune {
 	var out []rune
 	for _, r := range line {
-		if r == '\t' {
+		switch {
+		case r == '\t':
 			for i := 0; i < editorTabWidth; i++ {
 				out = append(out, ' ')
 			}
-		} else {
+		case r < 0x20 || r == 0x7f:
+			out = append(out, editorControlPlaceholder)
+		default:
 			out = append(out, r)
 		}
 	}
@@ -561,8 +571,10 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		s.curX = len(s.lines[s.curY])
 		s.wantX = s.curX
 	default:
+		// Every rune-bearing key, typed or pasted: a bracketed paste is one KeyMsg whose
+		// Runes carry newlines, so this must go through insertText, not insertRunes.
 		if len(m.Runes) > 0 {
-			s.insertRunes(m.Runes...)
+			s.insertText(string(m.Runes))
 		}
 	}
 	s.wrapDirty = true
@@ -669,6 +681,66 @@ func (s *EditorScreen) redo() {
 	s.redoStack = s.redoStack[:last]
 	s.undoStack = pushEditorSnapshot(s.undoStack, s.snapshot())
 	s.restoreSnapshot(target)
+}
+
+// splitPastedLines turns arbitrary incoming text into the buffer lines it should become.
+// Bracketed paste arrives as one KeyMsg carrying the payload verbatim, so this is where
+// the line breaks and the runes that have no display cell are dealt with: '\n' ends a
+// line, '\r' ends a line and swallows a following '\n' (CRLF), tabs stay raw the way the
+// tab key inserts them (expandLine owns their width), and every other control rune is
+// dropped — leaving one in the buffer breaks the same row geometry the editorTabWidth
+// note describes. Always returns at least one line.
+func splitPastedLines(text string) [][]rune {
+	out := [][]rune{{}}
+	rs := []rune(text)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == '\r':
+			if i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
+			}
+			out = append(out, []rune{})
+		case r == '\n':
+			out = append(out, []rune{})
+		case r == '\t':
+			out[len(out)-1] = append(out[len(out)-1], r)
+		case r < 0x20 || r == 0x7f:
+			// no cell to render it in; drop it
+		default:
+			out[len(out)-1] = append(out[len(out)-1], r)
+		}
+	}
+	return out
+}
+
+// insertText inserts text at the cursor, splitting it across buffer lines. This is the
+// path every rune-bearing key takes: ordinary typing is the single-line case and lands in
+// insertRunes, while a paste splices its lines in so that one buffer line stays one
+// physical row. Counts as a single edit, so undo takes the whole paste back.
+func (s *EditorScreen) insertText(text string) {
+	parts := splitPastedLines(text)
+	if len(parts) == 1 {
+		if len(parts[0]) > 0 {
+			s.insertRunes(parts[0]...)
+		}
+		return
+	}
+	line := s.lines[s.curY]
+	tail := append([]rune{}, line[s.curX:]...)
+	s.lines[s.curY] = append(line[:s.curX], parts[0]...)
+	added := parts[1:]
+	last := len(added) - 1
+	endX := len(added[last]) // where the caret lands: after the paste, before the tail
+	added[last] = append(added[last], tail...)
+	// A fresh copy of the lines below: appending added in place would overwrite them.
+	rest := append([][]rune{}, s.lines[s.curY+1:]...)
+	s.lines = append(append(s.lines[:s.curY+1], added...), rest...)
+	s.curY += len(added)
+	s.curX = endX
+	s.wantX = s.curX
+	s.dirty = true
+	s.editSeq++
 }
 
 // insertRunes inserts rs at the cursor and advances past them.
