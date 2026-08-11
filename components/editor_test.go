@@ -660,6 +660,44 @@ func TestEditorWordDelete(t *testing.T) {
 	}
 }
 
+func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	altBackspace := tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}
+
+	// Ordinary text stops at the nearest configured symbol; a contiguous symbol run
+	// is its own token, so repeated presses peel an expression apart predictably.
+	s.setContent("root/foo()[]{}.,|/bar")
+	s.curY, s.curX = 0, len(s.lines[0])
+	for _, want := range []string{
+		"root/foo()[]{}.,|/",
+		"root/foo",
+		"root/",
+		"root",
+	} {
+		s.key(nil, altBackspace)
+		if got := buffer(s); got != want {
+			t.Fatalf("successive symbol-aware alt+backspace = %q, want %q", got, want)
+		}
+	}
+
+	// Trailing whitespace keeps the old behavior: it goes with the token before it,
+	// while text after the cursor remains untouched.
+	s.setContent("left/foo.bar   tail")
+	s.curY, s.curX = 0, strings.Index(buffer(s), "tail")
+	s.key(nil, altBackspace)
+	if got, want := buffer(s), "left/foo.tail"; got != want {
+		t.Fatalf("symbol boundary with spaces/suffix = %q, want %q", got, want)
+	}
+
+	// The requested list is exact: '-' remains part of an ordinary word.
+	s.setContent("foo-bar")
+	s.curY, s.curX = 0, len(s.lines[0])
+	s.key(nil, altBackspace)
+	if got := buffer(s); got != "" {
+		t.Fatalf("unlisted hyphen should remain within the word, got %q", got)
+	}
+}
+
 // TestEditorWordNav mirrors textinput's word jumps: alt/ctrl+left goes to the previous
 // word start (wrapping to the previous line's end at column 0), alt/ctrl+right to the
 // next word start (wrapping at end of line).

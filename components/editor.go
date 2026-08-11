@@ -873,6 +873,14 @@ func (s *EditorScreen) forwardDelete() {
 // alnum/punct classes — keep it stupidly simple).
 func isWordSpace(r rune) bool { return unicode.IsSpace(r) }
 
+// isBackwardDeleteSymbol marks punctuation that forms its own token for
+// alt+backspace/ctrl+w. Word movement and forward deletion keep their existing
+// whitespace-only behavior; this is intentionally the narrower editing gesture the
+// user invokes when peeling a path or expression apart from right to left.
+func isBackwardDeleteSymbol(r rune) bool {
+	return strings.ContainsRune("()[]{}.,|/", r)
+}
+
 // wordBackPos is the position WordBackward would move to from the cursor: at column 0
 // the previous line's end (the caller treats that one as a plain join/move), else
 // past any spaces then the word before them.
@@ -914,6 +922,38 @@ func (s *EditorScreen) wordForwardPos() (int, int) {
 	return y, x
 }
 
+// deleteWordBackPos is wordBackPos with punctuation-aware token boundaries. It
+// preserves the existing whitespace rule (trailing spaces are removed together with
+// the token before them), then removes either one run of configured symbols or one
+// run of ordinary word characters. Thus repeated alt+backspace on "file.md" removes
+// "md", then ".", then "file".
+func (s *EditorScreen) deleteWordBackPos() (int, int) {
+	y, x := s.curY, s.curX
+	if x == 0 {
+		if y == 0 {
+			return 0, 0
+		}
+		return y - 1, len(s.lines[y-1])
+	}
+	line := s.lines[y]
+	for x > 0 && isWordSpace(line[x-1]) {
+		x--
+	}
+	if x == 0 {
+		return y, x
+	}
+	if isBackwardDeleteSymbol(line[x-1]) {
+		for x > 0 && isBackwardDeleteSymbol(line[x-1]) {
+			x--
+		}
+		return y, x
+	}
+	for x > 0 && !isWordSpace(line[x-1]) && !isBackwardDeleteSymbol(line[x-1]) {
+		x--
+	}
+	return y, x
+}
+
 func (s *EditorScreen) moveWordBack() {
 	y, x := s.wordBackPos()
 	s.curY, s.curX, s.wantX = y, x, x
@@ -937,10 +977,10 @@ func (s *EditorScreen) deleteRange(y1, x1, y2, x2 int) {
 	s.editSeq++
 }
 
-// deleteWordBack is DeleteWordBackward: deletes from wordBackPos to the cursor. At
-// column 0 it is a plain line join, exactly like backspace.
+// deleteWordBack is DeleteWordBackward: deletes from deleteWordBackPos to the
+// cursor. At column 0 it is a plain line join, exactly like backspace.
 func (s *EditorScreen) deleteWordBack() {
-	y, x := s.wordBackPos()
+	y, x := s.deleteWordBackPos()
 	if y == s.curY && x == s.curX {
 		return // start of buffer
 	}
