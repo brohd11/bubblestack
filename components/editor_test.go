@@ -114,32 +114,6 @@ func TestEditorLeftMouseDragSelectsWithoutCopy(t *testing.T) {
 	}
 }
 
-func TestEditorRightMouseDragCopiesOnRelease(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
-	s.setContent("abcdef")
-	oldWrite := writeEditorClipboard
-	defer func() { writeEditorClipboard = oldWrite }()
-	var copied string
-	writeEditorClipboard = func(text string) error { copied = text; return nil }
-	y := s.titleH()
-
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 1, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonRight, X: 3, Y: y})
-	if copied != "" {
-		t.Fatal("a right drag must not copy before release")
-	}
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 3, Y: y})
-	if act.Cmd == nil {
-		t.Fatal("releasing a non-empty right drag should issue a clipboard command")
-	}
-	if msg := act.Cmd(); msg != (editorCopiedMsg{n: 3}) {
-		t.Fatalf("clipboard command returned %#v, want a three-character editorCopiedMsg", msg)
-	}
-	if copied != "bcd" || s.selectedText() != "bcd" {
-		t.Fatalf("right drag copied/selected %q/%q, want %q", copied, s.selectedText(), "bcd")
-	}
-}
-
 func TestEditorClickDoesNotCopyOrSelect(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent("abc")
@@ -151,102 +125,46 @@ func TestEditorClickDoesNotCopyOrSelect(t *testing.T) {
 	}
 }
 
-func TestEditorRightClickInsideSelectionPreservesAndCopies(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
-	s.setContent("abcdef")
-	selectRange(s, 0, 1, 0, 4)
-	oldWrite := writeEditorClipboard
-	defer func() { writeEditorClipboard = oldWrite }()
-	var copied string
-	writeEditorClipboard = func(text string) error { copied = text; return nil }
-	y := s.titleH()
-
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 2, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonRight, X: 2, Y: y})
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 2, Y: y})
-	if act.Cmd == nil {
-		t.Fatal("a right click inside selected text should copy on release")
-	}
-	act.Cmd()
-	if copied != "bcd" || s.selectedText() != "bcd" {
-		t.Fatalf("stationary right click copied/left %q/%q, want %q", copied, s.selectedText(), "bcd")
-	}
-}
-
+// TestEditorRightClickOutsideSelectionBecomesCaretClick: the "outside" half of the
+// context menu's desktop convention — the press drops the old selection and puts the
+// caret where it landed, so a paste goes where the user pointed, and only then opens
+// the menu.
 func TestEditorRightClickOutsideSelectionBecomesCaretClick(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
+	s, sh := newEditor(EditorOpts{ContextMenu: true})
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
 	y := s.titleH()
 
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 5, Y: y})
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 5, Y: y})
-	if act.Cmd != nil || s.selectionActive() || s.curX != 5 {
-		t.Fatalf("outside right click: cmd=%v selection=%v caret=%d, want no copy/selection and caret 5", act.Cmd != nil, s.selectionActive(), s.curX)
+	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 5, Y: y})
+	if act.Msg == nil {
+		t.Fatal("a right press should open the context menu")
+	}
+	if s.selectionActive() || s.curX != 5 {
+		t.Fatalf("outside right click: selection=%v caret=%d, want no selection and caret 5", s.selectionActive(), s.curX)
+	}
+	// The release that follows must not disturb what the press set up.
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 5, Y: y})
+	if s.selectionActive() || s.curX != 5 {
+		t.Fatalf("the release after a right press changed state: selection=%v caret=%d", s.selectionActive(), s.curX)
 	}
 }
 
-func TestEditorRightClickStartsNewDragAfterDifferentCharacter(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
-	s.setContent("abcdef")
-	selectRange(s, 0, 1, 0, 4)
-	oldWrite := writeEditorClipboard
-	defer func() { writeEditorClipboard = oldWrite }()
-	var copied string
-	writeEditorClipboard = func(text string) error { copied = text; return nil }
-	y := s.titleH()
-
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 2, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonRight, X: 3, Y: y})
-	if got := s.selectedText(); got != "cd" {
-		t.Fatalf("motion to another character selected %q, want a new drag selection %q", got, "cd")
-	}
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 3, Y: y})
-	if act.Cmd == nil {
-		t.Fatal("the new right drag should copy on release")
-	}
-	act.Cmd()
-	if copied != "cd" {
-		t.Fatalf("new right drag copied %q, want %q", copied, "cd")
-	}
-}
-
-func TestEditorRightMotionWithinTabPreservesSelection(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
-	s.setContent("\tx")
-	selectRange(s, 0, 0, 0, 1)
-	oldWrite := writeEditorClipboard
-	defer func() { writeEditorClipboard = oldWrite }()
-	var copied string
-	writeEditorClipboard = func(text string) error { copied = text; return nil }
-	y := s.titleH()
-
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 0, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonRight, X: editorTabWidth - 1, Y: y})
-	if got := s.selectedText(); got != "\t" || !s.preserveSelection {
-		t.Fatalf("motion inside one tab left selection %q pending=%v, want preserved tab", got, s.preserveSelection)
-	}
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: editorTabWidth - 1, Y: y})
-	if act.Cmd == nil {
-		t.Fatal("right release within the same tab should copy the preserved selection")
-	}
-	act.Cmd()
-	if copied != "\t" {
-		t.Fatalf("copied %q, want the selected tab", copied)
-	}
-}
-
-func TestEditorMultiClickDoesNotCrossMouseButtons(t *testing.T) {
-	s, sh := newEditor(EditorOpts{})
+// TestEditorRightPressBreaksMultiClickChain replaces the old cross-button guard: right
+// presses no longer reach pressSelection at all, so instead of being tracked as a
+// different button's click they must simply end the run, leaving the next left press a
+// fresh first click rather than the second of a double.
+func TestEditorRightPressBreaksMultiClickChain(t *testing.T) {
+	s, sh := newEditor(EditorOpts{ContextMenu: true})
 	s.setContent("foo bar")
 	y := s.titleH()
 
 	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
 	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
 	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 1, Y: y})
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
-	if act.Cmd != nil || s.selectionActive() || s.clickCount != 1 || s.clickButton != tea.MouseButtonRight {
-		t.Fatalf("mixed buttons formed a multi-click: cmd=%v selection=%v count=%d button=%v", act.Cmd != nil, s.selectionActive(), s.clickCount, s.clickButton)
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
+	if s.clickCount != 1 || s.selectionActive() {
+		t.Fatalf("a right press between two left clicks formed a multi-click: count=%d selection=%v",
+			s.clickCount, s.selectionActive())
 	}
 }
 

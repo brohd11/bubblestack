@@ -26,10 +26,11 @@ import (
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
 // tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
-// and either mouse button places the cursor and selects with drag/double/triple click.
-// Left-button gestures only select. A right-button release copies its selection to the
-// system clipboard; a stationary right click inside an existing selection preserves
-// and copies it. Typing one of the delimiters in editorPairs over a selection wraps the
+// and the left mouse button places the cursor and selects with drag/double/triple click.
+// The right button is the context menu, when the host opts into it (EditorOpts.ContextMenu):
+// a press raises a MenuScreen at the pointer offering copy/cut/paste — pressing inside an
+// existing selection acts on it, pressing outside puts the caret there first, so a paste
+// lands where the pointer did. Typing one of the delimiters in editorPairs over a selection wraps the
 // selection in it and keeps it selected, so the key repeats to nest. The wheel scrolls
 // the view without moving the cursor (a cursor move then snaps the view back to it), and
 // when the buffer overflows the viewport a proportional scrollbar takes the rightmost
@@ -50,8 +51,8 @@ import (
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
 // because tabs have to be stored raw but never rendered raw (see expandLine).
-// Deliberately minimal: no keyboard cut/paste; optional literal search is enabled by
-// the host through EditorOpts.Search.
+// Deliberately minimal: cut/paste live only on the opt-in right-click menu, not on key
+// chords; optional literal search is enabled by the host through EditorOpts.Search.
 type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
@@ -94,16 +95,16 @@ type EditorScreen struct {
 	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
 	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 
-	dragging                  bool // the active mouse gesture is extending a selection
-	preserveSelection         bool // a right press inside the selection is still stationary
-	mouseButton               tea.MouseButton
+	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	selStart, selEnd          textPos // normalized half-open selected buffer range
 
-	clickPos    textPos // where the previous selection-button press landed
-	clickButton tea.MouseButton
-	clickTime   time.Time // when it landed, for the multi-click window
-	clickCount  int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
+	clickPos   textPos   // where the previous left press landed
+	clickTime  time.Time // when it landed, for the multi-click window
+	clickCount int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
+
+	contextMenu  bool                          // EditorOpts.ContextMenu: a right press raises the edit menu
+	contextItems func(*core.Shared) []MenuItem // host rows appended to that menu below a rule
 
 	emphasisPairs bool // '*'/'_' auto-close here: a prose buffer, not code (see emphasisPairExt)
 
@@ -195,16 +196,28 @@ type wrapRow struct{ line, start, end int }
 // highlighted in the buffer. A non-empty query leaves the same bar visible but
 // unfocused after the overlay closes. It is opt-in so the shared editor does not
 // change existing consumers' shortcuts or viewport geometry.
+//
+// ContextMenu enables the right-click menu (copy/cut/paste, see editMenu). It is opt-in
+// for the same reason Search is: it takes the right button away from whatever the host
+// was doing with it, and with it off a right press does nothing at all. ContextItems,
+// when set, is consulted at press time and its rows are appended below a rule, so a host
+// can hang its own entries off the same gesture; returning them fresh per press is what
+// lets a row's Disabled reflect live state. An empty or nil return appends nothing — no
+// dangling separator. ContextItems does NOT imply ContextMenu: one flag gates the whole
+// gesture, so a host can mute it without nil-ing its items. Rows should leave MenuItem.Hint
+// empty — the menu dispatches no accelerators, and the editor binds no cut/paste chords.
 type EditorOpts struct {
-	Path        string
-	Title       string
-	Crumb       string
-	Border      bool
-	OnExit      func(*core.Shared) core.Action
-	OnRelease   func(*core.Shared) core.Action
-	OnSaved     func(*core.Shared, string) core.Action
-	Highlighter Highlighter
-	Search      bool
+	Path         string
+	Title        string
+	Crumb        string
+	Border       bool
+	OnExit       func(*core.Shared) core.Action
+	OnRelease    func(*core.Shared) core.Action
+	OnSaved      func(*core.Shared, string) core.Action
+	Highlighter  Highlighter
+	Search       bool
+	ContextMenu  bool
+	ContextItems func(*core.Shared) []MenuItem
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -220,13 +233,29 @@ type editorSavedMsg struct {
 	revision uint64
 }
 
-// editorCopiedMsg reports the asynchronous system-clipboard write.
+// editorCopiedMsg reports the asynchronous system-clipboard write. cut only picks the
+// status line's verb: the buffer deletion already happened, synchronously.
 type editorCopiedMsg struct {
 	n   int
 	err error
+	cut bool
+}
+
+// editorPastedMsg carries the asynchronous clipboard READ back to Update, where the text
+// is spliced into the buffer. target names the editor that asked: async messages reach an
+// embedded editor through ModularScreen's broadcast to every panel, and a paste mutates
+// the buffer — it must not land in a sibling editor pane that never asked for one.
+type editorPastedMsg struct {
+	target *EditorScreen
+	text   string
+	err    error
 }
 
 var writeEditorClipboard = clipboard.WriteAll
+
+// readEditorClipboard is the read seam, mirroring writeEditorClipboard so tests can drive
+// a paste without a system clipboard.
+var readEditorClipboard = clipboard.ReadAll
 
 var (
 	editorCursorStyle = lipgloss.NewStyle().Reverse(true)
@@ -245,7 +274,7 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
-// editorMultiClickWindow is how long a selection-button press stays eligible to be the
+// editorMultiClickWindow is how long a left press stays eligible to be the
 // second or third click of a same-button multi-click. tea.MouseMsg carries neither a
 // timestamp nor a click count, so the editor keeps both itself.
 const editorMultiClickWindow = 500 * time.Millisecond
@@ -354,6 +383,8 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		nextRevision:  1,
 		searchEnabled: opts.Search,
 		searchSeq:     -1,
+		contextMenu:   opts.ContextMenu,
+		contextItems:  opts.ContextItems,
 	}
 }
 
@@ -500,20 +531,44 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		}
 		return s, core.Action{}
 	case editorCopiedMsg:
-		if m.err != nil {
-			return s, core.SetStatusAndLog("copy failed: " + m.err.Error())
+		verb := "copied"
+		if m.cut {
+			verb = "cut"
 		}
-		return s, core.SetStatus(fmt.Sprintf("copied %d characters", m.n))
+		if m.err != nil {
+			return s, core.SetStatusAndLog(verb + " failed: " + m.err.Error())
+		}
+		return s, core.SetStatus(fmt.Sprintf("%s %d characters", verb, m.n))
+	case editorPastedMsg:
+		if m.target != s {
+			return s, core.Action{} // a broadcast meant for another editor pane
+		}
+		if m.err != nil {
+			return s, core.SetStatusAndLog("paste failed: " + m.err.Error())
+		}
+		if m.text == "" {
+			return s, core.Action{} // an empty clipboard pastes nothing, silently
+		}
+		s.editAtomic(func() {
+			s.deleteSelection() // a no-op without a selection
+			s.insertText(m.text)
+		})
+		return s, core.SetStatus(fmt.Sprintf("pasted %d characters", utf8.RuneCountInString(m.text)))
 	case tea.KeyMsg:
 		return s.key(sh, m)
 	case tea.MouseMsg:
 		if s.confirmExit {
 			return s, core.Action{}
 		}
-		if m.Action == tea.MouseActionPress {
+		switch m.Action {
+		case tea.MouseActionPress:
 			switch m.Button {
-			case tea.MouseButtonLeft, tea.MouseButtonRight:
-				s.pressSelection(sh, m.X, m.Y, m.Button, time.Now())
+			case tea.MouseButtonLeft:
+				s.pressSelection(sh, m.X, m.Y, time.Now())
+			case tea.MouseButtonRight:
+				if s.contextMenu {
+					return s, s.pressContext(sh, m.X, m.Y)
+				}
 			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 				// The wheel is browse-only and only while focused: mouse msgs are
 				// broadcast to every pane, so an unfocused editor must not roll.
@@ -525,27 +580,95 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 					}
 				}
 			}
-		} else if s.mouseButton != tea.MouseButtonNone && m.Action == tea.MouseActionMotion {
-			s.extendMouseGesture(sh, m.X, m.Y)
-		} else if s.mouseButton != tea.MouseButtonNone && m.Action == tea.MouseActionRelease {
-			s.extendMouseGesture(sh, m.X, m.Y)
-			copy := s.mouseButton == tea.MouseButtonRight
-			s.resetMouseGesture()
-			if text := s.selectedText(); copy && text != "" {
-				return s, copySelectionCmd(text)
+		// A drag is the only state motion and release can act on now that the left button
+		// is the only one that starts a gesture. Neither ever arrives while the context
+		// menu is up: the menu is the top screen, and it consumes every message.
+		case tea.MouseActionMotion:
+			if s.dragging {
+				s.extendDrag(sh, m.X, m.Y)
 			}
+		case tea.MouseActionRelease:
+			if s.dragging {
+				s.extendDrag(sh, m.X, m.Y)
+			}
+			s.resetMouseGesture()
 		}
 		return s, core.Action{}
 	}
 	return s, core.Action{}
 }
 
-// copySelectionCmd is the clipboard write issued by a right-button release that leaves
-// a selection.
-func copySelectionCmd(text string) core.Action {
+// copySelectionCmd is the clipboard write the menu's Copy and Cut rows issue. The write
+// travels in the cmd lane because atotto shells out to pbcopy/xclip, which must never run
+// inside Update.
+func copySelectionCmd(text string, cut bool) core.Action {
 	return core.Async(func() tea.Msg {
-		return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text)}
+		return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text), cut: cut}
 	})
+}
+
+// pasteClipboardCmd is the reading half, addressed to the editor that asked for it (see
+// editorPastedMsg). clipboard.ReadAll shells out the same way the write does.
+func pasteClipboardCmd(target *EditorScreen) core.Action {
+	return core.Async(func() tea.Msg {
+		text, err := readEditorClipboard()
+		return editorPastedMsg{target: target, text: text, err: err}
+	})
+}
+
+// editMenu builds the right-click menu: the three clipboard verbs, then whatever the host
+// hung off EditorOpts.ContextItems below a rule. x and y are the pressed cell in ABSOLUTE
+// terminal cells (absCell converts); AnchorBelow is what keeps the box off that cell.
+//
+// Copy and Cut are disabled without a selection, because that state is free to know. Paste
+// never is: finding out whether the clipboard holds anything means READING it, which shells
+// out to pbpaste/xclip and so cannot happen on the render tick. An empty clipboard is
+// therefore a live row that pastes nothing.
+func (s *EditorScreen) editMenu(sh *core.Shared, x, y int) *MenuScreen {
+	sel := s.selectionActive()
+	items := []MenuItem{
+		{Label: "Copy", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(false) }},
+		{Label: "Cut", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
+		{Label: "Paste", Pick: func(*core.Shared) core.Action {
+			return core.Seq(core.Pop(), pasteClipboardCmd(s))
+		}},
+	}
+	if s.contextItems != nil {
+		if extra := s.contextItems(sh); len(extra) > 0 {
+			items = append(items, MenuItem{Separator: true})
+			items = append(items, extra...)
+		}
+	}
+	return NewMenu(MenuOpts{Items: items, Anchor: AnchorBelow(x, y), Crumb: "edit"})
+}
+
+// copySelection is both Copy and Cut. A cut deletes before the write completes, on
+// purpose: undo covers a failed write, whereas holding the deletion until the clipboard
+// round trip returns would race the buffer the user can go on editing.
+func (s *EditorScreen) copySelection(cut bool) core.Action {
+	text := s.selectedText()
+	if text == "" {
+		return core.Pop() // unreachable from a disabled row; the guard is for a nil selection
+	}
+	if cut {
+		s.editAtomic(func() { s.deleteSelection() })
+	}
+	return core.Seq(core.Pop(), copySelectionCmd(text, cut))
+}
+
+// editAtomic runs one buffer mutation as a single undo step from outside key(). key()'s
+// own gate can't be reused — it is a deferred snapshot wrapped around a keystroke, and a
+// menu's Pick never passes through it — but the rule is the same one: record the snapshot
+// only if the mutation actually moved editSeq, so a no-op leaves the undo stack alone.
+func (s *EditorScreen) editAtomic(mutate func()) {
+	before, seq := s.snapshot(), s.editSeq
+	mutate()
+	if s.editSeq == seq {
+		return
+	}
+	s.recordEdit(before)
+	s.wrapDirty = true
+	s.clampScroll()
 }
 
 // key routes one keystroke. After the exit prompt, a handler registered for the
@@ -563,7 +686,6 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	k := m.String()
 	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
-	s.clickButton = tea.MouseButtonNone
 	if s.confirmExit {
 		switch k {
 		case "y", "Y":
@@ -723,7 +845,6 @@ func (s *EditorScreen) setContent(content string) {
 	s.scrY, s.scrX = 0, 0
 	s.resetMouseGesture()
 	s.clickCount = 0
-	s.clickButton = tea.MouseButtonNone
 	s.clearSelection()
 	s.dirty = false
 	s.undoStack, s.redoStack = nil, nil
@@ -1273,29 +1394,23 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	s.clampScroll()
 }
 
-// pressSelection handles a left or right selection press. Repeated presses from the
-// same button on the same character inside editorMultiClickWindow promote to word and
-// line selection; a fourth starts over as a caret/drag gesture. A right press inside
-// an existing selection preserves it unless the gesture moves to another character.
-// The clock is a parameter so tests can drive click cadence.
-func (s *EditorScreen) pressSelection(sh *core.Shared, x, y int, button tea.MouseButton, now time.Time) {
+// pressSelection handles a left selection press. Repeated presses on the same character
+// inside editorMultiClickWindow promote to word and then line selection; a fourth starts
+// over as a caret/drag gesture. The clock is a parameter so tests can drive click cadence.
+func (s *EditorScreen) pressSelection(sh *core.Shared, x, y int, now time.Time) {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
 		s.clickCount = 0
-		s.clickButton = tea.MouseButtonNone
 		s.resetMouseGesture()
 		return
 	}
-	continued := s.clickCount > 0 && button == s.clickButton && p == s.clickPos &&
-		now.Sub(s.clickTime) < editorMultiClickWindow
-	if continued {
+	if s.clickCount > 0 && p == s.clickPos && now.Sub(s.clickTime) < editorMultiClickWindow {
 		s.clickCount++
 	} else {
 		s.clickCount = 1
 	}
-	s.clickPos, s.clickButton, s.clickTime = p, button, now
+	s.clickPos, s.clickTime = p, now
 	s.resetMouseGesture()
-	s.mouseButton = button
 	switch s.clickCount {
 	case 2:
 		s.selectWordAt(p)
@@ -1303,23 +1418,63 @@ func (s *EditorScreen) pressSelection(sh *core.Shared, x, y int, button tea.Mous
 		s.selectLineAt(p)
 	default:
 		s.clickCount = 1
-		if button == tea.MouseButtonRight && s.positionSelected(p) {
-			s.dragAnchor = p
-			s.dragAnchorEnd = s.cellEnd(p)
-			s.preserveSelection = true
-			return
-		}
 		s.startDragAt(p)
 		return
 	}
-	// Multi-click selection is complete on the press. Keep only mouseButton active so a
-	// right release can copy it without motion extending it back onto the anchor.
+	// Multi-click selection is complete on the press: no drag is left running, so motion
+	// cannot extend it back onto the anchor.
 	s.clampScrollBounds()
 }
 
+// pressContext is the whole right-button gesture. A press INSIDE the selection leaves the
+// selection and the caret alone, so the menu acts on what is already highlighted; a press
+// outside is an ordinary caret click that clears it, so a paste lands where the pointer
+// did. A press that maps to no buffer position at all — the scrollbar column, the title
+// bar, the search bar — opens nothing: there is no position for the menu to act on, and a
+// menu raised there would silently act on wherever the caret happened to be. clickCount is
+// dropped so a right press between two left clicks cannot become the middle of a
+// multi-click, which is what the old per-button click bookkeeping prevented.
+//
+// The box clears the pressed row — one below it, flipping to one above when there is no
+// room, left edge on the pressed column either way — and the selection has no say in that.
+// Anchoring off the selection's far edge instead would read better on paper, but a press
+// near the top of a long selection would then put the menu a whole selection's length away:
+// having to chase the box down the screen is worse than having it cover text that is
+// already highlighted.
+func (s *EditorScreen) pressContext(sh *core.Shared, x, y int) core.Action {
+	p, ok := s.positionAt(sh, x, y, false)
+	if !ok {
+		return core.Action{}
+	}
+	if !s.positionSelected(p) {
+		s.clickAt(sh, x, y)
+	}
+	s.resetMouseGesture()
+	s.clickCount = 0
+	ax, ay := s.absCell(sh, x, y)
+	return core.Push(s.editMenu(sh, ax, ay))
+}
+
+// absCell converts an incoming mouse cell into the absolute terminal cells an overlay
+// anchor is stated in. The discriminator is s.embedded rather than s.hasOrigin, because
+// embedded is the same bit positionAt uses to decide which frame the coordinates arrived
+// in: standalone the router hands over absolute cells (BodyY included, which is why
+// nothing is added back), embedded ModularScreen subtracts the slot's rect before
+// forwarding (updateMouseSlot), and the pane origin pushed back every View is that same
+// rect. Going through paneGeometry rather than the origin fields directly matters only
+// before the first frame, when no origin has arrived: its (0, BodyY) fallback at least
+// gets the chrome rows right, where the bare fields would be off by the whole header.
+func (s *EditorScreen) absCell(sh *core.Shared, x, y int) (int, int) {
+	if !s.embedded {
+		return x, y
+	}
+	ox, oy, _, _ := s.paneGeometry(sh)
+	return ox + x, oy + y
+}
+
 // positionSelected reports whether the buffer character at p belongs to the current
-// half-open selection. For a multiline range, the insertion position after a line's
-// final rune represents its selected newline.
+// half-open selection — the context menu's inside-the-selection test. For a multiline
+// range, the insertion position after a line's final rune represents its selected newline.
 func (s *EditorScreen) positionSelected(p textPos) bool {
 	return s.selectionActive() && !posLess(p, s.selStart) && posLess(p, s.selEnd)
 }
@@ -1365,31 +1520,7 @@ func (s *EditorScreen) startDragAt(p textPos) {
 	s.dragging = true
 }
 
-// extendMouseGesture advances an ordinary drag. A pending right click that began in
-// selected text changes into a new drag only after the pointer maps to another buffer
-// position; motion within another display cell of the same tab/wide rune preserves the
-// old selection.
-func (s *EditorScreen) extendMouseGesture(sh *core.Shared, x, y int) {
-	if s.preserveSelection {
-		p, ok := s.positionAt(sh, x, y, true)
-		if !ok || p == s.dragAnchor {
-			return
-		}
-		s.preserveSelection = false
-		s.clickCount = 0
-		s.clickButton = tea.MouseButtonNone
-		s.startDragAt(s.dragAnchor)
-	}
-	if s.dragging {
-		s.extendDrag(sh, x, y)
-	}
-}
-
-func (s *EditorScreen) resetMouseGesture() {
-	s.dragging = false
-	s.preserveSelection = false
-	s.mouseButton = tea.MouseButtonNone
-}
+func (s *EditorScreen) resetMouseGesture() { s.dragging = false }
 
 func (s *EditorScreen) extendDrag(sh *core.Shared, x, y int) {
 	p, ok := s.positionAt(sh, x, y, true)

@@ -241,7 +241,9 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 // updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates.
 // Keeping this translation for a full left- or right-button gesture lets a drag leave
 // its pane without changing owners or exposing absolute terminal coordinates to the
-// panel that began it.
+// panel that began it. A panel that needs absolute cells anyway — one anchoring an
+// overlay at the pointer, as EditorScreen's context menu does — adds back the origin
+// this subtracts, which it receives through PaneOriginer.
 func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {
 	r := s.slotRect(i)
 	mm.X -= r.x
