@@ -79,6 +79,12 @@ func NewScreenPanel(child core.Screen) *ScreenPanel { return &ScreenPanel{child:
 // swap is silent and the host's own Init will start the new child. The panel's focus
 // state is untouched and pushed onto the new child (syncChild), so a focused pane
 // stays focused on it.
+//
+// Init runs on every swap, including a swap back to a child this panel hosted before —
+// the panel keeps no record of what it has already started. A child whose Init performs a
+// one-time load therefore owns making it idempotent, or a pane cycling between children
+// reloads (and resets) each one every time it comes back; EditorScreen.Init is the
+// worked example.
 func (p *ScreenPanel) SetChild(child core.Screen) tea.Cmd {
 	p.child = child
 	p.syncChild()

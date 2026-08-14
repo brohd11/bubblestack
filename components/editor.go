@@ -67,6 +67,7 @@ type EditorScreen struct {
 	scrY       int      // topmost visible buffer line
 	scrX       int      // leftmost visible DISPLAY cell (tabs expand, so cells ≠ runes)
 
+	loaded      bool // the one-time file read has been dispatched; a re-Init must not re-read
 	dirty       bool // buffer differs from what was loaded/last saved
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
@@ -315,7 +316,8 @@ var _ core.FocusableScreen = (*EditorScreen)(nil)
 var _ PaneOriginer = (*EditorScreen)(nil)
 
 // NewEditorScreen builds the screen with an empty buffer; a configured Path is read
-// asynchronously from Init (the framework idiom — IO only in the cmd lane).
+// asynchronously from the FIRST Init (the framework idiom — IO only in the cmd lane).
+// Later Inits are no-ops, so the instance is what holds the buffer for its lifetime.
 func NewEditorScreen(opts EditorOpts) *EditorScreen {
 	title := opts.Title
 	if title == "" {
@@ -366,7 +368,20 @@ func (s *EditorScreen) exit(sh *core.Shared) core.Action {
 
 // Init kicks off the file read when a path is configured; the result arrives as an
 // editorLoadedMsg. No path ⇒ nothing to load.
+//
+// The read happens once per instance. A host that swaps this editor back into a pane
+// calls Init again (ScreenPanel.SetChild does), and re-reading there would hand
+// setContent the file — discarding unsaved edits, the undo history and the cursor of the
+// very buffer the swap-back exists to return to. The flag is set before the empty-path
+// return, so a scratch buffer that later gains a path (a save-as, or SetPath after the
+// host renamed the file) is never read back off disk either: in both cases the buffer is
+// already the authoritative content. It is set at dispatch rather than on arrival, so a
+// second Init while the first read is in flight cannot queue a duplicate.
 func (s *EditorScreen) Init(*core.Shared) tea.Cmd {
+	if s.loaded {
+		return nil
+	}
+	s.loaded = true
 	if s.path == "" {
 		return nil
 	}
@@ -1173,9 +1188,21 @@ func (s *EditorScreen) moveRight() {
 
 // moveVertical moves the cursor delta lines, keeping the wantX target column so a
 // run of up/down moves across short lines returns to the column the user started from.
+//
+// Off either end of the buffer the move becomes a horizontal one instead of a no-op:
+// down on the last line lands at end of line, up on the first line at column zero.
+// That is what makes holding an arrow reach the end of the document rather than stall
+// mid-line, and both ends reset wantX — the caret really moved, so the sticky column
+// follows it exactly as it does for home/end.
 func (s *EditorScreen) moveVertical(delta int) {
 	y := s.curY + delta
-	if y < 0 || y >= len(s.lines) {
+	if y < 0 {
+		s.curX, s.wantX = 0, 0
+		return
+	}
+	if y >= len(s.lines) {
+		s.curX = len(s.lines[s.curY])
+		s.wantX = s.curX
 		return
 	}
 	s.curY = y
@@ -2313,6 +2340,14 @@ func (s *EditorScreen) applySaveName(name string) {
 		s.hlSeq = -1
 	}
 }
+
+// SetPath points the buffer at path after the file moved underneath it — the host
+// renamed it on disk, as opposed to the save-as applySaveName otherwise serves. The
+// buffer, its dirty flag and its undo history are untouched: only the identity moves,
+// which is exactly what keeps the next ctrl+s from re-creating the old file. The load
+// flag is deliberately left set — a rename does not make the new path worth reading, and
+// re-reading it on a later pane swap would undo everything this method promises.
+func (s *EditorScreen) SetPath(path string) { s.applySaveName(path) }
 
 // saveCmd snapshots the buffer and its revision and writes it to Path asynchronously
 // (IO in the cmd lane); the result arrives as an editorSavedMsg. An empty path is an error — a

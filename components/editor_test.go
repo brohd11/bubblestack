@@ -542,6 +542,44 @@ func TestEditorArrows(t *testing.T) {
 	}
 }
 
+// TestEditorArrowsAtBufferEnds: off either end of the buffer a vertical move becomes a
+// horizontal one — down on the last line lands at end of line, up on the first at
+// column zero — rather than the no-op that used to make a held arrow stall mid-line.
+// Both reset wantX, so a subsequent vertical run aims at where the caret actually is.
+func TestEditorArrowsAtBufferEnds(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("abcd\nx\nabcdef")
+	s.curY, s.curX, s.wantX = 2, 2, 2
+
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	if s.curY != 2 || s.curX != 6 || s.wantX != 6 {
+		t.Fatalf("down on the last line = (%d,%d) wantX %d, want (2,6) wantX 6", s.curY, s.curX, s.wantX)
+	}
+	// wantX moved with it: the next up aims at column 6, not the original 2.
+	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	if s.curY != 1 || s.curX != 1 {
+		t.Fatalf("up after the end move = (%d,%d), want (1,1)", s.curY, s.curX)
+	}
+
+	s.curY, s.curX, s.wantX = 0, 2, 2
+	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	if s.curY != 0 || s.curX != 0 || s.wantX != 0 {
+		t.Fatalf("up on the first line = (%d,%d) wantX %d, want (0,0) wantX 0", s.curY, s.curX, s.wantX)
+	}
+
+	// A one-line buffer is both ends at once.
+	s.setContent("hello")
+	s.curX, s.wantX = 2, 2
+	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	if s.curY != 0 || s.curX != 5 {
+		t.Fatalf("down in a one-line buffer = (%d,%d), want (0,5)", s.curY, s.curX)
+	}
+	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	if s.curY != 0 || s.curX != 0 {
+		t.Fatalf("up in a one-line buffer = (%d,%d), want (0,0)", s.curY, s.curX)
+	}
+}
+
 // TestEditorClickSetsCursor: a left press maps terminal coordinates through BodyY and
 // the title bar into a buffer position, clamped to the clicked line's length.
 func TestEditorClickSetsCursor(t *testing.T) {
@@ -626,6 +664,70 @@ func TestEditorSizeInsets(t *testing.T) {
 	framed, _ := newPaneEditor(EditorOpts{Border: true}) // frame + gutter
 	if framed.w != 37 || framed.h != 8 {
 		t.Fatalf("framed pane 40x10 → %dx%d, want 37x8", framed.w, framed.h)
+	}
+}
+
+// TestEditorInitLoadsOnce: reading the file is a one-time load, not something a host can
+// re-trigger. A pane that swaps this editor out and back calls Init again
+// (ScreenPanel.SetChild does it on every swap), and re-reading there would hand
+// setContent the file — discarding the unsaved edits, undo history and cursor of the very
+// buffer the swap-back exists to return to.
+func TestEditorInitLoadsOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.md")
+	if err := os.WriteFile(path, []byte("on disk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, sh := newEditor(EditorOpts{Path: path})
+
+	cmd := s.Init(sh)
+	if cmd == nil {
+		t.Fatal("the first Init should return the file read")
+	}
+	s.Update(sh, cmd())
+	if got := buffer(s); got != "on disk" {
+		t.Fatalf("buffer after the load = %q, want %q", got, "on disk")
+	}
+
+	typeRunes(s, '!') // an unsaved edit, which also moves the cursor and fills undo
+
+	if cmd := s.Init(sh); cmd != nil {
+		t.Fatal("a re-Init must not read the file a second time")
+	}
+	if got := buffer(s); got != "!on disk" {
+		t.Fatalf("the unsaved edit should have survived the re-Init, buffer = %q", got)
+	}
+	if !s.Dirty() {
+		t.Fatal("the dirty flag should have survived the re-Init")
+	}
+	if s.curX == 0 {
+		t.Fatal("the cursor should have survived the re-Init")
+	}
+	if len(s.undoStack) == 0 {
+		t.Fatal("the undo history should have survived the re-Init")
+	}
+
+	// A rename moves the identity, not the content (SetPath), so the new path is no more
+	// worth reading than the old one was.
+	s.SetPath(filepath.Join(dir, "renamed.md"))
+	if cmd := s.Init(sh); cmd != nil {
+		t.Fatal("a renamed buffer must not be read back off disk")
+	}
+
+	// The scratch buffer's leg: it has nothing to load, but a save-as gives it a path
+	// afterwards — and that file is what the buffer just wrote, never a source to reload
+	// from. This is what setting the flag before the empty-path return buys.
+	scratch, ssh := newEditor(EditorOpts{})
+	if cmd := scratch.Init(ssh); cmd != nil {
+		t.Fatal("a path-less editor has nothing to read")
+	}
+	typeRunes(scratch, 'x')
+	scratch.applySaveName(path) // as a save-as names it
+	if cmd := scratch.Init(ssh); cmd != nil {
+		t.Fatal("a saved-as scratch buffer must not be read back off disk")
+	}
+	if got := buffer(scratch); got != "x" {
+		t.Fatalf("the scratch buffer should be untouched, got %q", got)
 	}
 }
 
