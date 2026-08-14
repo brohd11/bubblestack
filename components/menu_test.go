@@ -448,6 +448,9 @@ func TestMenuCapabilities(t *testing.T) {
 	if m.HelpView(sh) != "" {
 		t.Error("a menu's hints live in its box; the background help bar stays")
 	}
+	if act, handled := m.QuitGate(sh); !handled || !reflect.DeepEqual(act.Msg, core.Pop().Msg) {
+		t.Errorf("QuitGate = (%#v, %v), want a handled pop", act.Msg, handled)
+	}
 	x, y, _, _ := m.place()
 	if ox, oy := m.OverlayPos(0, 0); ox != x || oy != y {
 		t.Errorf("OverlayPos = (%d,%d), place() = (%d,%d) — they must agree", ox, oy, x, y)
@@ -528,5 +531,71 @@ func TestMenuAnchorHelpers(t *testing.T) {
 	cwant := MenuAnchor{X: 2, Y: 5 + crow + compactListItemRows, FlipX: 3, FlipY: 5 + crow}
 	if ca != cwant {
 		t.Errorf("AnchorCompactListRow = %+v, want %+v", ca, cwant)
+	}
+}
+
+// quitGateRoot is a base screen that answers the quit gate, so a test can tell whether the
+// router's walk reached past the menus stacked above it.
+type quitGateRoot struct{ gated *int }
+
+func (quitGateRoot) Init(*core.Shared) tea.Cmd { return nil }
+func (r quitGateRoot) Update(*core.Shared, tea.Msg) (core.Screen, core.Action) {
+	return r, core.Action{}
+}
+func (quitGateRoot) View(*core.Shared) string       { return "root" }
+func (quitGateRoot) HelpView(*core.Shared) string   { return "" }
+func (quitGateRoot) SetSize(*core.Shared, int, int) {}
+func (r quitGateRoot) QuitGate(*core.Shared) (core.Action, bool) {
+	*r.gated++
+	return core.Action{}, true // consumed without quitting, so the test can keep driving
+}
+
+// TestMenuQuitGateClosesTheMenu: ctrl+c runs ahead of the Filtering gate that stops every
+// other global key, so without a gate of its own a menu would let the walk reach the screen
+// below and stack that screen's confirm on top of itself. Each press must instead unwind one
+// menu, and only then reach the base.
+func TestMenuQuitGateClosesTheMenu(t *testing.T) {
+	gated := 0
+	root := quitGateRoot{gated: &gated}
+	sh := core.NewShared(nil)
+	r := core.NewRouter(sh, []core.TabEntry{{
+		Title: "T", New: func(*core.Shared) core.Screen { return root },
+	}})
+	var tm tea.Model = r
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	parent := NewMenu(MenuOpts{Items: menuItems(), Anchor: AnchorAt(4, 4)})
+	child := NewMenu(MenuOpts{Items: menuItems(), Anchor: AnchorAt(20, 4)})
+	tm, _ = tm.Update(core.Push(parent))
+	tm, _ = tm.Update(core.Push(child))
+
+	ctrlC := tea.KeyMsg{Type: tea.KeyCtrlC}
+
+	// A nil cmd is the half that proves nothing quit: an ungated quit comes back with
+	// tea.Quit in the cmd lane.
+	tm, cmd := tm.Update(ctrlC)
+	if cmd != nil {
+		t.Error("the first ctrl+c should close the submenu, not quit")
+	}
+	if top := tm.(core.Router).Top(); top != core.Screen(parent) {
+		t.Fatalf("after one ctrl+c the parent menu should be on top, got %T", top)
+	}
+
+	tm, cmd = tm.Update(ctrlC)
+	if cmd != nil {
+		t.Error("the second ctrl+c should close the parent menu, not quit")
+	}
+	if _, still := tm.(core.Router).Top().(*MenuScreen); still {
+		t.Fatal("the second ctrl+c should have closed the last menu")
+	}
+	if gated != 0 {
+		t.Fatalf("the base gate answered %d times while menus were up; they must answer first", gated)
+	}
+
+	// With the menus gone the walk reaches the base, which is what makes this a delay
+	// rather than a way to suppress a host's unsaved-changes confirm.
+	tm.Update(ctrlC)
+	if gated != 1 {
+		t.Errorf("with the menus gone the base gate should have answered once, ran %d times", gated)
 	}
 }

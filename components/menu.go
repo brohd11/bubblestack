@@ -23,6 +23,9 @@ import (
 //   - MODAL FOR FREE: only Router.Top() receives Update, so a pushed menu owns the keys.
 //     Filtering() reports true unconditionally (the LineEditScreen precedent) so the
 //     router's global single-key shortcuts (q/O/o/c/t/T/[/]) can't fire underneath it.
+//     ctrl+c is the one key that runs ahead of that gate, so QuitGate answers it instead:
+//     it closes the menu rather than letting a host's unsaved-changes confirm stack on
+//     top of one.
 //   - CASCADES FOR FREE: z-order is stack order and every overlay composites over the
 //     deepest non-overlay screen's whole frame, so a submenu pushed over its parent
 //     leaves the parent drawn. An item opens one by returning core.Push of a second
@@ -98,6 +101,7 @@ var _ core.Overlayer = (*MenuScreen)(nil)
 var _ core.OverlayPositioner = (*MenuScreen)(nil)
 var _ core.Filterer = (*MenuScreen)(nil)
 var _ core.Crumber = (*MenuScreen)(nil)
+var _ core.QuitGater = (*MenuScreen)(nil)
 
 // MenuItem is one row of a MenuScreen.
 //
@@ -410,6 +414,18 @@ func (s *MenuScreen) OverlayPos(int, int) (int, int) {
 // Filtering always reports capture: a menu is modal, so the router's global single-key
 // shortcuts must not fire under it (the LineEditScreen precedent).
 func (s *MenuScreen) Filtering() bool { return true }
+
+// QuitGate implements core.QuitGater: a quit attempt while the menu is up closes the menu
+// instead, and a second press meets whatever gate lies underneath. Without it the router's
+// stack walk skips straight past the menu to the screen below — which is how a host's
+// unsaved-changes confirm ends up drawn on top of an open context menu, with cancelling it
+// dropping the user back into a menu they had already tried to leave. In a cascade each
+// press unwinds one level, since the walk reaches the innermost menu first.
+//
+// It pops directly rather than going through cancel(): OnCancel belongs to the host, and
+// one that returned anything other than a pop would leave ctrl+c — the escape hatch of
+// last resort — unable to make progress. This dismissal is the framework's call.
+func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }
 
 // CrumbLabel contributes the breadcrumb segment (Crumb, default "menu").
 func (s *MenuScreen) CrumbLabel(short bool) string {
