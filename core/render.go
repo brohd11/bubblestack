@@ -132,6 +132,16 @@ func (s *Shared) BoxInnerWidth() int {
 	return s.ConfirmWidth() - boxStyle.GetHorizontalPadding()
 }
 
+// BoxOrigin is the cell offset of a Box's first content line from the box block's own
+// top-left — what a caller anchoring an overlay to a row *inside* a box has to add to
+// reach that row's real screen cell (FormScreen.FieldAnchor is the first such caller).
+// Derived from boxStyle for the same reason BoxInnerWidth is: a change to the margin,
+// border or padding has to move this, not silently mis-place every anchored popup.
+func BoxOrigin() (x, y int) {
+	return boxStyle.GetMarginLeft() + boxStyle.GetBorderLeftSize() + boxStyle.GetPaddingLeft(),
+		boxStyle.GetMarginTop() + boxStyle.GetBorderTopSize() + boxStyle.GetPaddingTop()
+}
+
 // ---------- help bars ----------
 
 // helpView renders a list's own help bar on its own, so it can be placed below

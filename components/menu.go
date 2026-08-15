@@ -177,7 +177,7 @@ type MenuOpts struct {
 	// MaxWidth caps the content width in cells; 0 sizes to the widest row. The box is
 	// clamped to the terminal either way.
 	MaxWidth   int
-	Crumb      string // breadcrumb segment; default "menu"
+	Crumb      string // breadcrumb segment (CrumbLabel); omitted ⇒ contributes none
 	CrumbShort string
 	OnSelect   func(sh *core.Shared, it MenuItem, idx int) core.Action
 	OnCancel   func(sh *core.Shared) core.Action
@@ -427,9 +427,14 @@ func (s *MenuScreen) Filtering() bool { return true }
 // last resort — unable to make progress. This dismissal is the framework's call.
 func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }
 
-// CrumbLabel contributes the breadcrumb segment (Crumb, default "menu").
+// CrumbLabel contributes the breadcrumb segment named by Crumb — and NOTHING when it
+// isn't set, deliberately unlike every full-screen component's default. A dropdown is
+// not a place you navigated to, so a trail that grows a segment each time one opens
+// reads wrong and flickers. The router drops a Crumber whose full label is empty
+// (crumbTrail), the same opt-out DialogScreen's overlay form takes; a menu that really
+// is a navigation step (a cascade a user drills into) asks for its segment by name.
 func (s *MenuScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.crumbShort, s.crumb, "menu")
+	return crumbSeg(short, s.crumbShort, s.crumb, "")
 }
 
 // HelpView is empty: the background screen's help bar stays, as with every other overlay.

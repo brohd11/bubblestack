@@ -37,7 +37,7 @@ type FormField interface {
 type Toggler interface{ OnToggle(forward bool) }
 
 // Activator is a field that handles Enter itself instead of submitting the form
-// (e.g. the search Source row, whose Enter opens a sub-picker). It returns an Action
+// (e.g. the search Source row, whose Enter drops a MenuScreen open under it). It returns an Action
 // and whether it consumed the Enter; when not consumed the form runs its OnSubmit.
 type Activator interface {
 	OnSelect(*core.Shared) (core.Action, bool)
@@ -80,6 +80,12 @@ func (b fieldBase) Key() string { return b.key }
 //
 // Floored at 1, not 0: ansi.Wrap reads a limit below 1 as "don't wrap", so a zero floor
 // would quietly reinstate the overrun this arithmetic exists to prevent.
+// labelWidth is the width of the label column, so a caller anchoring a popup to the row
+// can land it under the field's *value* rather than under the marker. Unexported
+// capability with the Toggler/Activator shape (FieldAnchor type-asserts for it): a field
+// that draws no label — StaticField, which doesn't embed fieldBase — simply lacks it.
+func (b fieldBase) labelWidth() int { return lipgloss.Width(b.label) }
+
 func (b fieldBase) contentWidth(inner int) int {
 	if w := inner - markerWidth - lipgloss.Width(b.label); w > 1 {
 		return w
@@ -459,8 +465,9 @@ func (c *CheckField) View(focused bool) string {
 // ---------- PickField ----------
 
 // PickField is a focusable row whose Enter runs a custom action (an Activator) — used
-// for the search Source row, whose value is chosen in a pushed sub-picker. value
-// supplies the current display text; onSel runs on Enter.
+// for the search Source row, whose value is chosen from a menu dropped open under it
+// (FieldAnchor is the geometry that anchors one). value supplies the current display
+// text; onSel runs on Enter.
 type PickField struct {
 	fieldBase
 	value func() string

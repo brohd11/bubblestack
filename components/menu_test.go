@@ -455,8 +455,10 @@ func TestMenuCapabilities(t *testing.T) {
 	if ox, oy := m.OverlayPos(0, 0); ox != x || oy != y {
 		t.Errorf("OverlayPos = (%d,%d), place() = (%d,%d) — they must agree", ox, oy, x, y)
 	}
-	if got := m.CrumbLabel(false); got != "menu" {
-		t.Errorf("default crumb = %q, want \"menu\"", got)
+	// An unnamed menu leaves no segment at all — what keeps a dropdown out of a trail it
+	// was never a step in. The router skips an empty label (crumbTrail).
+	if got := m.CrumbLabel(false); got != "" {
+		t.Errorf("an unnamed menu should contribute no crumb, got %q", got)
 	}
 
 	named, _ := newMenu(t, MenuOpts{Items: menuItems(), Anchor: AnchorAt(0, 0), Crumb: "actions", CrumbShort: "act"})

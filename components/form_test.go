@@ -336,6 +336,90 @@ func TestFormSetSizeCountsFoldedRows(t *testing.T) {
 	}
 }
 
+// anchorForm is the search tab's layout — the first FieldAnchor consumer — with the pick
+// row two non-focusable rows down.
+func anchorForm(opts ...func(*FormOpts)) *FormScreen {
+	o := FormOpts{Fields: []FormField{
+		NewHeading("Search assets"),
+		NewSpacer(),
+		NewPickField("source", "Source:  ", func() string { return "GitHub" },
+			func(*core.Shared) (core.Action, bool) { return core.Action{}, true }),
+		NewTextField("query", "Query:   ", ""),
+		NewSpacer(),
+		NewNote("  filtering by Godot 4.3"),
+	}}
+	for _, f := range opts {
+		f(&o)
+	}
+	return NewForm(o)
+}
+
+// TestFormFieldAnchor pins the anchor a dropdown opens at: the row below the field, with
+// the box's own origin added and the left edge under the value column. Shared.bodyY is
+// router-owned and unexported, so it is 0 here (the same caveat menu_test.go states) and
+// the expectations are box-origin-relative.
+func TestFormFieldAnchor(t *testing.T) {
+	f := anchorForm()
+	sh := core.NewShared(nil)
+	f.SetSize(sh, 80, 20)
+
+	bx, by := core.BoxOrigin()
+	got, ok := f.FieldAnchor(sh, "source")
+	if !ok {
+		t.Fatal("FieldAnchor should find a registered key")
+	}
+	// Two one-row fields (heading, spacer) sit above the pick row.
+	row := by + 2
+	want := AnchorBelow(bx+markerWidth+lipgloss.Width("Source:  "), row)
+	if got != want {
+		t.Fatalf("FieldAnchor = %+v, want %+v", got, want)
+	}
+	// AnchorBelow's contract, restated where it matters: the menu opens on the row under
+	// the field and a flip clears the field entirely rather than covering it.
+	if got.Y != row+1 || got.FlipY != row {
+		t.Errorf("anchor should open below row %d and flip clear of it, got Y=%d FlipY=%d", row, got.Y, got.FlipY)
+	}
+	if _, ok := f.FieldAnchor(sh, "nope"); ok {
+		t.Error("FieldAnchor should report false for an absent key")
+	}
+}
+
+// TestFormFieldAnchorCountsTitleAndFoldedRows pins the two ways the anchor can drift off
+// its row: an in-body title bar above the fields, and a preceding field that folds onto a
+// second row. Both are measured, never assumed — the same reason SetSize measures.
+//
+// The fold is built to bite at the 24-column floor every components test runs at (inner
+// 20, so the toggle's content column is 13 and "aaaaaaaa | bbbbbbbb" folds).
+func TestFormFieldAnchorCountsTitleAndFoldedRows(t *testing.T) {
+	_, by := core.BoxOrigin()
+
+	titled := anchorForm(func(o *FormOpts) { o.Title = "Search" })
+	sh := core.NewShared(nil)
+	titled.SetSize(sh, 80, 20)
+	titleRows := lipgloss.Height(core.WithTitle("Search", "")) - 1
+	if titleRows == 0 {
+		t.Fatal("fixture is wrong: a title bar should cost rows")
+	}
+	got, _ := titled.FieldAnchor(sh, "source")
+	if want := by + 2 + titleRows; got.FlipY != want {
+		t.Errorf("a title bar should push the anchor down %d rows: FlipY = %d, want %d", titleRows, got.FlipY, want)
+	}
+
+	folded := NewForm(FormOpts{Fields: []FormField{
+		NewToggleField("stage", "Stage", []string{"aaaaaaaa", "bbbbbbbb"}, "|"),
+		NewPickField("source", "Source:  ", func() string { return "GitHub" }, nil),
+	}})
+	sh = core.NewShared(nil)
+	folded.SetSize(sh, 80, 20)
+	if got := lipgloss.Height(folded.fields[0].View(false)); got != 2 {
+		t.Fatalf("fixture is wrong: the toggle should fold onto 2 rows, got %d", got)
+	}
+	got, _ = folded.FieldAnchor(sh, "source")
+	if want := by + 2; got.FlipY != want {
+		t.Errorf("a folded row should carry the anchor with it: FlipY = %d, want %d", got.FlipY, want)
+	}
+}
+
 func TestFormCrumbLabel(t *testing.T) {
 	if got := NewForm(FormOpts{}).CrumbLabel(false); got != "Form" {
 		t.Errorf("CrumbLabel default should be Form, got %q", got)

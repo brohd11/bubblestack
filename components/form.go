@@ -232,6 +232,37 @@ func (f *FormScreen) Focus(key string) tea.Cmd {
 // FocusedKey is the key of the currently focused field.
 func (f *FormScreen) FocusedKey() string { return f.current().Key() }
 
+// FieldAnchor is the dropdown anchor for the field with the given key: a menu opens on
+// the row below it and flips clear above it when the body is short (AnchorBelow), with
+// its left edge under the field's value column. false when the key is absent, so a
+// caller can fall back rather than anchor at a cell that means nothing.
+//
+// The rows above the field are MEASURED, not assumed one apiece — the same reason
+// SetSize measures — so a note or toggle that folds onto a second row moves the anchor
+// with it instead of leaving the menu a row high.
+//
+// Only correct for a form that owns the whole body: the anchor is Shared.BodyY() plus
+// the box's own origin, where a form nested in a ScreenPanel would need its pane origin
+// instead. That's the same seam EditorScreen crosses with absCell.
+func (f *FormScreen) FieldAnchor(sh *core.Shared, key string) (MenuAnchor, bool) {
+	bx, by := core.BoxOrigin()
+	// Measured, matching chromeRows: WithTitle on an empty body is the title bar plus
+	// the one line JoinVertical keeps, so its height less one is what the bar costs.
+	titleRows := lipgloss.Height(core.WithTitle(f.title, "")) - 1
+	y := sh.BodyY() + by + titleRows
+	for _, fld := range f.fields {
+		if fld.Key() == key {
+			x := bx + markerWidth
+			if lw, ok := fld.(interface{ labelWidth() int }); ok {
+				x += lw.labelWidth()
+			}
+			return AnchorBelow(x, y), true
+		}
+		y += lipgloss.Height(fld.View(false))
+	}
+	return MenuAnchor{}, false
+}
+
 // SetFocused implements FocusableScreen: a host (ScreenPanel) tells the form
 // whether its panel holds focus, and the box border carries the signal —
 // accented when focused, plain when a sibling pane has it. Field-level focus
