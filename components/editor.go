@@ -26,7 +26,9 @@ import (
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab) inserts a
 // tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
-// and the left mouse button places the cursor and selects with drag/double/triple click.
+// alt+c/alt+x/alt+v copy, cut and paste through the system clipboard (with no selection
+// the line the cursor is on is the target), and the left mouse button places the cursor
+// and selects with drag/double/triple click.
 // The right button is the context menu, when the host opts into it (EditorOpts.ContextMenu):
 // a press raises a MenuScreen at the pointer offering copy/cut/paste — pressing inside an
 // existing selection acts on it, pressing outside puts the caret there first, so a paste
@@ -51,8 +53,10 @@ import (
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
 // because click-to-cursor needs the scroll offset, which textarea does not export, and
 // because tabs have to be stored raw but never rendered raw (see expandLine).
-// Deliberately minimal: cut/paste live only on the opt-in right-click menu, not on key
-// chords; optional literal search is enabled by the host through EditorOpts.Search.
+// Deliberately minimal: the clipboard verbs are the three alt chords and, when the host
+// opts in, the right-click menu — there is no keyboard selection, which is why the chords
+// fall back to the whole line; optional literal search is enabled by the host through
+// EditorOpts.Search.
 type EditorScreen struct {
 	path  string // file to load/save; empty ⇒ unsavable scratch buffer
 	title string // title-bar text (defaults to the file's base name, else "Editor")
@@ -283,6 +287,12 @@ const editorMultiClickWindow = 500 * time.Millisecond
 // a file loaded with a lone '\r' or a NUL, which setContent does not strip. One cell wide,
 // so cellOfCol/colAtCell (which count every non-tab rune as one) stay exact.
 const editorControlPlaceholder = '·'
+
+// editorOverflowMark is the one dim cell that stands in the rightmost content column for
+// the rest of a line the window cuts off (unwrapped only — wrapped, every cell is on
+// screen already). It costs a column of text, so clampScroll keeps the caret out of it:
+// a caret hidden under the marker would be worse than the ambiguity the marker fixes.
+const editorOverflowMark = '~'
 
 // expandLine renders a buffer line to display runes, tabs expanded to spaces and any
 // other control rune replaced by a placeholder — none of them may reach View, where the
@@ -642,18 +652,55 @@ func (s *EditorScreen) editMenu(sh *core.Shared, x, y int) *MenuScreen {
 	return NewMenu(MenuOpts{Items: items, Anchor: AnchorBelow(x, y), Crumb: "edit"})
 }
 
-// copySelection is both Copy and Cut. A cut deletes before the write completes, on
-// purpose: undo covers a failed write, whereas holding the deletion until the clipboard
-// round trip returns would race the buffer the user can go on editing.
+// copySelection is the MENU's Copy and Cut: copyOrCut with the Pop that closes the menu
+// in front of it. The rows are disabled without a selection, so the line fallback below
+// never fires from here.
 func (s *EditorScreen) copySelection(cut bool) core.Action {
-	text := s.selectedText()
-	if text == "" {
-		return core.Pop() // unreachable from a disabled row; the guard is for a nil selection
+	return core.Seq(core.Pop(), s.copyOrCut(cut))
+}
+
+// copyOrCut is both verbs for both entry points (the alt+c/alt+x chords and the menu
+// rows). A cut deletes before the write completes, on purpose: undo covers a failed
+// write, whereas holding the deletion until the clipboard round trip returns would race
+// the buffer the user can go on editing.
+//
+// Without a selection the target is the whole current line, its newline included — the
+// keyboard has no way to select (selection is a mouse gesture here), so inert chords
+// would be the common case rather than the corner one. It is what an editor with the
+// same chords does, and it keeps a cut+paste a line move.
+func (s *EditorScreen) copyOrCut(cut bool) core.Action {
+	if s.selectionActive() {
+		text := s.selectedText()
+		if cut {
+			s.editAtomic(func() { s.deleteSelection() })
+		}
+		return copySelectionCmd(text, cut)
 	}
+	text := string(s.lines[s.curY]) + "\n"
 	if cut {
-		s.editAtomic(func() { s.deleteSelection() })
+		s.editAtomic(func() { s.deleteLine() })
 	}
-	return core.Seq(core.Pop(), copySelectionCmd(text, cut))
+	return copySelectionCmd(text, cut)
+}
+
+// deleteLine removes the cursor's whole line, newline included, leaving the caret at the
+// start of whatever slid up into its place. The last line has no newline after it to
+// remove, so it takes the one BEFORE it and the caret lands at the end of the previous
+// line; the only line has neither and is emptied in place, since the buffer may never
+// hold zero lines.
+func (s *EditorScreen) deleteLine() {
+	switch {
+	case s.curY+1 < len(s.lines):
+		s.deleteRange(s.curY, 0, s.curY+1, 0)
+		s.curX, s.wantX = 0, 0
+	case s.curY > 0:
+		prev := len(s.lines[s.curY-1])
+		s.deleteRange(s.curY-1, prev, s.curY, len(s.lines[s.curY]))
+		s.curY, s.curX, s.wantX = s.curY-1, prev, prev
+	default:
+		s.deleteRange(0, 0, 0, len(s.lines[0]))
+		s.curX, s.wantX = 0, 0
+	}
 }
 
 // editAtomic runs one buffer mutation as a single undo step from outside key(). key()'s
@@ -709,6 +756,21 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	if k == "ctrl+y" {
 		s.redo()
 		return s, core.Action{}
+	}
+	// The clipboard chords are matched HERE, above the selection pre-switch below: they
+	// arrive as alt-modified runes, so that switch's default would take them for typing
+	// and delete the selection out from under the copy. They also record their own undo
+	// step (editAtomic, inside copyOrCut and the paste's Update case), which is why they
+	// sit above the editorEditKey gate rather than inside it. alt+c/x/v and not
+	// ctrl+c/x/v — ctrl+c is the router's hard quit and ctrl+x this screen's exit, both
+	// of which predate these and neither of which may move.
+	switch k {
+	case "alt+c":
+		return s, s.copyOrCut(false)
+	case "alt+x":
+		return s, s.copyOrCut(true)
+	case "alt+v":
+		return s, pasteClipboardCmd(s)
 	}
 	if editorEditKey(k, m) {
 		before, seq := s.snapshot(), s.editSeq
@@ -1641,8 +1703,17 @@ func (s *EditorScreen) clampScroll() {
 	if curCell < s.scrX {
 		s.scrX = curCell
 	}
-	if w := s.contentW(); curCell >= s.scrX+w {
+	w := s.contentW()
+	if curCell >= s.scrX+w {
 		s.scrX = curCell - w + 1
+	}
+	// One more column when the overflow marker is about to claim the last one and the
+	// caret is standing in it — walking right along a long line lands there on every
+	// keystroke, and the marker would paint over the caret. Scrolling one further leaves
+	// the caret second from the right; whether the marker still draws after the nudge,
+	// the state is stable, so this never runs twice.
+	if w >= 2 && curCell == s.scrX+w-1 && len(expandLine(s.lines[s.curY])) > s.scrX+w {
+		s.scrX++
 	}
 }
 
@@ -2006,21 +2077,36 @@ func (s *EditorScreen) lastRowOfLine(idx int) bool {
 // a theme switch repaints it, as styleHelp and StyleList do.
 func (s *EditorScreen) renderLine(row int) string {
 	disp := expandLine(s.lines[row])
+	w := s.contentW()
 	start := s.scrX
 	if start > len(disp) {
 		start = len(disp)
 	}
-	end := s.scrX + s.contentW()
+	end := s.scrX + w
+	// over: the line runs past the window, so the last column goes to the marker instead
+	// of to text. eol is then false — the line does not end in this window, and the tail
+	// blank renderLinePlain draws for a caret or a selected newline would land in the
+	// marker's cell. Below two columns there is nothing left to mark with.
+	over := w >= 2 && len(disp) > end
+	if over {
+		end--
+	}
 	if end > len(disp) {
 		end = len(disp)
 	}
 	num := s.lineNumText(row, true)
+	var body string
+	done := false
 	if s.focused && s.hl != nil {
-		if styled, ok := s.renderLineStyled(row, start, end, true); ok {
-			return num + styled
-		}
+		body, done = s.renderLineStyled(row, start, end, !over)
 	}
-	return num + s.renderLinePlain(row, start, end, true)
+	if !done {
+		body = s.renderLinePlain(row, start, end, !over)
+	}
+	if over {
+		body += lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(editorOverflowMark))
+	}
+	return num + body
 }
 
 // renderLinePlain applies the muted/unfocused, selection, and caret layers to a
@@ -2291,6 +2377,9 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("⌥⌫", "del word")),
+		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("⌥c", "copy")),
+		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("⌥x", "cut")),
+		key.NewBinding(key.WithKeys("alt+v"), key.WithHelp("⌥v", "paste")),
 	)
 }
 

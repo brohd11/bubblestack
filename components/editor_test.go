@@ -1691,3 +1691,70 @@ func TestEditorScrollAnchors(t *testing.T) {
 		t.Fatalf("wrapped: center line = %d, want %d (row %d)", got, want, off+s.h/2)
 	}
 }
+
+// ---------- horizontal overflow marker ----------
+
+// TestEditorOverflowMark: a line the window cuts off ends in the marker, one that fits
+// does not, and either way the row measures the same — the marker replaces a text cell
+// rather than adding one, which is what keeps the frame (and the scrollbar column) put.
+func TestEditorOverflowMark(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat("y", 200) + "\nshort")
+	rows := strings.Split(s.body(), "\n")
+	if !strings.HasSuffix(rows[0], string(editorOverflowMark)) {
+		t.Errorf("a clipped line should end in %q, got %q", editorOverflowMark, rows[0])
+	}
+	if lipgloss.Width(rows[0]) != s.contentW() {
+		t.Errorf("marked row = %d cells, want %d", lipgloss.Width(rows[0]), s.contentW())
+	}
+	if strings.ContainsRune(rows[1], editorOverflowMark) {
+		t.Errorf("a line that fits should carry no marker: %q", rows[1])
+	}
+	assertRowGeometry(t, s, "overflow marker")
+
+	// Scrolled to the line's end there is nothing left to mark.
+	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	if row := strings.Split(s.body(), "\n")[0]; strings.HasSuffix(row, string(editorOverflowMark)) {
+		t.Errorf("the end of a line should carry no marker: %q", row)
+	}
+
+	// Wrapped, every cell is on screen already.
+	s.ToggleWrap()
+	if strings.ContainsRune(s.body(), editorOverflowMark) {
+		t.Error("wrapped rows must not draw the overflow marker")
+	}
+	s.ToggleWrap()
+
+	// The gutter and the scrollbar both narrow the window the marker sits at the end
+	// of; the rows still owe the frame their exact width.
+	s.setContent(strings.Repeat(strings.Repeat("y", 200)+"\n", 40))
+	s.ToggleLineNums()
+	row := strings.Split(s.body(), "\n")[0]
+	if !s.barVisible() {
+		t.Fatal("40 lines over 20 rows should raise the scrollbar")
+	}
+	if cells := []rune(row); cells[len(cells)-2] != editorOverflowMark {
+		t.Errorf("clipped row with a gutter and a bar = %q, want the marker in the cell before the bar", row)
+	}
+	assertRowGeometry(t, s, "overflow marker with gutter and bar")
+}
+
+// TestEditorOverflowMarkKeepsCaret: walking right along a long line must never park the
+// caret in the column the marker claims — a caret painted over is a lie about where
+// typing lands.
+func TestEditorOverflowMarkKeepsCaret(t *testing.T) {
+	withColor(t)
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat("y", 200))
+	for i := 0; i < 120; i++ {
+		s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+		row := strings.Split(s.body(), "\n")[0]
+		if !strings.Contains(row, "\x1b[7m") {
+			t.Fatalf("step %d: the caret left the row: %q", i, row)
+		}
+		if cell := cellOfCol(s.lines[0], s.curX); cell == s.scrX+s.contentW()-1 && len(s.lines[0]) > s.scrX+s.contentW() {
+			t.Fatalf("step %d: caret sits in the marker column (scrX %d)", i, s.scrX)
+		}
+	}
+	assertRowGeometry(t, s, "caret walk")
+}
