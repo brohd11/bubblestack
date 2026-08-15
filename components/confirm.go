@@ -42,13 +42,13 @@ type ConfirmSimple struct {
 	Text  string
 	OnYes core.Action
 	// optional
-	Title      string // optional in-body title bar; omitted ⇒ no bar
-	Crumb      string
-	CrumbShort string
-	Render     func(*core.Shared) string // this overides text if not nil
-	OnYesLamda func(*core.Shared) core.Action
-	OnKey      func(*core.Shared, string) core.Action
-	Help       []key.Binding
+	Title       string // optional in-body title bar; omitted ⇒ no bar
+	Crumb       string
+	CrumbShort  string
+	Render      func(*core.Shared) string // this overides text if not nil
+	OnYesLambda func(*core.Shared) core.Action
+	OnKey       func(*core.Shared, string) core.Action
+	Help        []key.Binding
 }
 
 var _ core.Crumber = (*DialogScreen)(nil)
@@ -144,8 +144,8 @@ func CreateConfirmScreen(cs ConfirmSimple) *DialogScreen {
 		render = cs.Render
 	}
 	onYes := func(sh *core.Shared) core.Action { return cs.OnYes }
-	if cs.OnYesLamda != nil {
-		onYes = cs.OnYesLamda
+	if cs.OnYesLambda != nil {
+		onYes = cs.OnYesLambda
 	}
 
 	return &DialogScreen{

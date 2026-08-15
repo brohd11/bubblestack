@@ -44,9 +44,9 @@ type Config struct {
 	// terminal cell coordinates (the header starts at row 0, so y is also the
 	// header-local row). nil ⇒ header clicks fall through to the body screen.
 	HeaderClick func(sh *core.Shared, x, y int) core.Action
-	Output      core.Output // below-body pane (nil ⇒ none)
-	Status core.Status               // transient status line (nil ⇒ none)
-	Tabs   []core.TabEntry           // top-level tabs
+	Output      core.Output     // below-body pane (nil ⇒ none)
+	Status      core.Status     // transient status line (nil ⇒ none)
+	Tabs        []core.TabEntry // top-level tabs
 	// Theme names a startup theme. Empty ⇒ the framework loads the shared
 	// ~/.bubblestack/config.yml theme (what the theme picker persists), falling back to
 	// the built-in default when that too is unset. Set it only to force a theme and

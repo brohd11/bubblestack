@@ -58,7 +58,6 @@ func (s *LoadingScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 				s.cancel()
 			}
 			return s, core.Seq(core.SetStatus("cancelled"), core.Pop())
-			// return s, core.Pop() // testing
 		}
 		return s, core.Action{}
 	}

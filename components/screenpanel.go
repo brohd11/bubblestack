@@ -55,7 +55,7 @@ type ScreenPanel struct {
 	width   int
 	height  int
 	focused bool
-	ox, oy  int  // the pane's absolute origin, pushed by the host ModularScreen
+	ox, oy  int // the pane's absolute origin, pushed by the host ModularScreen
 	hasOrig bool
 }
 

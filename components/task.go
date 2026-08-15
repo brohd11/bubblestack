@@ -24,6 +24,10 @@ type RunFunc func(ctx context.Context, sh *core.Shared, report func(string, ...a
 // While the task runs, esc requests an abort: the run's context is cancelled and the
 // screen waits for the run to unwind, then stays on the log showing "aborted" until
 // the user dismisses it (rather than running onDone's success navigation).
+//
+// A router-level stack reset (resetToRoot/showTab) can drop a running TaskScreen
+// without cancelling its context; the stream machinery (see startTask) is built so
+// that can never wedge the worker goroutine.
 type TaskScreen struct {
 	label, doneLabel string
 	Crumb            string
@@ -68,7 +72,9 @@ func NewStayTask(label, doneLabel string, run RunFunc,
 func (s *TaskScreen) Init(sh *core.Shared) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	s.events = make(chan core.TaskEvent)
+	// Buffered, so a burst of report lines (or a screen dropped by a router reset,
+	// which stops draining) can't block the worker; see startTask.
+	s.events = make(chan core.TaskEvent, 16)
 	return startTask(ctx, sh, s.events, s.run)
 }
 
@@ -181,12 +187,49 @@ func (s *TaskScreen) SetSize(sh *core.Shared, width, bodyHeight int) {}
 // log via the screen's own events channel, and returns the spinner tick + the wait
 // for the first event. The channel belongs to the TaskScreen (created in Init), not
 // to Shared: two tasks in flight at once must never retarget each other's stream.
+//
+// Every send the worker can make is wedge-proof: a router reset can drop the screen
+// without cancelling ctx (esc was never pressed), and from then on nothing drains
+// events — a blocking send would leak the worker goroutine mid-task.
 func startTask(ctx context.Context, sh *core.Shared, events chan core.TaskEvent, run RunFunc) tea.Cmd {
 	go func() {
 		report := func(format string, args ...any) {
-			events <- core.TaskEvent{Line: fmt.Sprintf(format, args...)}
+			// Non-blocking: a live screen's pending wait takes the line; a full
+			// buffer (UI a tick behind, or screen gone) drops it — losing a
+			// progress line beats wedging the worker.
+			select {
+			case events <- core.TaskEvent{Line: fmt.Sprintf(format, args...)}:
+			case <-ctx.Done():
+			default:
+			}
 		}
-		run(ctx, sh, report, events)
+		// done is private and buffered, so the run's terminating send never
+		// blocks either; getting it onto events is this pump goroutine's job.
+		done := make(chan core.TaskEvent, 1)
+		run(ctx, sh, report, done)
+		// run has returned, so its terminating send — if it made one — is already
+		// buffered in done: a non-blocking receive is race-free (unlike selecting
+		// against ctx.Done(), which could win the coin flip during an abort and
+		// strand the screen waiting for the unwind that already happened).
+		select {
+		case ev := <-done:
+			// The terminating event must reach a live screen — it drives onDone
+			// and the aborted state — so it is never dropped. No report can race
+			// us for buffer space (run has returned): if the buffer is full
+			// (dropped screen, or UI a tick behind), sacrifice the oldest
+			// buffered progress line to make room instead of blocking.
+			select {
+			case events <- ev:
+			default:
+				select {
+				case <-events:
+				default:
+				}
+				events <- ev
+			}
+		default:
+			// The run returned without its terminating event; nothing to forward.
+		}
 	}()
 	return tea.Batch(sh.Spinner.Tick, waitForEvent(events))
 }

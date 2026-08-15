@@ -50,7 +50,9 @@ type Filterer interface{ Filtering() bool }
 // The stack is consulted top-down and the first handler wins. A screen pushed BY
 // a gate (the confirm popup) must answer for itself (see DialogScreen.OnQuit) —
 // otherwise the walk finds the same gate below it and stacks popup upon popup.
-type QuitGater interface{ QuitGate(sh *Shared) (Action, bool) }
+type QuitGater interface {
+	QuitGate(sh *Shared) (Action, bool)
+}
 
 // FocusableScreen is a screen that can render a focused and an unfocused state
 // (a form tinting its box border, a ModularScreen dimming its active pane). The
