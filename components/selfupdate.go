@@ -16,7 +16,10 @@ import (
 // and the install destination. It stays app-agnostic on purpose: components must not
 // depend on the goutil self-update library (a sibling module), so the app injects its
 // release check and install operations as SelfUpdateHooks and this file owns everything
-// else — the screens, the navigation, the timeout, and the message strings.
+// else — the screens, the navigation, the timeout, and the message strings. Apps that
+// do use goutil's self-update library should build their hooks via the bridge package
+// bubblestack/selfupdate (the one sanctioned exception to that rule) instead of
+// wiring goutil themselves.
 
 // SelfUpdateInfo mirrors the outcome of a release check.
 type SelfUpdateInfo struct {
