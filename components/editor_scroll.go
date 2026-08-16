@@ -16,7 +16,7 @@ func (s *EditorScreen) scrollLines(delta int) {
 	s.clampScrollBounds()
 }
 
-// wheel routes one wheel notch. The vertical pair turns sideways while ⌥ is held: the
+// wheel routes one wheel notch. The vertical pair turns sideways while alt is held: the
 // terminals that matter claim ctrl+wheel for their own font zoom and shift+wheel for
 // bypassing mouse reporting, so alt is the one modifier that reaches the app. A
 // trackpad's horizontal swipe arrives as its own button and needs no modifier at all.

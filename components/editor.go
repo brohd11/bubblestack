@@ -807,11 +807,15 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
-		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("⌥←→", "word")),
-		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("⌥⌫", "del word")),
-		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("⌥c", "copy")),
-		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("⌥x", "cut")),
-		key.NewBinding(key.WithKeys("alt+v"), key.WithHelp("⌥v", "paste")),
+		// Written "alt+", not "⌥": the keycodes are alt+ and every other modifier in
+		// these bars spells itself out (ctrl+s, shift+tab), so the option glyph was the
+		// one entry a reader had to translate. A host listing these alongside its own
+		// alt chords (gote's ? overlay) then reads in one notation throughout.
+		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("alt+←→", "word")),
+		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("alt+backspace", "del word")),
+		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("alt+c", "copy")),
+		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("alt+x", "cut")),
+		key.NewBinding(key.WithKeys("alt+v"), key.WithHelp("alt+v", "paste")),
 	)
 }
 
