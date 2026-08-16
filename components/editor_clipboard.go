@@ -129,4 +129,6 @@ func (s *EditorScreen) editAtomic(mutate func()) {
 // ctrl+u/k line deletes, ctrl+a/e line ends, ctrl+h/d char-delete aliases) so the
 // editor behaves like the form field. shift+tab is kept as an alias for tab: it is
 // what a form binds to PrevField, so the finger that reaches for it in a field
-// shouldn't do nothing here.
+// shouldn't do nothing here. The alias only reaches this switch on a STANDALONE
+// editor — in a ModularScreen pane shift+tab is a PaneNext keycode and the host
+// consumes it before the panel is offered anything (see core.Keys.PaneNext).

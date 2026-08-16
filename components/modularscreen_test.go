@@ -179,6 +179,8 @@ func paneKey(t *testing.T, b key.Binding) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyShiftLeft}
 	case "shift+right":
 		return tea.KeyMsg{Type: tea.KeyShiftRight}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	default:
 		t.Fatalf("no tea.KeyType mapping for pane key %q", k)
 		return tea.KeyMsg{}
@@ -220,6 +222,51 @@ func TestPaneCycle(t *testing.T) {
 		if len(p.got) != 0 {
 			t.Errorf("panel %d saw %d pane keys; they must never reach a panel", i, len(p.got))
 		}
+	}
+}
+
+// TestPaneCycleOnShiftTab pins shift+tab as a full peer of shift+→ rather than a
+// convenience that defers to the panel: it is the second keycode on PaneNext, so it
+// walks the same cycle and — the part that distinguishes it from a capture-aware
+// alias — takes the key off a capturing panel too, even though that panel would
+// otherwise use shift+tab itself (an embedded editor types a tab with it, a form
+// moves to the previous field).
+func TestPaneCycleOnShiftTab(t *testing.T) {
+	if !core.MatchKey("shift+tab", core.Keys.PaneNext) {
+		t.Fatal("shift+tab must be a PaneNext keycode")
+	}
+	if core.Keys.PaneNext.Keys()[0] != "shift+right" {
+		// Hint labels a binding with its first keycode; a reorder would swap the
+		// always-visible "⇧←/⇧→ panes" bar entry for "⇧tab".
+		t.Fatalf("shift+right must lead PaneNext, got %q", core.Keys.PaneNext.Keys()[0])
+	}
+
+	editor := &capturePanel{capturing: true}
+	sidebar, aside := &capturePanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: sidebar}},
+		{{Panel: editor}},
+		{{Panel: aside}},
+	}, ModularOpts{ColWidths: []int{30, 0, 20}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+
+	tab := tea.KeyMsg{Type: tea.KeyShiftTab}
+	for i, want := range []int{1, 2, 0} {
+		m.Update(sh, tab)
+		if m.focus != want {
+			t.Fatalf("shift+tab step %d: focus = %d, want %d", i+1, m.focus, want)
+		}
+	}
+	// Step 1 above left the capturing editor; nothing was forwarded on the way past.
+	if len(editor.got) != 0 {
+		t.Fatalf("capturing panel saw %d shift+tab presses; the host consumes them", len(editor.got))
+	}
+	// The editor still owns everything that isn't a pane key.
+	m.focusSlot(1)
+	m.Update(sh, tea.KeyMsg{Type: tea.KeyTab})
+	if len(editor.got) != 1 {
+		t.Fatal("bare tab must still reach the capturing panel")
 	}
 }
 

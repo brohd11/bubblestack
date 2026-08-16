@@ -21,8 +21,8 @@ import (
 // three-way prompt when the buffer is dirty (n = discard & exit, esc/c = cancel, and
 // y = a filename prompt seeded with the current name — nano's "File Name to Write",
 // so saving under a different name is a save-as). Enter splits lines (and may be
-// extended by a handler registered for the file type), tab (or shift+tab) inserts a
-// tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
+// extended by a handler registered for the file type), tab (or shift+tab, on a
+// standalone screen — see key) inserts a tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
 // alt+c/alt+x/alt+v copy, cut and paste through the system clipboard (with no selection
 // the line the cursor is on is the target), and the left mouse button places the cursor
 // and selects with drag/double/triple click.

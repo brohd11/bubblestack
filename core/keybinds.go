@@ -117,7 +117,22 @@ var Keys = KeyMap{
 	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
 	OpenDir:      key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "open dir")),
 
-	PaneNext: key.NewBinding(key.WithKeys("shift+right")),
+	// shift+tab is a second forward keycode: the shift+arrows are a two-handed reach,
+	// and it is the one shift combo every terminal delivers intact (as backtab). There
+	// is no backtab-equivalent to pair it with, so the cycle is forward-only on tab —
+	// shift+← stays the way back.
+	//
+	// It therefore SHADOWS PrevField and the editor's tab alias inside a ModularScreen:
+	// moveFocus consumes pane keys above the capture gate, so a form or editor sitting
+	// in a pane never sees it. That cost was weighed and taken — a form keeps ↑/↓ for
+	// field moves and the editor keeps bare tab for indent, while a reserved key that
+	// only sometimes moves panes would be worse than one that always does. Outside a
+	// ModularScreen nothing claims these, so a pushed form behaves as it always did.
+	//
+	// shift+right leads the list on purpose: Hint labels a binding with its FIRST
+	// keycode, so PaneHint stays "⇧←/⇧→ panes" in the always-visible bar and ⇧tab
+	// surfaces in full help (FullHint) instead of widening every bar.
+	PaneNext: key.NewBinding(key.WithKeys("shift+right", "shift+tab")),
 	PanePrev: key.NewBinding(key.WithKeys("shift+left")),
 
 	// The directional moves are implemented (see ModularScreen.neighbor) but carry
@@ -128,14 +143,17 @@ var Keys = KeyMap{
 	// strips the modifier from the vertical arrows — shift+↑ arrives as a bare
 	// "up" — so binding them there would silently hand the key to the focused
 	// panel instead, which reads as the feature being broken. Whatever replaces
-	// them has to be something a stock terminal delivers unmodified; ctrl+letter
-	// combos are the realistic space.
+	// them has to be something a stock terminal delivers unmodified; shift+tab
+	// (above) is the proof that such keys exist, and ctrl+letter combos are the
+	// realistic space for the remaining three.
 	PaneUp:    key.NewBinding(),
 	PaneDown:  key.NewBinding(),
 	PaneLeft:  key.NewBinding(),
 	PaneRight: key.NewBinding(),
 
 	NextField: key.NewBinding(key.WithKeys("down", "tab")),
+	// shift+tab here is the pushed-form binding; a form living in a ModularScreen pane
+	// loses it to PaneNext (see above) and moves fields on ↑/↓.
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),
 	// Space is " " as a key string: bubbletea normalizes a bare space rune to KeySpace,
 	// whose name is " " (key.go, keyNames). It only ever reaches a form's keybind switch

@@ -59,6 +59,17 @@ func TestFormFocusCyclingSkipsAndWraps(t *testing.T) {
 	if got := f.FocusedKey(); got != "url" {
 		t.Fatalf("PrevField should wrap backward to url, got %q", got)
 	}
+	// tab/shift+tab are the other half of PrevField/NextField and still reach a
+	// pushed form: only a ModularScreen host takes shift+tab (it is a PaneNext
+	// keycode there), and a form on the stack has no such host above it.
+	f.Update(sh, navKey(tea.KeyShiftTab))
+	if got := f.FocusedKey(); got != "scope" {
+		t.Fatalf("shift+tab should step back to scope on a pushed form, got %q", got)
+	}
+	f.Update(sh, navKey(tea.KeyTab))
+	if got := f.FocusedKey(); got != "url" {
+		t.Fatalf("tab should step forward to url, got %q", got)
+	}
 }
 
 func TestFormInitialFocusOpt(t *testing.T) {

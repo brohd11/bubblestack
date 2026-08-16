@@ -18,9 +18,11 @@ import (
 //
 // Focus moves two ways, both permanent and neither a fallback for the other:
 //
-//   - a CYCLE (shift+←/→) steps through the focusable slots in declaration order,
-//     wrapping — the right gesture on the two- or three-pane screens that make up
-//     most layouts, where "the next pane" is unambiguous;
+//   - a CYCLE (shift+←/→, or shift+tab for the forward step) walks the focusable
+//     slots in declaration order, wrapping — the right gesture on the two- or
+//     three-pane screens that make up most layouts, where "the next pane" is
+//     unambiguous. shift+tab is forward-only: no terminal sends a "backtab" the
+//     other way, so shift+← remains the reverse;
 //   - DIRECTIONAL moves aim at a pane by its place in the grid: one column over
 //     keeping the current row, or one row up inside the column (see neighbor).
 //     That reads off the layout the user is looking at, and is what a grid big

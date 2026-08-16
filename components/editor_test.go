@@ -215,7 +215,9 @@ func TestEditorTyping(t *testing.T) {
 
 // TestEditorEnterAndTab: enter splits the line at the cursor; both tab and its
 // shift+tab alias insert a literal tab. A bare tab typing is the whole point of the
-// editor owning the key — pane navigation is on shift+arrows, not tab.
+// editor owning the key — pane navigation is on shift+arrows and shift+tab, never on
+// bare tab. This is a standalone editor, which is the only place the shift+tab alias
+// survives: a ModularScreen host claims it as PaneNext before the panel is asked.
 func TestEditorEnterAndTab(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	typeRunes(s, 'a', 'b', 'c')
