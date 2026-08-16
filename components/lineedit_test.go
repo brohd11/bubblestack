@@ -1,0 +1,112 @@
+package components
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/brohd11/bubblestack/core"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+)
+
+func newLineEdit(width int) (*LineEditScreen, *core.Shared) {
+	s := NewLineEdit("name", 0, 0, width, nil, nil)
+	s.Help = []key.Binding{} // the slim shape both narrow callers use
+	sh := core.NewShared(nil)
+	s.SetSize(sh, 80, 24)
+	return s, sh
+}
+
+var lineEditValues = map[string]string{
+	"empty":            "",
+	"short":            "notes.md",
+	"fills the window": strings.Repeat("a", 24),
+	"overflows":        strings.Repeat("a", 200),
+	"with spaces":      strings.Repeat("dir/long name ", 6),
+}
+
+// TestLineEditBoxGeometry pins the box to one input row inside its border at exactly
+// the covered width, whatever the value, the caret position or the blink phase.
+//
+// The caret is a real cell textinput renders past the last character, and the wrap
+// counts it only while it is reversed (blink-on) — a plain trailing space is dropped
+// at end of line. Budget it wrong and the box gains a row on every flash. The test
+// forces a color profile because the caret's reverse attribute is what the wrap keys
+// on, and the default renderer strips styling with no TTY attached, which hides the
+// whole defect.
+func TestLineEditBoxGeometry(t *testing.T) {
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	const width = 30
+	for name, value := range lineEditValues {
+		t.Run(name, func(t *testing.T) {
+			s, sh := newLineEdit(width)
+			s.SetValue(value) // caret at the end: the wrapping case
+
+			for _, blink := range []bool{false, true} {
+				s.input.Cursor.Blink = blink // true is the hidden phase
+				v := s.View(sh)
+				if got := lipgloss.Height(v); got != 3 {
+					t.Errorf("height with blink=%v = %d, want 3:\n%s", blink, got, v)
+				}
+				if got := lipgloss.Width(v); got != width {
+					t.Errorf("width with blink=%v = %d, want %d", blink, got, width)
+				}
+			}
+
+			// Caret off the end renders inline over a character instead — the state
+			// that always fit, and it must stay that way.
+			lineEditKey(s, sh, tea.KeyMsg{Type: tea.KeyLeft})
+			if got := lipgloss.Height(s.View(sh)); got != 3 {
+				t.Errorf("height with the caret moved back = %d, want 3", got)
+			}
+		})
+	}
+}
+
+// TestLineEditNarrowBox sweeps the widths a cramped pane can hand the box, including
+// the degenerate ones where the prompt alone outgrows the content area: the input line
+// is cell-truncated rather than wrapped, so the box holds its one row and its width.
+func TestLineEditNarrowBox(t *testing.T) {
+	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	for width := 4; width <= 40; width++ {
+		for name, value := range lineEditValues {
+			s, sh := newLineEdit(width)
+			s.SetValue(value)
+			for _, blink := range []bool{false, true} {
+				s.input.Cursor.Blink = blink
+				v := s.View(sh)
+				want := max(width, 4) // border and padding: the box has no narrower shape
+				if h, w := lipgloss.Height(v), lipgloss.Width(v); h != 3 || w != want {
+					t.Errorf("width=%d %s blink=%v: box is %dx%d, want %dx3", width, name, blink, w, h, want)
+				}
+			}
+		}
+	}
+}
+
+// TestLineEditHelpRow keeps the default hint row inside the box (one row taller) for
+// callers wide enough to hold it — save-as's shape.
+func TestLineEditHelpRow(t *testing.T) {
+	s, sh := newLineEdit(80)
+	s.Help = nil // default enter/esc hints
+	s.SetValue(strings.Repeat("a", 200))
+	if got := lipgloss.Height(s.View(sh)); got != 4 {
+		t.Errorf("height with the default help row = %d, want 4", got)
+	}
+}
+
+// TestLineEditNoCrumb: the box is a popup over another screen, so it must leave the
+// breadcrumb reading as the screen it covers.
+func TestLineEditNoCrumb(t *testing.T) {
+	s, _ := newLineEdit(30)
+	if c, ok := any(s).(core.Crumber); ok {
+		t.Errorf("a line edit must contribute no breadcrumb segment, got %q", c.CrumbLabel(false))
+	}
+}

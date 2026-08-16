@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // LineEditScreen is a floating single-line text edit: an overlay (core.Overlayer)
@@ -32,6 +33,10 @@ import (
 // do its own navigation (usually core.Pop). Every other key feeds the textinput;
 // OnChange, when set, receives each resulting value change. SetCursorBlink(false)
 // keeps the caret visible and static for overlays that should not flash.
+//
+// The box leaves the chrome of the screen it covers alone — no Crumber, so the
+// breadcrumb keeps reading as the background screen while the edit is up. A modal
+// popup is a thing on top of a place, not a place of its own.
 type LineEditScreen struct {
 	input textinput.Model
 	x, y  int // box top-left anchor, absolute terminal cells
@@ -42,13 +47,11 @@ type LineEditScreen struct {
 	OnCancel func(*core.Shared) core.Action         // esc; nil ⇒ plain Pop
 	OnChange func(*core.Shared, string) core.Action // value changed; nil ⇒ nothing
 	Help     []key.Binding                          // rendered inside the box; nil ⇒ default enter/esc hints, empty ⇒ none
-	Crumb    string                                 // breadcrumb segment; default "edit"
 }
 
 var _ core.Overlayer = (*LineEditScreen)(nil)
 var _ core.OverlayPositioner = (*LineEditScreen)(nil)
 var _ core.Filterer = (*LineEditScreen)(nil)
-var _ core.Crumber = (*LineEditScreen)(nil)
 
 // defaultLineEditHelp is the hint row rendered inside the box; ad-hoc bindings
 // rather than core.Hint over Keys.Yes/No, whose typable letters (y/e/n/c) must
@@ -113,11 +116,6 @@ func (s *LineEditScreen) OverlayPos(int, int) (int, int) { return s.x, s.y }
 // router's global single-key shortcuts (q/O/t/…) must not fire over this screen.
 func (s *LineEditScreen) Filtering() bool { return true }
 
-// CrumbLabel contributes the breadcrumb segment (Crumb, default "edit").
-func (s *LineEditScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, "", s.Crumb, "edit")
-}
-
 func (s *LineEditScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		// enter/esc match as raw keycodes on purpose: the central Yes/No
@@ -155,11 +153,21 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 		w = s.termW
 	}
 	// Border and padding take 4 cells off the covered width; the rest splits
-	// between the prompt and the text window. lipgloss's Width counts padding
-	// but not the border, so the style width is the covered width minus the
-	// border — the rendered box comes out exactly w cells wide.
+	// between the prompt, the text window and one cell held back for the caret.
+	// lipgloss's Width counts padding but not the border, so the style width is
+	// the covered width minus the border — the rendered box comes out exactly w
+	// cells wide.
+	//
+	// The held-back cell is not cosmetic: textinput renders promptW + Width + 1
+	// cells whenever the caret sits past the last character, the trailing cell
+	// being the caret itself. Budget only promptW + Width and a value that fills
+	// the window puts the line one cell over the wrap limit — and it wraps only
+	// on the blink-on phase, since cellbuf.Wrap reads the caret's reversed space
+	// as a word but drops a plain one at end of line, so the box would gain and
+	// lose a row on every blink.
 	promptW := lipgloss.Width(s.input.Prompt)
-	inner := w - 4 - promptW
+	contentW := max(w-4, 0) // a bordered, padded box cannot render under 4 cells
+	inner := contentW - promptW - 1
 	if inner < 1 {
 		inner = 1
 	}
@@ -169,7 +177,10 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 		// re-seat the cursor to force the recompute (see TextField.SetInnerWidth).
 		s.input.SetCursor(s.input.Position())
 	}
-	body := s.input.View()
+	// Cell-truncate rather than let a stray cell wrap (searchBar's precedent): on a
+	// pane too narrow for prompt + caret, inner hits its floor and the input line
+	// can still outrun the content width. A one-row box must stay one row.
+	body := ansi.Truncate(s.input.View(), contentW, "…")
 	help := s.Help
 	if help == nil {
 		help = defaultLineEditHelp
@@ -181,7 +192,7 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 			body = body + "\n" + hint
 		}
 	}
-	return lineEditBox().Width(inner + promptW + 2).Render(body)
+	return lineEditBox().Width(contentW + 2).Render(body)
 }
 
 // HelpView is empty: the hints render inside the box (the popup precedent — the

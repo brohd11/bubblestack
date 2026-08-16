@@ -499,7 +499,6 @@ func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
 	edit.SetValue(s.searchQuery)
 	edit.SetCursorBlink(false)
 	edit.Help = []key.Binding{} // keep the overlay to the shared component's slim shape
-	edit.Crumb = "search"
 	edit.OnChange = func(_ *core.Shared, query string) core.Action {
 		s.searchQuery = query
 		return core.Action{}

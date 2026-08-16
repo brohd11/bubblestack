@@ -43,7 +43,6 @@ func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
 	if s.path != "" {
 		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
 	}
-	edit.Crumb = "save as"
 	return edit
 }
 
