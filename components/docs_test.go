@@ -111,7 +111,9 @@ func TestRenderMarkdownLists(t *testing.T) {
 }
 
 // TestRenderMarkdownPassthrough: what the reader does not implement is shown as its
-// source rather than swallowed — the user can still see it is there.
+// source rather than swallowed — the user can still see it is there. The pipe row is
+// now also the pin on tables needing a delimiter row: with no dashes under it, a line
+// of pipes is prose (a shell pipeline, a page about markdown) and must stay literal.
 func TestRenderMarkdownPassthrough(t *testing.T) {
 	for _, src := range []string{
 		"![img](x.png) after",
@@ -141,6 +143,10 @@ func TestRenderMarkdownWidth(t *testing.T) {
 		"```",
 		"a fenced line that is much too long to fit inside the given width at all",
 		"```",
+		"",
+		"| Flag | What it does | Default |",
+		"|------|--------------|---------|",
+		"| `-v` | noisy logging that runs on for quite a while | off |",
 	}, "\n")
 
 	const width = 40
@@ -598,5 +604,261 @@ func TestRenderMarkdownMappedCodeBlock(t *testing.T) {
 	}
 	if row := rows[marks[8]]; !strings.Contains(row, "tail") {
 		t.Errorf("the line after the block marks row %d = %q, want the tail", marks[8], row)
+	}
+}
+
+// TestRenderMarkdownTable: a table renders as its cells over a ─┼─ rule, with none of
+// the pipes or dashes that described it reaching the page.
+func TestRenderMarkdownTable(t *testing.T) {
+	rows := strings.Split(render("| Flag | Does |\n|------|------|\n| -v | noisy |\n| -q | quiet |\n", 40), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("expected a header, a rule and two body rows, got %d: %q", len(rows), rows)
+	}
+	for i, want := range []string{"Flag", "─┼─", "-v", "-q"} {
+		if !strings.Contains(rows[i], want) {
+			t.Errorf("row %d should carry %q, got %q", i, want, rows[i])
+		}
+	}
+	if strings.Contains(rows[0], "|") || strings.Contains(rows[2], "|") {
+		t.Errorf("the source's pipes must not reach the page, got %q", rows)
+	}
+	// The rule is the table's own, not a thematic break: it spans the columns rather than
+	// the full width the renderer was given. (It is a cell or two wider than the header
+	// row, which stops at its last cell's text rather than padding out to the column.)
+	if w := lipgloss.Width(rows[1]); w >= 40 || w < lipgloss.Width(rows[0]) {
+		t.Errorf("the rule should span the columns, got %d cells for a 40-cell width", w)
+	}
+}
+
+// TestRenderMarkdownTableNeedsDelimiter: the delimiter row is the whole signal. Without
+// one — or with one whose cell count disagrees — a line of pipes is prose, which is what
+// keeps a shell pipeline and a page about markdown intact. A bare "---" under a pipe row
+// stays a thematic break, since the table pattern deliberately matches it and tableStart
+// is what requires the "|".
+func TestRenderMarkdownTableNeedsDelimiter(t *testing.T) {
+	for _, tc := range []struct{ name, src string }{
+		{"no delimiter", "| a | b |\n| c | d |\n"},
+		{"cell counts disagree", "| a | b |\n|---|\n"},
+		{"prose above a rule", "| a | b |\n---\n"},
+	} {
+		got := render(tc.src, 40)
+		if !strings.Contains(got, "| a | b |") {
+			t.Errorf("%s: the pipe row should stay prose, got %q", tc.name, got)
+		}
+		if strings.Contains(got, "┼") {
+			t.Errorf("%s: no table rule should be drawn, got %q", tc.name, got)
+		}
+	}
+}
+
+// TestRenderMarkdownTableAlignment: the delimiter's colons place each cell in its column.
+func TestRenderMarkdownTableAlignment(t *testing.T) {
+	rows := strings.Split(render("| left | mid | right |\n|:-----|:---:|------:|\n| a | b | c |\n", 40), "\n")
+	if len(rows) != 3 {
+		t.Fatalf("expected three rows, got %q", rows)
+	}
+	// The header cells are four, three and five wide, so a one-cell body entry has a
+	// known number of blanks on each side of it.
+	for _, tc := range []struct{ cell, want string }{
+		{"a", "a    "}, // left: flush, three of its own pad plus the separator's
+		{"b", "  b  "}, // center: one blank each side inside a three-wide column
+		{"c", "    c"}, // right: flush to the column's end
+	} {
+		if !strings.Contains(rows[2], tc.want) {
+			t.Errorf("cell %q should sit as %q in the row, got %q", tc.cell, tc.want, rows[2])
+		}
+	}
+}
+
+// TestRenderMarkdownTableWidth: a table folds to the width it is given like every other
+// block — the invariant the DocScreen and both consumers' page tests rely on. Below the
+// width a three-cell column each would need, the rows fall back to the prose they read
+// as, which is guaranteed to fit.
+func TestRenderMarkdownTableWidth(t *testing.T) {
+	withColor(t)
+
+	body := "| Flag | What it does | Default |\n" +
+		"|------|--------------|---------|\n" +
+		"| `-v` | noisy logging that runs on for quite a while | off |\n" +
+		"| -q | quiet, errors only | on |\n"
+	for _, width := range []int{20, 30, 40, 80} {
+		for _, line := range strings.Split(RenderMarkdown(body, width), "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("width %d: line exceeds it (got %d): %q", width, w, ansi.Strip(line))
+			}
+		}
+	}
+
+	// Five columns of real words cannot be laid out in twenty cells: the source comes
+	// back as prose, still inside the width.
+	const narrow = 20
+	wide := "| alpha | bravo | charlie | delta | echo |\n|--|--|--|--|--|\n| 1 | 2 | 3 | 4 | 5 |\n"
+	got := RenderMarkdown(wide, narrow)
+	if strings.Contains(ansi.Strip(got), "┼") {
+		t.Errorf("an unlayable table should fall back to prose, got:\n%s", ansi.Strip(got))
+	}
+	if !strings.Contains(ansi.Strip(got), "alpha") {
+		t.Errorf("the fallback must still show the source, got:\n%s", ansi.Strip(got))
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if w := lipgloss.Width(line); w > narrow {
+			t.Errorf("the fallback exceeds the width (got %d): %q", w, ansi.Strip(line))
+		}
+	}
+}
+
+// TestRenderMarkdownTableWraps: a cell too wide for its column takes extra rows and the
+// other columns pad out beside it, so the separators stay in one column all the way down.
+// That is the invariant a naive pad breaks, and it is what makes a wrapped row still read
+// as one row of the table.
+func TestRenderMarkdownTableWraps(t *testing.T) {
+	rows := strings.Split(render("| A | B |\n|---|---|\n| one | a phrase that has to wrap |\n", 24), "\n")
+	if len(rows) < 4 {
+		t.Fatalf("expected the long cell to wrap over extra rows, got %q", rows)
+	}
+	want := strings.Index(rows[0], "│")
+	if want < 0 {
+		t.Fatalf("no separator in the header row %q", rows[0])
+	}
+	for i, row := range rows {
+		if i == 1 {
+			continue // the rule carries ┼ at that column, not │
+		}
+		if got := strings.Index(row, "│"); got != want {
+			t.Errorf("row %d puts its separator at column %d, want %d: %q", i, got, want, row)
+		}
+	}
+	// The wrapped row's continuation has nothing in its first column but still holds it.
+	if !strings.HasPrefix(rows[3], strings.Repeat(" ", want)) {
+		t.Errorf("the continuation row should pad its empty first column, got %q", rows[3])
+	}
+}
+
+// TestRenderMarkdownTableCodeSpanWidth pins that a column is sized on what is PRINTED,
+// not on the source: inline renders `q` as a chip two cells wider than the word, so a
+// naive len(cell) sizes the column short and the chip pushes the row past its width.
+func TestRenderMarkdownTableCodeSpanWidth(t *testing.T) {
+	withColor(t)
+
+	const width = 40
+	got := RenderMarkdown("| A | B |\n|---|---|\n| `q` | x |\n", width)
+	if !strings.Contains(got, codeChip("q")) {
+		t.Errorf("the cell should render its code span as a chip, got %q", got)
+	}
+	rows := strings.Split(got, "\n")
+	if len(rows) != 3 {
+		t.Fatalf("expected three rows, got %q", rows)
+	}
+	// The chip is three cells, so the column is three wide and every row matches it.
+	for i, row := range rows {
+		if w := lipgloss.Width(row); w != lipgloss.Width(rows[0]) {
+			t.Errorf("row %d is %d cells, want the header's %d: %q",
+				i, w, lipgloss.Width(rows[0]), ansi.Strip(row))
+		}
+	}
+}
+
+// TestRenderMarkdownTableNoColorBleed is the regression behind wrapCell's terminator.
+// ansi.Wrap does not emit self-contained rows, so a code span broken across a wrap left
+// its background OPEN at end of row — tinting the padding, the separator and the whole of
+// the next column. Every cell must end its own color.
+func TestRenderMarkdownTableNoColorBleed(t *testing.T) {
+	withColor(t)
+
+	const width = 26
+	got := RenderMarkdown("| A | B |\n|---|---|\n| `a long tinted span` | plain |\n", width)
+	rows := strings.Split(got, "\n")
+	if len(rows) < 4 {
+		t.Fatalf("expected the chip to wrap, got %q", rows)
+	}
+	sep := ruleStyle().Render(tableSep)
+	for i, row := range rows[2:] {
+		// Whatever a cell opened is closed before the separator, so the separator survives
+		// intact and what follows it starts from the terminal's own colors.
+		if !strings.Contains(row, sep) && !strings.Contains(row, ruleStyle().Render(strings.TrimRight(tableSep, " "))) {
+			t.Errorf("body row %d lost its separator to a bleed: %q", i, row)
+		}
+		if _, after, ok := strings.Cut(row, sep); ok && strings.HasPrefix(after, "\x1b") {
+			t.Errorf("body row %d opens an escape right after the separator: %q", i, row)
+		}
+	}
+	if !strings.Contains(rows[2], "plain") {
+		t.Errorf("the plain cell should render as bare text, got %q", rows[2])
+	}
+}
+
+// TestRenderMarkdownTableChrome: the separators and the rule are chrome in the border
+// color, the header carries the accent, and body cells carry neither.
+func TestRenderMarkdownTableChrome(t *testing.T) {
+	withColor(t)
+
+	got := RenderMarkdown("| Head |\n|------|\n| body |\n", 40)
+	if !strings.Contains(got, tableHeadStyle().Render("Head")) {
+		t.Errorf("the header cell should carry the heading accent, got %q", got)
+	}
+	if !strings.Contains(got, ruleStyle().Render(strings.Repeat("─", 4))) {
+		t.Errorf("the rule should be drawn in the border color, got %q", got)
+	}
+	if !strings.Contains(got, "body") || strings.Contains(got, tableHeadStyle().Render("body")) {
+		t.Errorf("a body cell should be unstyled, got %q", got)
+	}
+
+	// Two columns: the separator is chrome too.
+	got = RenderMarkdown("| a | b |\n|---|---|\n| c | d |\n", 40)
+	if !strings.Contains(got, ruleStyle().Render(tableSep)) {
+		t.Errorf("the column separator should be drawn in the border color, got %q", got)
+	}
+}
+
+// TestRenderMarkdownTableRagged: rows are squared off to the header — a short one is
+// padded out and a long one's extra cells are dropped, since there is no column to hold
+// them. A "\|" splits like any other pipe: escapes are not honored anywhere in this
+// reader, so a cell cannot contain one.
+func TestRenderMarkdownTableRagged(t *testing.T) {
+	rows := strings.Split(render("| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |\n", 40), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("expected four rows, got %q", rows)
+	}
+	if strings.Contains(rows[3], "4") {
+		t.Errorf("the fourth cell has no column and should be dropped, got %q", rows[3])
+	}
+	if !strings.HasPrefix(rows[2], "1 │") {
+		t.Errorf("a short row should pad out to the header's columns, got %q", rows[2])
+	}
+	if cells := tableCells(`a \| b | c`); len(cells) != 3 {
+		t.Errorf(`"\|" should split like any pipe, got %q`, cells)
+	}
+}
+
+// TestRenderMarkdownTableMapped: a table is one pending block, so flush's proportional
+// spread maps its source rows onto its output rows — and since header + delimiter + rows
+// comes to the same count as header + rule + rows, each row lands on its own.
+//
+// The half-typed cases are what gote's preview renders on every keystroke: they must not
+// panic, whatever state the author has left the table in.
+func TestRenderMarkdownTableMapped(t *testing.T) {
+	body := "intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\ntail\n"
+	got, marks := RenderMarkdownMapped(body, 40)
+	rows := strings.Split(ansi.Strip(got), "\n")
+	for i, m := range marks {
+		if i > 0 && m < marks[i-1] {
+			t.Fatalf("mark %d (%d) goes backwards from %d", i, m, marks[i-1])
+		}
+		// One past the last row is the trailing blank's backfill, as elsewhere.
+		if m > len(rows) {
+			t.Fatalf("mark %d is row %d, past the render's %d rows", i, m, len(rows))
+		}
+	}
+	// Source line 2 is the header, 4 and 5 the body rows.
+	for i, want := range map[int]string{2: "a", 4: "1", 5: "3"} {
+		if row := rows[marks[i]]; !strings.HasPrefix(row, want) {
+			t.Errorf("table line %d marks row %d = %q, want it to open with %q", i, marks[i], row, want)
+		}
+	}
+
+	for _, src := range []string{"| a | b |\n|--", "| a |\n", "|\n|-|\n", "| a | b |\n|---|---|\n"} {
+		if _, m := RenderMarkdownMapped(src, 40); len(m) != len(strings.Split(src, "\n")) {
+			t.Errorf("%q: got %d marks for %d source lines", src, len(m), len(strings.Split(src, "\n")))
+		}
 	}
 }

@@ -146,14 +146,16 @@ func docTopics(pages []DocPage) string {
 //	```fence```     indented, muted, hard-wrapped (never re-flowed)
 //	~~~fence~~~     the same; only the marker that opened a block can close it
 //	> quote         re-flowed like a paragraph, muted, with a bar down every row
+//	| a | b |       a table: the header in the accent, a ─┼─ rule under it, columns
+//	|:--|---:|      separated by │. The delimiter row is required and its ":" align.
 //	`code`          accent on a tinted background, inline, a cell of tint each side
 //	**bold**        bold
 //	*em* / _em_     italic
 //	[text](url)     the text, underlined; the target is dropped
 //	anything else   a paragraph: consecutive lines join, then wrap as one block
 //
-// Images (![alt](url)), tables and HTML pass through as their literal source text —
-// the deliberate "skip what we don't know" behavior, so an unsupported construct is
+// Images (![alt](url)) and HTML pass through as their literal source text — the
+// deliberate "skip what we don't know" behavior, so an unsupported construct is
 // visible rather than silently swallowed. Known edges: a lone "*" in prose can pair
 // with a later one and italicize what's between them; backslash escapes (\*) are not
 // honored; "_em_" consumes the character on each side of it (see inlineAny), so a
@@ -161,6 +163,18 @@ func docTopics(pages []DocPage) string {
 // leaves "*b*" literal, while "_a_ *b*" behaves normally; a nested ">>" quote
 // collapses to one level rather than nesting; and an inline construct that straddles a
 // wrap break inside a quote renders literally (see quoteBlock).
+//
+// A table's own edges: a row of pipes with no delimiter row under it (or one whose cell
+// count disagrees) is not a table and reads as prose, which is what leaves a shell
+// pipeline and a page about markdown intact; a cell cannot hold a literal "|", since
+// escapes are unhonored and GFM splits inside a code span too, so `a|b` is two cells
+// there as well; cells past the header's count are dropped and missing ones come out
+// empty. A table too wide for the pane shrinks its widest columns first and wraps the
+// cells that still do not fit (see tableWidths), and when not even a three-cell column
+// each will fit, the rows fall back to prose. A construct straddling a wrap break inside
+// a cell keeps its text but loses its styling on the continuation row — the mirror of the
+// quote's edge, and the price of wrapping a styled cell so columns can be measured on
+// what is actually printed (see wrapCell).
 //
 // Styles are read per call (not cached) so a theme switch repaints the page — the same
 // rule core.StyleList follows.
@@ -210,6 +224,17 @@ var orderedItem = regexp.MustCompile(`^(\d+[.)])\s+`)
 // alternation rather than a backreference, which Go's regexp does not have.
 var themeBreak = regexp.MustCompile(`^(-{3,}|\*{3,}|_{3,})$`)
 
+// tableDelim matches a GFM delimiter row — the line of dashes under a table's header,
+// which is the ONLY thing that makes a row of pipes a table. Each cell is one or more
+// "-" with an optional ":" on either end (the alignment marker); the outer pipes are
+// optional, as GFM allows.
+//
+// It deliberately also matches a bare "---": requiring a pipe here would need a second
+// alternation for the leading- and trailing-pipe forms, so tableStart requires the "|"
+// separately — which is what keeps a thematic break under a line of pipes a thematic
+// break rather than a one-column table.
+var tableDelim = regexp.MustCompile(`^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$`)
+
 const (
 	bulletMark = "• "
 	indent     = "  "
@@ -218,6 +243,15 @@ const (
 	// wrapBreaks are extra wrap points beyond whitespace, so a long path or URL folds
 	// at a separator rather than mid-name.
 	wrapBreaks = "/_"
+	// tableSep separates two of a table's columns; tableCross is the same three cells on
+	// the header rule, so the crossing lands under the bar. Both are chrome (ruleStyle),
+	// and their equal widths are what make the rule exactly as wide as a row.
+	tableSep   = " │ "
+	tableCross = "─┼─"
+	// tableMinCol is the narrowest a column may be squeezed to before the table is
+	// declared unlayable and its rows fall back to prose: three cells still hold a
+	// readable fragment and keep the rule visible.
+	tableMinCol = 3
 )
 
 // RenderMarkdown folds a page's markdown body to width display columns.
@@ -248,7 +282,11 @@ func RenderMarkdownMapped(body string, width int) (string, []int) {
 	r := &docRenderer{width: width, marks: marks, pendAt: -1}
 	for i, line := range src {
 		r.at, r.mark = i, i
-		r.line(line)
+		next := ""
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		r.line(line, next)
 		// Whatever is pending after the line was fed in belongs to this line too: the
 		// block's rows are credited to the whole run when it flushes.
 		if len(r.pending) > 0 {
@@ -297,6 +335,7 @@ type docRenderer struct {
 	pending []string // the lines of the block being accumulated
 	marker  string   // the pending block is a list item hung under this marker; "" ⇒ paragraph
 	quote   bool     // the pending block is a blockquote
+	table   bool     // the pending block is a pipe table: header, delimiter row, then rows
 	fence   string   // the marker that opened the current code fence; "" ⇒ not in one
 	lang    string   // the current fence's language tag ("go" in "```go"); "" ⇒ none
 	code    []string // the fenced lines accumulated for CodeBlockRenderer (nil ⇒ streamed)
@@ -311,7 +350,10 @@ type docRenderer struct {
 	fenceAt int // the source line the open fence's marker is on
 }
 
-func (r *docRenderer) line(line string) {
+// line feeds one source line to the renderer. next is the line after it, or "" at EOF:
+// the reader's only lookahead, and it exists for exactly one construct — a row of pipes
+// is a table only when a delimiter row follows it (see tableStart).
+func (r *docRenderer) line(line, next string) {
 	trimmed := strings.TrimSpace(line)
 
 	if m := fenceMarker(trimmed); m != "" && (r.fence == "" || r.fence == m) {
@@ -370,6 +412,15 @@ func (r *docRenderer) line(line string) {
 		r.heading(headingStyle().Render(strings.TrimPrefix(trimmed, "## ")))
 	case strings.HasPrefix(trimmed, "# "):
 		r.heading(h1Style().Render(strings.TrimPrefix(trimmed, "# ")))
+	case r.table && tableOpen(trimmed):
+		r.pending = append(r.pending, trimmed)
+	case tableStart(trimmed, next):
+		// The table cases sit below every other block opener and above the list ones, so
+		// anything that starts a block of its own wins: "> a | b" is a quote and "## a | b"
+		// a heading, delimiter row or not. A table can only begin where a PARAGRAPH would.
+		r.flush()
+		r.table = true
+		r.pending = append(r.pending, trimmed)
 	case strings.HasPrefix(trimmed, "- "):
 		r.item(bulletMark, strings.TrimPrefix(trimmed, "- "))
 	case orderedItem.MatchString(trimmed):
@@ -448,20 +499,12 @@ func (r *docRenderer) flush() {
 	if len(r.pending) == 0 {
 		return
 	}
-	joined := strings.Join(r.pending, " ")
 	// The block's rows belong to the lines that accumulated it — never to r.at, which
 	// is usually the line that ENDED it (the blank, the next heading) and has its own
 	// rows still to come.
 	start, mark := r.rows, r.mark
 	r.mark = -1
-	switch {
-	case r.quote:
-		r.emit(quoteBlock(joined, r.width))
-	case r.marker != "":
-		r.emit(hang(r.marker, inline(joined), r.width))
-	default:
-		r.emit(ansi.Wrap(inline(joined), r.width, wrapBreaks))
-	}
+	r.emit(r.block())
 	r.mark = mark
 	if r.pendAt >= 0 {
 		// Spread the block's rows across the lines that fed it rather than pinning them
@@ -475,7 +518,30 @@ func (r *docRenderer) flush() {
 		}
 		r.pendAt = -1
 	}
-	r.pending, r.marker, r.quote = nil, "", false
+	r.pending, r.marker, r.quote, r.table = nil, "", false, false
+}
+
+// block renders the pending lines to the finished rows of whatever block they are. It is
+// split out of flush so the table case can see the lines INDIVIDUALLY: every other block
+// joins them into one string first, because re-flowing the author's hard wraps is the
+// whole point — a table is the one place where the line breaks are data.
+func (r *docRenderer) block() string {
+	if r.table {
+		if out, ok := tableBlock(r.pending, r.width); ok {
+			return out
+		}
+		// Too many columns to lay out at this width, or a table still being typed. Fall
+		// through to the paragraph path — how a table rendered before it was honored at
+		// all: the source stays visible and, unlike a squeezed grid, certainly fits.
+	}
+	joined := strings.Join(r.pending, " ")
+	switch {
+	case r.quote:
+		return quoteBlock(joined, r.width)
+	case r.marker != "":
+		return hang(r.marker, inline(joined), r.width)
+	}
+	return ansi.Wrap(inline(joined), r.width, wrapBreaks)
 }
 
 // emitCode renders an accumulated fenced block through CodeBlockRenderer. The rows come
@@ -517,6 +583,313 @@ func quoteBlock(text string, width int) string {
 		rows[i] = bar + inlineOver(row, quoteTextStyle())
 	}
 	return strings.Join(rows, "\n")
+}
+
+// tableStart reports whether trimmed opens a GFM table: a row of pipe-separated cells
+// with a delimiter row directly under it. The delimiter is the whole signal — without one
+// a line of pipes is prose the reader must leave alone (a shell pipeline, an ASCII
+// diagram, "| a | b |" in a page about markdown), which is why the reader grew its one
+// line of lookahead rather than guessing from the pipes.
+//
+// The two rows' cell counts must agree, as GFM requires: a mismatch is a typo, and
+// showing the source is how the author gets to see it.
+func tableStart(trimmed, next string) bool {
+	if !strings.Contains(trimmed, "|") {
+		return false
+	}
+	next = strings.TrimSpace(next)
+	if !strings.Contains(next, "|") || !tableDelim.MatchString(next) {
+		return false
+	}
+	return len(tableCells(trimmed)) == len(tableCells(next))
+}
+
+// tableOpen reports whether trimmed continues an open table rather than starting a new
+// block. A table runs to the first blank line or the next block-level construct, which is
+// GFM's own rule. Anything else is a row, pipes or not — GFM reads a pipeless line inside
+// a table as a one-cell row, and so do we.
+//
+// The list markers are why this exists: every other block opener has its case ABOVE the
+// table's and so flushes it before this is ever called, but "- " and the ordered items sit
+// below, and without rejecting them here an open table silently swallows the list under
+// it. Headings and quotes are checked anyway, so the rule reads whole from one place.
+func tableOpen(trimmed string) bool {
+	return !strings.HasPrefix(trimmed, "#") &&
+		!strings.HasPrefix(trimmed, ">") &&
+		!strings.HasPrefix(trimmed, "- ") &&
+		!orderedItem.MatchString(trimmed)
+}
+
+// tableCells splits one row into its cells. GFM makes the outer pipes optional, so one
+// leading and one trailing pipe come off before the split: "| a | b |" and "a | b" are
+// both two cells.
+//
+// Backslash escapes are not honored here, as nowhere else in this reader, so a cell
+// cannot hold a literal pipe: one rule for every escape beats one construct quietly
+// having its own. A pipe inside a code span splits the cell too — that is GFM's behavior
+// as well, since the split happens before any inline parsing there as here.
+func tableCells(row string) []string {
+	row = strings.TrimSpace(row)
+	row = strings.TrimSuffix(strings.TrimPrefix(row, "|"), "|")
+	cells := strings.Split(row, "|")
+	for i, c := range cells {
+		cells[i] = strings.TrimSpace(c)
+	}
+	return cells
+}
+
+// The horizontal alignments a delimiter row's colons can ask for.
+type tableAlign int
+
+const (
+	tableLeft tableAlign = iota
+	tableCenter
+	tableRight
+)
+
+// tableSpec is one parsed pipe table: the header cells, the body rows — every one squared
+// off to the header's cell count — and the per-column alignment read off the delimiter.
+type tableSpec struct {
+	head  []string
+	rows  [][]string
+	align []tableAlign
+}
+
+// tableAligns reads the per-column alignment off a delimiter row: ":-" left, ":-:" center,
+// "-:" right, and a bare "-" left, which is GFM's default.
+func tableAligns(delim string) []tableAlign {
+	cells := tableCells(delim)
+	out := make([]tableAlign, len(cells))
+	for i, c := range cells {
+		lead, trail := strings.HasPrefix(c, ":"), strings.HasSuffix(c, ":")
+		switch {
+		case lead && trail:
+			out[i] = tableCenter
+		case trail:
+			out[i] = tableRight
+		}
+	}
+	return out
+}
+
+// parseTable turns an accumulated table block — the header, its delimiter row, then the
+// body rows — into a spec with every row squared off to the header's cell count: a short
+// row is padded with empty cells, and cells past the last column are dropped, since there
+// is no column to hold them and no width budget to give them.
+//
+// ok is false when the block is not (yet) a table. It has to stay total for any []string:
+// gote's preview renders half-typed source on every keystroke, so it sees a header with
+// nothing under it and a delimiter row still being written.
+func parseTable(lines []string) (tableSpec, bool) {
+	if len(lines) < 2 || !tableDelim.MatchString(strings.TrimSpace(lines[1])) {
+		return tableSpec{}, false
+	}
+	t := tableSpec{head: tableCells(lines[0]), align: tableAligns(lines[1])}
+	if len(t.align) != len(t.head) {
+		return tableSpec{}, false
+	}
+	for _, l := range lines[2:] {
+		row := make([]string, len(t.head))
+		copy(row, tableCells(l)) // copy pads the short rows and drops the long ones' tails
+		t.rows = append(t.rows, row)
+	}
+	return t, true
+}
+
+// tableCellWidth is a cell's width in display cells ONCE RENDERED, which is not its
+// source's: inline draws `code` as a chip with a cell of tint on each side and drops a
+// link's target entirely. Sizing a column from its source leaves a link column several
+// times too wide and a chip two cells short of fitting.
+func tableCellWidth(text string) int { return lipgloss.Width(inline(text)) }
+
+// tableWidths chooses a display width for every column. A column's natural width is its
+// widest rendered cell, header included; when the row fits, that is the answer — the table
+// stays as narrow as its content rather than being stretched to fill the pane.
+//
+// When it does not fit, the widest columns give up cells first and equally (max-min
+// water-filling): find the largest cap c with Σ min(nat[i], c) <= avail, which leaves
+// every column narrower than c untouched and levels the rest at c. That is stable —
+// nothing depends on column order — and testable, since one number decides the layout.
+//
+// nil ⇒ the table cannot be laid out here at all: not even tableMinCol per column fits in
+// what the separators leave. At the renderer's 20-column floor that is four columns or
+// more (4*3 + 3*3 = 21), and the caller shows the source instead.
+func tableWidths(t tableSpec, width int) []int {
+	n := len(t.head)
+	if n == 0 {
+		return nil
+	}
+	nat, widest := make([]int, n), 0
+	for i, c := range t.head {
+		nat[i] = max(1, tableCellWidth(c))
+	}
+	for _, row := range t.rows {
+		for i, c := range row {
+			nat[i] = max(nat[i], tableCellWidth(c))
+		}
+	}
+	// Measured from the constant, never a hard-coded 3, so widening the separator cannot
+	// desync this budget from the rule tableRule draws to it.
+	total := (n - 1) * lipgloss.Width(tableSep)
+	avail := width - total
+	for _, w := range nat {
+		total += w
+		widest = max(widest, w)
+	}
+	if total <= width {
+		return nat
+	}
+
+	// capped is the width the columns take at cap c — the water-filling level's own sum,
+	// so the feasibility test and the fill are the same expression.
+	capped := func(c int) int {
+		sum := 0
+		for _, w := range nat {
+			sum += min(w, c)
+		}
+		return sum
+	}
+	level := 0
+	for c := 1; c <= widest && capped(c) <= avail; c++ {
+		level = c
+	}
+	if level < tableMinCol {
+		return nil
+	}
+	w := make([]int, n)
+	for i := range nat {
+		w[i] = min(nat[i], level)
+	}
+	// Spread what the level left over one cell at a time, left to right, over the columns
+	// it squeezed. One pass always suffices: capped(level+1)-capped(level) is exactly their
+	// count and level+1 did not fit, so no column can take a second cell.
+	for i, left := 0, avail-capped(level); i < n && left > 0; i++ {
+		if nat[i] > level {
+			w[i]++
+			left--
+		}
+	}
+	return w
+}
+
+// wrapCell folds one cell to its column, styling BEFORE wrapping — the opposite of what
+// quoteBlock does, and for the opposite reason. A quote owns its whole width, so it can
+// wrap raw text and style each row; a column's width is measured on the RENDERED cells, so
+// wrapping the source would break in the wrong display column and split a "**bold**" into
+// two literal halves.
+//
+// Wrapping the styled string breaks where the text actually prints, which is what makes
+// every row fit its column by construction. The cost is that ansi.Wrap does not emit
+// self-contained rows: a run straddling a break leaves its color OPEN at end of row, which
+// would tint the padding, the separator and the whole of the next column. The terminator
+// below closes it, so every fragment tableRowBlock concatenates is self-terminating and no
+// cell's color can reach the one beside it. What a reset cannot do is reopen the style on
+// the continuation row, so a construct straddling a break keeps its text and loses its tint
+// — the mirror of the quote's edge, and milder, since no delimiters leak.
+//
+// The terminator is conditional so the uncolored path stays byte-clean: under the Ascii
+// profile inline emits no escapes at all, and an unconditional reset would put one on the
+// end of every plain row.
+func wrapCell(text string, w int, base lipgloss.Style) []string {
+	rows := strings.Split(ansi.Wrap(inlineOver(text, base), w, wrapBreaks), "\n")
+	for i, row := range rows {
+		if strings.Contains(row, "\x1b") {
+			rows[i] = row + ansi.ResetStyle
+		}
+	}
+	return rows
+}
+
+// tablePad places one wrapped cell row in its column, blanks on whichever side the
+// alignment asks for. The gap is measured on the RENDERED row: its escape sequences carry
+// no display cells, and a chip's are exactly what would push the column out if counted.
+func tablePad(row string, w int, a tableAlign) string {
+	gap := w - lipgloss.Width(row)
+	if gap <= 0 {
+		return row
+	}
+	switch a {
+	case tableRight:
+		return strings.Repeat(" ", gap) + row
+	case tableCenter:
+		return strings.Repeat(" ", gap/2) + row + strings.Repeat(" ", gap-gap/2)
+	}
+	return row + strings.Repeat(" ", gap)
+}
+
+// tableRowBlock lays one table row out: every cell wrapped to its column, the row as tall
+// as its tallest cell, and the shorter ones padded with blank rows so the separators stay
+// in column all the way down.
+func tableRowBlock(cells []string, w []int, align []tableAlign, base lipgloss.Style) string {
+	cols, height := make([][]string, len(w)), 1
+	for i := range w {
+		cols[i] = wrapCell(cells[i], w[i], base)
+		height = max(height, len(cols[i]))
+	}
+	sep := ruleStyle().Render(tableSep)
+	// A separator that ENDS a row drops its trailing space: the last column had nothing on
+	// this line, which is the common shape of a wrapped row. Rendering the shorter
+	// separator rather than trimming the finished row keeps this identical under every
+	// color profile — styled, that space sits inside the escape sequence where a
+	// trailing-space trim would never reach it. Only the separators before a padded cell
+	// are affected, so the bars still line up all the way down.
+	sepEnd := ruleStyle().Render(strings.TrimRight(tableSep, " "))
+	rows := make([]string, height)
+	for y := range rows {
+		var b strings.Builder
+		for i, col := range cols {
+			cell := ""
+			if y < len(col) {
+				cell = col[y]
+			}
+			cell = tablePad(cell, w[i], align[i])
+			if i == len(cols)-1 {
+				// The last column's own padding is width the row does not need — and only
+				// it can come out empty here, since every earlier column keeps its blanks.
+				cell = strings.TrimRight(cell, " ")
+			}
+			if i > 0 {
+				if cell == "" {
+					b.WriteString(sepEnd)
+				} else {
+					b.WriteString(sep)
+				}
+			}
+			b.WriteString(cell)
+		}
+		rows[y] = b.String()
+	}
+	return strings.Join(rows, "\n")
+}
+
+// tableRule is the rule under the header: a run of "─" as wide as each column, joined by
+// "─┼─" so the crossing sits under the separator's bar. One Render call for the whole rule,
+// so it carries one color and one reset rather than a seam per column.
+func tableRule(w []int) string {
+	segs := make([]string, len(w))
+	for i, n := range w {
+		segs[i] = strings.Repeat("─", n)
+	}
+	return ruleStyle().Render(strings.Join(segs, tableCross))
+}
+
+// tableBlock renders an accumulated table block: the header in the heading accent, the ─┼─
+// rule under it, then the body. ok is false when the block does not parse as a table or
+// will not fit at this width, and the caller falls back to the prose its source reads as.
+func tableBlock(lines []string, width int) (string, bool) {
+	t, ok := parseTable(lines)
+	if !ok {
+		return "", false
+	}
+	w := tableWidths(t, width)
+	if w == nil {
+		return "", false
+	}
+	out := []string{tableRowBlock(t.head, w, t.align, tableHeadStyle()), tableRule(w)}
+	for _, row := range t.rows {
+		out = append(out, tableRowBlock(row, w, t.align, lipgloss.Style{}))
+	}
+	return strings.Join(out, "\n"), true
 }
 
 // emit appends one entry — which may itself be a wrapped block of several rows, hence
@@ -700,6 +1073,14 @@ func codeSpanStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(core.MarkdownAccent()).
 		Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
+}
+
+// tableHeadStyle is a table's header row — the accent heading the "##" sections use, not a
+// plain bold: the rule under the header is deliberately thin chrome in the border color,
+// and bold alone leaves the header reading as just another body row on a low-contrast
+// theme. A column's header is a heading of its column.
+func tableHeadStyle() lipgloss.Style {
+	return headingStyle()
 }
 
 // ruleStyle draws the thin separators around a code block and the bar down a
