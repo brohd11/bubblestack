@@ -491,3 +491,147 @@ func TestExpandHWithExpandV(t *testing.T) {
 		}
 	}
 }
+
+// focusPanel is a Focusable stub that implements FocusNotifier, recording how many
+// times it was notified and handing back a distinguishable cmd.
+type focusPanel struct {
+	name     string
+	focused  bool
+	notified int
+}
+
+func (p *focusPanel) SetSize(int, int) {}
+func (p *focusPanel) View(bool) string { return "x" }
+func (p *focusPanel) Focus()           { p.focused = true }
+func (p *focusPanel) Blur()            { p.focused = false }
+func (p *focusPanel) Focused() bool    { return p.focused }
+func (p *focusPanel) UpdatePanel(*core.Shared, tea.Msg) (core.Action, bool) {
+	return core.Action{}, true
+}
+
+// OnFocus asserts the ordering the interface promises: Focus() has already run, so a
+// panel deciding whether to start work can trust its own Focused().
+func (p *focusPanel) OnFocus() tea.Cmd {
+	p.notified++
+	if !p.focused {
+		panic("OnFocus must be called after Focus()")
+	}
+	name := p.name
+	return func() tea.Msg { return name }
+}
+
+// cmdName runs a focus cmd and returns the panel name it identifies ("" for a nil cmd).
+func cmdName(t *testing.T, cmd tea.Cmd) string {
+	t.Helper()
+	if cmd == nil {
+		return ""
+	}
+	msg := cmd()
+	s, ok := msg.(string)
+	if !ok {
+		t.Fatalf("focus cmd delivered %T, want the panel's name", msg)
+	}
+	return s
+}
+
+// TestFocusNotifierOnPaneKey is the case the hook exists for: the pane-navigation key
+// is consumed by the host and never reaches a panel, so the Action it returns is the
+// newly focused panel's only chance to start work off the focus change.
+func TestFocusNotifierOnPaneKey(t *testing.T) {
+	a, b := &focusPanel{name: "a"}, &focusPanel{name: "b"}
+	m := NewModularScreen([][]Slot{{{Panel: a}, {Panel: b}}}, ModularOpts{})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+
+	_, act := m.Update(sh, paneKey(t, core.Keys.PaneNext))
+	if m.focus != 1 {
+		t.Fatalf("the pane key should move focus to slot 1, got %d", m.focus)
+	}
+	if got := cmdName(t, act.Cmd); got != "b" {
+		t.Errorf("pane key returned cmd %q, want the newly focused panel's (\"b\")", got)
+	}
+	if b.notified != 1 {
+		t.Errorf("newly focused panel notified %d times, want 1", b.notified)
+	}
+	if a.notified != 0 {
+		t.Errorf("the panel LOSING focus must not be notified, got %d", a.notified)
+	}
+}
+
+// TestFocusNotifierNotOnReFocus: landing on the pane you are already in is not a focus
+// event, so a panel doesn't restart its work every time focus is re-asserted.
+func TestFocusNotifierNotOnReFocus(t *testing.T) {
+	only := &focusPanel{name: "only"}
+	m := NewModularScreen([][]Slot{{{Panel: only}, {Panel: &shortPanel{h: 1}}}}, ModularOpts{})
+	m.SetSize(core.NewShared(nil), 80, 20)
+
+	if cmd := m.FocusSlot(0); cmd != nil { // already focused at construction
+		t.Error("re-focusing the already-focused slot must return no cmd")
+	}
+	if cmd := m.FocusSlot(1); cmd != nil { // not Focusable
+		t.Error("a non-Focusable target must return no cmd")
+	}
+	if cmd := m.FocusSlot(9); cmd != nil {
+		t.Error("an out-of-range target must return no cmd")
+	}
+	if only.notified != 0 {
+		t.Errorf("no real focus change happened; notified %d times", only.notified)
+	}
+}
+
+// TestFocusNotifierOnInit: the slot focused at CONSTRUCTION never sees a transition —
+// NewModularScreen focuses it and has no cmd lane — so Init is what delivers it.
+func TestFocusNotifierOnInit(t *testing.T) {
+	a, b := &focusPanel{name: "a"}, &focusPanel{name: "b"}
+	m := NewModularScreen([][]Slot{{{Panel: a}, {Panel: b}}}, ModularOpts{})
+
+	if got := cmdName(t, m.Init(core.NewShared(nil))); got != "a" {
+		t.Errorf("Init returned cmd %q, want the initially focused panel's (\"a\")", got)
+	}
+	if a.notified != 1 || b.notified != 0 {
+		t.Errorf("notify counts = (a:%d, b:%d), want (1, 0)", a.notified, b.notified)
+	}
+}
+
+// TestFocusNotifierOnMousePress: a click that moves focus carries the focus cmd
+// ALONGSIDE the press's own work, rather than replacing it.
+func TestFocusNotifierOnMousePress(t *testing.T) {
+	a, b := &focusPanel{name: "a"}, &focusPanel{name: "b"}
+	m := NewModularScreen([][]Slot{
+		{{Panel: a}}, {{Panel: b}},
+	}, ModularOpts{ColWidths: []int{30, 0}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+
+	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 60, Y: 5}
+	_, act := m.Update(sh, press)
+	if m.focus != 1 {
+		t.Fatalf("a press in the second pane should focus it, got %d", m.focus)
+	}
+	if got := cmdName(t, act.Cmd); got != "b" {
+		t.Errorf("press returned cmd %q, want the newly focused panel's (\"b\")", got)
+	}
+}
+
+// TestFocusNotifierOptional: a panel without the hook is untouched — the capability is
+// opt-in, and the focus move still happens.
+func TestFocusNotifierOptional(t *testing.T) {
+	plain, notifier := &capturePanel{}, &focusPanel{name: "n"}
+	m := NewModularScreen([][]Slot{{{Panel: plain}, {Panel: notifier}}}, ModularOpts{})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 80, 20)
+
+	if cmd := m.Init(sh); cmd != nil {
+		t.Error("a plain focused panel should contribute no focus cmd at Init")
+	}
+	next := paneKey(t, core.Keys.PaneNext)
+	if _, act := m.Update(sh, next); cmdName(t, act.Cmd) != "n" {
+		t.Error("focus should still move to, and notify, the notifier panel")
+	}
+	if _, act := m.Update(sh, next); act.Cmd != nil {
+		t.Error("moving focus back to the plain panel should yield no cmd")
+	}
+	if m.focus != 0 {
+		t.Fatalf("focus should have cycled back to slot 0, got %d", m.focus)
+	}
+}

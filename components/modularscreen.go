@@ -131,6 +131,11 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 
 // Init runs any panel initializers (ScreenPanel starts its child screen), then
 // the consumer's ModularOpts.Init hook, and batches all their cmds.
+//
+// It also drains the FocusNotifier of the slot focused at CONSTRUCTION. That focus
+// is granted by NewModularScreen, which has no cmd lane at all, so a panel would
+// otherwise never learn about the only focus event it does not receive as a
+// transition — the state it was born into. Same reasoning as ScreenPanel.syncChild.
 func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, slot := range s.flat {
@@ -138,6 +143,11 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 			if cmd := ini.Init(sh); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
+		}
+	}
+	if s.focus >= 0 {
+		if cmd := panelFocusCmd(s.focusedPanel()); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 	if s.initFn != nil {
@@ -181,8 +191,11 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyMsg); ok {
 		k := km.String()
-		if s.moveFocus(k) {
-			return s, core.Action{}
+		if cmd, moved := s.moveFocus(k); moved {
+			// The pane key itself is consumed here and never reaches a panel, so
+			// this Action is the newly focused panel's only chance to start work
+			// off the focus change (FocusNotifier).
+			return s, core.Async(cmd)
 		}
 		if ci := s.capturingSlot(); ci >= 0 {
 			act, _ := s.flat[ci].Panel.(PanelUpdater).UpdatePanel(sh, msg)
@@ -209,8 +222,11 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 				if mm.Button == tea.MouseButtonLeft || mm.Button == tea.MouseButtonRight {
 					s.mouseSlot = i
 				}
-				s.focusSlot(i)
+				focus := s.focusSlot(i)
 				act := s.updateMouseSlot(sh, i, mm)
+				// Batched, not replaced: the press has its own work (a row select,
+				// a scroll) and the focus cmd rides alongside it.
+				act.Cmd = tea.Batch(act.Cmd, focus)
 				return s, act
 			}
 		} else if s.mouseSlot >= 0 {
@@ -550,15 +566,13 @@ func (s *ModularScreen) focusedPanel() Panel { return s.flat[s.focus].Panel }
 // fallback — see the type doc. The directional bindings carry no keycodes today,
 // so their cases simply never match (MatchKey against an empty binding is false)
 // and cost a comparison each.
-func (s *ModularScreen) moveFocus(k string) bool {
+func (s *ModularScreen) moveFocus(k string) (tea.Cmd, bool) {
 	var dc, dr int
 	switch {
 	case core.MatchKey(k, core.Keys.PaneNext):
-		s.cycleFocus(1)
-		return true
+		return s.cycleFocus(1), true
 	case core.MatchKey(k, core.Keys.PanePrev):
-		s.cycleFocus(-1)
-		return true
+		return s.cycleFocus(-1), true
 	case core.MatchKey(k, core.Keys.PaneLeft):
 		dc = -1
 	case core.MatchKey(k, core.Keys.PaneRight):
@@ -568,32 +582,32 @@ func (s *ModularScreen) moveFocus(k string) bool {
 	case core.MatchKey(k, core.Keys.PaneDown):
 		dr = 1
 	default:
-		return false
+		return nil, false
 	}
 	if s.focus >= 0 {
 		if t := s.neighbor(s.focus, dc, dr); t >= 0 {
-			s.focusSlot(t)
+			return s.focusSlot(t), true
 		}
 	}
-	return true
+	return nil, true
 }
 
 // cycleFocus steps focus by delta through the Focusable slots in flat order
 // (column 0 top→bottom, then column 1, …), wrapping at both ends. With fewer than
 // two focusable slots it lands back where it started, which focusSlot treats as
 // the no-op it is.
-func (s *ModularScreen) cycleFocus(delta int) {
+func (s *ModularScreen) cycleFocus(delta int) tea.Cmd {
 	if s.focus < 0 {
-		return
+		return nil
 	}
 	n := len(s.flat)
 	for i := 1; i <= n; i++ {
 		j := ((s.focus+i*delta)%n + n) % n
 		if isFocusable(s.flat[j].Panel) {
-			s.focusSlot(j)
-			return
+			return s.focusSlot(j)
 		}
 	}
+	return nil
 }
 
 // neighbor is the flat index of the Focusable slot one step in direction
@@ -660,10 +674,12 @@ func (s *ModularScreen) focusableNear(c, row int) int {
 }
 
 // focusSlot moves focus to flat slot i, blurring the old panel and focusing the
-// new. A no-op when i already holds focus or isn't Focusable.
-func (s *ModularScreen) focusSlot(i int) {
+// new, and returns the new panel's FocusNotifier cmd (nil when it has none). A
+// no-op — and a nil cmd — when i already holds focus or isn't Focusable: landing
+// on the pane you are already in is not a focus event.
+func (s *ModularScreen) focusSlot(i int) tea.Cmd {
 	if i == s.focus || !isFocusable(s.flat[i].Panel) {
-		return
+		return nil
 	}
 	if s.focus >= 0 {
 		if f, ok := s.focusedPanel().(Focusable); ok {
@@ -672,6 +688,16 @@ func (s *ModularScreen) focusSlot(i int) {
 	}
 	s.focus = i
 	s.focusedPanel().(Focusable).Focus()
+	return panelFocusCmd(s.focusedPanel())
+}
+
+// panelFocusCmd asks a freshly focused panel for its on-focus work. Call it AFTER
+// Focus(), so the panel's own Focused() already reports true.
+func panelFocusCmd(p Panel) tea.Cmd {
+	if n, ok := p.(FocusNotifier); ok {
+		return n.OnFocus()
+	}
+	return nil
 }
 
 // FocusSlot moves keyboard focus to flat slot i (the declaration order: column 0
@@ -679,11 +705,17 @@ func (s *ModularScreen) focusSlot(i int) {
 // the mouse click, for a consumer that needs focus to follow an event (a sidebar
 // selection focusing the detail pane, say). Out-of-range and non-Focusable targets
 // are a no-op.
-func (s *ModularScreen) FocusSlot(i int) {
+//
+// It returns the newly focused panel's FocusNotifier cmd, which the caller is
+// responsible for emitting (core.Async, or batched into the Action it was already
+// returning) — the same "returns the cmd, the caller emits it" shape as
+// ScreenPanel.SetChild. Discarding it is safe and simply skips the panel's on-focus
+// work until its next message.
+func (s *ModularScreen) FocusSlot(i int) tea.Cmd {
 	if i < 0 || i >= len(s.flat) {
-		return
+		return nil
 	}
-	s.focusSlot(i)
+	return s.focusSlot(i)
 }
 
 // slotRect is the rect input hit-testing and coordinate translation use: the

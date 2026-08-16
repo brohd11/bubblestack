@@ -50,7 +50,7 @@ func (s *EditorScreen) editMenu(sh *core.Shared, x, y int) *MenuScreen {
 			items = append(items, extra...)
 		}
 	}
-	return NewMenu(MenuOpts{Items: items, Anchor: AnchorBelow(x, y), Crumb: "edit"})
+	return NewMenu(MenuOpts{Items: items, Anchor: AnchorBelow(x, y)})
 }
 
 // copySelection is the MENU's Copy and Cut: copyOrCut with the Pop that closes the menu

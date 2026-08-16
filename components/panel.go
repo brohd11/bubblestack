@@ -30,6 +30,23 @@ type Focusable interface {
 	Focused() bool
 }
 
+// FocusNotifier is the optional hook a panel implements to act the MOMENT it gains
+// focus, instead of waiting for a message to reach it. The pane-navigation keys are
+// the host's alone and never arrive at a panel (see PanelUpdater and Capturing), so a
+// panel that wants to start work on focus — an animation, a lazy load — otherwise has
+// to wait for some unrelated keystroke to notice it is live. ModularScreen calls it
+// after Focus(), so Focused() already reports true, and batches the cmd.
+//
+// It takes no Shared, unlike panelInitializer: focus is granted from places that have
+// none in scope (the constructor, FocusSlot, SetFocused), and a panel that needs shared
+// state on focus already stashed it at Init.
+//
+// It does NOT fire for ModularScreen.SetFocused — the router's output-pane focus
+// transitions come through core.FocusableScreen, which has no cmd lane to carry one. A
+// panel that must also cover that path keeps a check on its normal message route; see
+// ListPanel.marqueeArm.
+type FocusNotifier interface{ OnFocus() tea.Cmd }
+
 // PanelUpdater receives input: key msgs while the panel is focused (or
 // capturing), and every non-key msg as a broadcast. The bool reports whether the
 // msg was consumed — an unhandled key falls through to the screen's own Back

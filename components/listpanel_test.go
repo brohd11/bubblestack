@@ -171,3 +171,215 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 		}
 	})
 }
+
+// marqueeRows: a row that overflows a 30-cell sidebar (26 cells of text) and one that
+// doesn't, so a test can move the cursor between the two states.
+func marqueeRows() []list.Item {
+	return []list.Item{
+		compactTestItem{title: "architecture-notes.md", suffix: "design/deep/"},
+		compactTestItem{title: "a.md", suffix: "x/"},
+	}
+}
+
+// armedMarquee returns a sized, focused compact panel whose Init armed the marquee.
+func armedMarquee(t *testing.T) (*CompactListPanel, tea.Cmd) {
+	t.Helper()
+	p := NewCompactListPanel(marqueeRows(), "Docs", ListPanelOpts{Border: true})
+	p.SetSize(30, 8)
+	p.Focus()
+	cmd := p.Init(core.NewShared(nil))
+	if cmd == nil {
+		t.Fatal("a compact panel must arm its marquee at Init")
+	}
+	return p, cmd
+}
+
+// tick feeds the panel the message its armed cmd would eventually deliver, and reports
+// whether it re-armed — i.e. whether the marquee is still running. It synthesizes the
+// message rather than running cmd, which would really sleep marqueeInterval: a full cycle
+// is ~40 frames, and TestMarqueeDelivers already pins that the cmd delivers this exact
+// message. Only the non-nil-ness of cmd is read here, never its timer.
+func tick(t *testing.T, p *CompactListPanel, cmd tea.Cmd) (tea.Cmd, int) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("no tick pending — the marquee stopped earlier than the test expected")
+	}
+	act, handled := p.UpdatePanel(core.NewShared(nil), marqueeTickMsg{id: p.marqueeID})
+	if !handled {
+		t.Fatal("a marquee tick must be consumed by the panel")
+	}
+	return act.Cmd, p.marquee
+}
+
+// TestMarqueeDelivers is the one test that runs the timer, pinning what the rest assume:
+// an armed cmd delivers a tick stamped with this panel's own clock id.
+func TestMarqueeDelivers(t *testing.T) {
+	p, cmd := armedMarquee(t)
+	msg, ok := cmd().(marqueeTickMsg)
+	if !ok {
+		t.Fatalf("armed cmd delivered %T, want marqueeTickMsg", msg)
+	}
+	if msg.id != p.marqueeID {
+		t.Errorf("tick id = %d, want this panel's %d", msg.id, p.marqueeID)
+	}
+}
+
+// TestMarqueeRunsAndDwells: a focused panel whose selected row overflows keeps re-arming,
+// holds at the left edge before moving, walks one cell per frame, and snaps back to 0
+// after dwelling on the tail — so the whole name and path are eventually readable.
+func TestMarqueeRunsAndDwells(t *testing.T) {
+	p, cmd := armedMarquee(t)
+
+	max, ok := p.marqueeOverflow()
+	if !ok {
+		t.Fatal("the fixture row must overflow a 30-cell sidebar")
+	}
+
+	// The leading dwell: marqueeHold frames before the first cell of movement.
+	for i := 0; i < marqueeHold; i++ {
+		cmd, _ = tick(t, p, cmd)
+		if cmd == nil {
+			t.Fatalf("marquee stopped during the leading hold at frame %d", i)
+		}
+		if p.marquee != 0 {
+			t.Fatalf("frame %d moved to %d during the leading hold, want 0", i, p.marquee)
+		}
+	}
+	for want := 1; want <= max; want++ {
+		var off int
+		if cmd, off = tick(t, p, cmd); off != want {
+			t.Fatalf("marquee at %d, want one cell per frame (%d)", off, want)
+		}
+	}
+	// Dwell on the tail, then back to the left edge to start over.
+	for i := 0; i < marqueeHold; i++ {
+		if cmd, _ = tick(t, p, cmd); p.marquee != max {
+			t.Fatalf("frame %d left the tail dwell early (offset %d, max %d)", i, p.marquee, max)
+		}
+	}
+	if cmd, _ = tick(t, p, cmd); p.marquee != 0 {
+		t.Fatalf("after the tail dwell the marquee should snap back to 0, got %d", p.marquee)
+	}
+	if cmd == nil {
+		t.Fatal("the marquee should still be running after a full cycle")
+	}
+}
+
+// TestMarqueeForeignTickIgnored is the doubling guard. ModularScreen broadcasts non-key
+// messages to EVERY panel, so a sibling's tick lands here too — acting on it would re-arm
+// a second clock on this panel and the tick rate would double on every pass.
+func TestMarqueeForeignTickIgnored(t *testing.T) {
+	p, _ := armedMarquee(t)
+	act, handled := p.UpdatePanel(core.NewShared(nil), marqueeTickMsg{id: p.marqueeID + 1})
+	if !handled {
+		t.Fatal("a foreign tick should still be consumed, not passed on")
+	}
+	if act.Cmd != nil {
+		t.Fatal("a foreign tick must not re-arm this panel's marquee")
+	}
+}
+
+// TestMarqueeStopsUnfocused: the loop is self-limiting. Focus moving to a sibling pane
+// (gote's editor) ends it and returns the row to its left edge, and focus coming back
+// picks it up again on the next message.
+func TestMarqueeStopsUnfocused(t *testing.T) {
+	p, cmd := armedMarquee(t)
+	for i := 0; i < marqueeHold+2; i++ {
+		cmd, _ = tick(t, p, cmd)
+	}
+	if p.marquee == 0 {
+		t.Fatal("the fixture should have moved off the left edge by now")
+	}
+
+	p.Blur()
+	if cmd, _ = tick(t, p, cmd); cmd != nil {
+		t.Fatal("an unfocused panel must stop re-arming the marquee")
+	}
+	if p.marquee != 0 {
+		t.Fatalf("stopping should reset the row to its left edge, got offset %d", p.marquee)
+	}
+
+	// Regaining focus restarts it THERE AND THEN, via FocusNotifier — no unrelated
+	// keystroke needed, which is the whole point of the hook.
+	p.Focus()
+	if cmd := p.OnFocus(); cmd == nil {
+		t.Fatal("OnFocus should re-arm the marquee immediately on regaining focus")
+	}
+}
+
+// TestMarqueeOnFocusIdempotent: the hook and the per-message fallback both route through
+// marqueeStart, so whichever fires first wins and the second is a no-op. Two clocks on one
+// panel would share an id and double the tick rate on every pass.
+func TestMarqueeOnFocusIdempotent(t *testing.T) {
+	p, _ := armedMarquee(t) // Init already armed it
+	if cmd := p.OnFocus(); cmd != nil {
+		t.Fatal("OnFocus over an already-running marquee must not arm a second clock")
+	}
+	act := p.marqueeArm(core.Action{})
+	if act.Cmd != nil {
+		t.Fatal("the per-message fallback must not arm a second clock either")
+	}
+}
+
+// TestMarqueeNoFocusCmdWhenNothingToScroll: focus alone doesn't start the clock — an
+// unfocused panel and a row that fits both stay still.
+func TestMarqueeNoFocusCmdWhenNothingToScroll(t *testing.T) {
+	p := NewCompactListPanel(marqueeRows(), "Docs", ListPanelOpts{Border: true})
+	p.SetSize(30, 8)
+
+	if cmd := p.OnFocus(); cmd != nil {
+		t.Error("an unfocused panel must not arm on OnFocus")
+	}
+	p.Focus()
+	p.List().Select(1) // the short row
+	if cmd := p.OnFocus(); cmd != nil {
+		t.Error("a selected row that fits must not arm the marquee")
+	}
+}
+
+// TestMarqueeResetsOnCursorMove: each row starts from its left edge, and a row that fits
+// stops the loop rather than jittering in place.
+func TestMarqueeResetsOnCursorMove(t *testing.T) {
+	p, cmd := armedMarquee(t)
+	for i := 0; i < marqueeHold+2; i++ {
+		cmd, _ = tick(t, p, cmd)
+	}
+	if p.marquee == 0 {
+		t.Fatal("the fixture should have moved off the left edge by now")
+	}
+
+	p.List().Select(1) // the short row
+	p.UpdatePanel(core.NewShared(nil), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	if p.marquee != 0 {
+		t.Fatalf("a cursor move should restart the row from its left edge, got %d", p.marquee)
+	}
+	if _, ok := p.marqueeOverflow(); ok {
+		t.Fatal("the short row must not report overflow")
+	}
+	if cmd, _ = tick(t, p, cmd); cmd != nil {
+		t.Fatal("a row that fits must not keep the marquee running")
+	}
+}
+
+// TestMarqueeOffForPlainListPanel: only the compact panel marquees; a NewListPanel keeps
+// the two-line delegate and no clock at all.
+func TestMarqueeOffForPlainListPanel(t *testing.T) {
+	p := NewListPanel([]list.Item{Item{Name: "one"}}, "Tags", ListPanelOpts{})
+	p.SetSize(30, 10)
+	if cmd := p.Init(core.NewShared(nil)); cmd != nil {
+		t.Fatal("a plain list panel should arm no marquee")
+	}
+	if _, ok := p.marqueeOverflow(); ok {
+		t.Fatal("a plain list panel should never report marquee overflow")
+	}
+}
+
+// TestMarqueeInitIdempotent: gote rebuilds its ModularScreen on every sidebar toggle while
+// keeping the same panels, so Init can run again over a live clock. A second arm would
+// share the first's id and double the tick rate on each pass.
+func TestMarqueeInitIdempotent(t *testing.T) {
+	p, _ := armedMarquee(t)
+	if cmd := p.Init(core.NewShared(nil)); cmd != nil {
+		t.Fatal("a second Init over a running marquee must not arm a second clock")
+	}
+}

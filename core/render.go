@@ -193,13 +193,50 @@ func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, 
 
 // CompactDelegate renders one item per terminal row with no inter-item spacing.
 // The title is given width priority; any suffix is fitted into the cells left over.
-type CompactDelegate struct{}
+//
+// Offset opts the SELECTED row into a marquee: when it is non-nil and that row's
+// title-plus-suffix is wider than the row, the two are treated as one string and
+// windowed by *Offset, so a name AND the path after it both become readable in a
+// column too narrow for either. The owner of the pointer owns the clock — nothing
+// here advances it (Render must stay a pure function of state), and a nil Offset
+// leaves every row statically truncated. ListPanel is the in-tree owner.
+type CompactDelegate struct{ Offset *int }
 
 func (CompactDelegate) Height() int                         { return 1 }
 func (CompactDelegate) Spacing() int                        { return 0 }
 func (CompactDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 
-func (CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+// CompactRow is one row's two raw, untruncated pieces: the title, and the muted tail
+// ("  " + suffix, empty when the item has no suffix).
+type CompactRow struct{ Title, Tail string }
+
+// Width is the row's full untruncated cell width. Subtracting the text width from it gives
+// the marquee's last offset — the point at which the tail sits flush with the right edge.
+func (r CompactRow) Width() int { return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) }
+
+// CompactTextWidth is the cells a compact row's text actually gets out of a list of the
+// given width — the delegate's padding taken off. Exported so the panel that drives a
+// marquee measures the row against the same number Render fits it into.
+func CompactTextWidth(listWidth int) int {
+	s := list.NewDefaultItemStyles().NormalTitle
+	if w := listWidth - s.GetPaddingLeft() - s.GetPaddingRight(); w > 1 {
+		return w
+	}
+	return 1
+}
+
+// CompactMarquee reports a row's raw pieces and whether they overflow textWidth. It is the
+// single place "does this row need to scroll?" is answered, so the panel that owns the
+// offset and the delegate that consumes it cannot disagree about which rows are moving.
+func CompactMarquee(i SuffixItem, textWidth int) (CompactRow, bool) {
+	r := CompactRow{Title: i.Title()}
+	if s := i.SuffixText(); s != "" {
+		r.Tail = "  " + s
+	}
+	return r, r.Width() > textWidth
+}
+
+func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	i, ok := item.(SuffixItem)
 	if !ok || m.Width() <= 0 {
 		return
@@ -214,18 +251,28 @@ func (CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 	if textWidth < 1 {
 		textWidth = 1
 	}
-	title := ansi.Truncate(i.Title(), textWidth, "…")
-	suffix := ""
-	if raw := i.SuffixText(); raw != "" {
-		remaining := textWidth - lipgloss.Width(title) - 2
-		if remaining > 0 {
-			suffix = "  " + ansi.Truncate(raw, remaining, "…")
-		}
-	}
 
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
+
+	title, suffix := "", ""
+	// The marquee owns the fit when the selected row overflows: the two pieces slide as one
+	// string, so the tail of a long name and the path behind it both come into view. Never
+	// while a filter is live — the match highlighting below styles the title by rune index,
+	// and those indices stop addressing the string once it has been windowed.
+	if raw, over := CompactMarquee(i, textWidth); over && d.Offset != nil && isSelected && !isFiltered {
+		off := min(max(*d.Offset, 0), raw.Width()-textWidth)
+		title = marqueeSeg(raw.Title, 0, off, textWidth)
+		suffix = marqueeSeg(raw.Tail, lipgloss.Width(raw.Title), off, textWidth)
+	} else {
+		title = ansi.Truncate(i.Title(), textWidth, "…")
+		if s := i.SuffixText(); s != "" {
+			if remaining := textWidth - lipgloss.Width(title) - 2; remaining > 0 {
+				suffix = "  " + ansi.Truncate(s, remaining, "…")
+			}
+		}
+	}
 
 	titleStyle := styles.NormalTitle
 	if emptyFilter {
@@ -395,6 +442,29 @@ func (s *Shared) NoteHelp(text string) string {
 }
 
 // ---------- text helpers ----------
+
+// marqueeSeg returns the part of seg that falls inside the window [offset, offset+width),
+// where seg begins at cell `start` of a longer logical row. That extra `start` is the whole
+// point: a compact row is two differently styled pieces (title, then muted suffix) that must
+// slide as ONE string, and windowing each piece separately against a shared offset is what
+// lets them keep their own styles while staying tiled to the cell. A segment entirely
+// outside the window yields "".
+//
+// Both cuts use an empty tail — no ellipsis on a sliding row. The motion is what says there
+// is more text, and a "…" pinned to a moving edge reads as part of the path.
+func marqueeSeg(seg string, start, offset, width int) string {
+	lo, hi := offset, offset+width
+	if start > lo {
+		lo = start
+	}
+	if end := start + lipgloss.Width(seg); end < hi {
+		hi = end
+	}
+	if hi <= lo {
+		return ""
+	}
+	return ansi.Truncate(ansi.TruncateLeft(seg, lo-start, ""), hi-lo, "")
+}
 
 // hardWrap breaks s into chunks of at most width runes (URLs have no spaces to
 // word-wrap on, so we break unconditionally).

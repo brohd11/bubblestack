@@ -455,18 +455,14 @@ func TestMenuCapabilities(t *testing.T) {
 	if ox, oy := m.OverlayPos(0, 0); ox != x || oy != y {
 		t.Errorf("OverlayPos = (%d,%d), place() = (%d,%d) — they must agree", ox, oy, x, y)
 	}
-	// An unnamed menu leaves no segment at all — what keeps a dropdown out of a trail it
-	// was never a step in. The router skips an empty label (crumbTrail).
-	if got := m.CrumbLabel(false); got != "" {
-		t.Errorf("an unnamed menu should contribute no crumb, got %q", got)
-	}
+}
 
-	named, _ := newMenu(t, MenuOpts{Items: menuItems(), Anchor: AnchorAt(0, 0), Crumb: "actions", CrumbShort: "act"})
-	if got := named.CrumbLabel(false); got != "actions" {
-		t.Errorf("crumb = %q, want \"actions\"", got)
-	}
-	if got := named.CrumbLabel(true); got != "act" {
-		t.Errorf("short crumb = %q, want \"act\"", got)
+// TestMenuNoCrumb: a dropdown is not a navigation step, so it must leave the trail
+// reading as the screen it floats over — the LineEditScreen stance (lineedit_test.go).
+func TestMenuNoCrumb(t *testing.T) {
+	m, _ := newMenu(t, MenuOpts{Items: menuItems(), Anchor: AnchorAt(0, 0)})
+	if c, ok := any(m).(core.Crumber); ok {
+		t.Errorf("a menu must contribute no breadcrumb segment, got %q", c.CrumbLabel(false))
 	}
 }
 

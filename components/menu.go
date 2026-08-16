@@ -47,6 +47,11 @@ import (
 // the stack. A caller who wants esc to collapse a whole cascade sets the child's
 // OnCancel to core.Pop(n) — nesting depth is known where the menu is built.
 //
+// It contributes NO breadcrumb segment — deliberately not a core.Crumber, the stance
+// LineEditScreen takes (lineedit.go) and the opposite of every full-screen component's.
+// A dropdown is not a place you navigated to, so a trail that grew a segment each time
+// one opened would flicker a step in and out on every right-click.
+//
 // Known compromises, all of them consequences of keeping this inside the component:
 //
 //  1. core.Shared has no Height() accessor, so the menu can only see the BODY rect
@@ -62,7 +67,9 @@ import (
 //     "outside" the child, and cannot also be forwarded to the parent, which is not
 //     Top(). The second click acts on the parent.
 //  4. The router claims some clicks before the menu sees them (router_keys.go): tab-strip
-//     and breadcrumb clicks unwind the stack, which does dismiss the menu; a header click
+//     and breadcrumb clicks unwind the stack out from under a live menu, dismissing it
+//     (the menu draws no segment of its own, but the ones behind it are still hittable);
+//     a header click
 //     runs the consumer's HeaderPane.OnClick, which could push over a live menu; an
 //     output-pane click moves keyboard focus, leaving the menu drawn but keyless until
 //     esc. All three are call-site concerns.
@@ -75,12 +82,10 @@ import (
 //     dispatches no accelerators and does no type-ahead; a hint that reads like a key is
 //     a promise the menu does not yet keep.
 type MenuScreen struct {
-	items      []MenuItem
-	anchor     MenuAnchor
-	title      string
-	maxWidth   int
-	crumb      string
-	crumbShort string
+	items    []MenuItem
+	anchor   MenuAnchor
+	title    string
+	maxWidth int
 
 	sel int // index into items; -1 when nothing is selectable
 	top int // first item of the visible window
@@ -100,7 +105,6 @@ type MenuScreen struct {
 var _ core.Overlayer = (*MenuScreen)(nil)
 var _ core.OverlayPositioner = (*MenuScreen)(nil)
 var _ core.Filterer = (*MenuScreen)(nil)
-var _ core.Crumber = (*MenuScreen)(nil)
 var _ core.QuitGater = (*MenuScreen)(nil)
 
 // MenuItem is one row of a MenuScreen.
@@ -176,11 +180,9 @@ type MenuOpts struct {
 	Title  string // optional accent line above the rows; want a rule under it? make the first item a Separator
 	// MaxWidth caps the content width in cells; 0 sizes to the widest row. The box is
 	// clamped to the terminal either way.
-	MaxWidth   int
-	Crumb      string // breadcrumb segment (CrumbLabel); omitted ⇒ contributes none
-	CrumbShort string
-	OnSelect   func(sh *core.Shared, it MenuItem, idx int) core.Action
-	OnCancel   func(sh *core.Shared) core.Action
+	MaxWidth int
+	OnSelect func(sh *core.Shared, it MenuItem, idx int) core.Action
+	OnCancel func(sh *core.Shared) core.Action
 }
 
 // NewMenu builds a dropdown from opts, normalizes the anchor's flip edges, and puts the
@@ -194,14 +196,12 @@ func NewMenu(opts MenuOpts) *MenuScreen {
 		a.FlipY = a.Y
 	}
 	s := &MenuScreen{
-		items:      opts.Items,
-		anchor:     a,
-		title:      opts.Title,
-		maxWidth:   opts.MaxWidth,
-		crumb:      opts.Crumb,
-		crumbShort: opts.CrumbShort,
-		OnSelect:   opts.OnSelect,
-		OnCancel:   opts.OnCancel,
+		items:    opts.Items,
+		anchor:   a,
+		title:    opts.Title,
+		maxWidth: opts.MaxWidth,
+		OnSelect: opts.OnSelect,
+		OnCancel: opts.OnCancel,
 	}
 	s.sel = s.firstSelectable()
 	return s
@@ -426,16 +426,6 @@ func (s *MenuScreen) Filtering() bool { return true }
 // one that returned anything other than a pop would leave ctrl+c — the escape hatch of
 // last resort — unable to make progress. This dismissal is the framework's call.
 func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }
-
-// CrumbLabel contributes the breadcrumb segment named by Crumb — and NOTHING when it
-// isn't set, deliberately unlike every full-screen component's default. A dropdown is
-// not a place you navigated to, so a trail that grows a segment each time one opens
-// reads wrong and flickers. The router drops a Crumber whose full label is empty
-// (crumbTrail), the same opt-out DialogScreen's overlay form takes; a menu that really
-// is a navigation step (a cascade a user drills into) asks for its segment by name.
-func (s *MenuScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.crumbShort, s.crumb, "")
-}
 
 // HelpView is empty: the background screen's help bar stays, as with every other overlay.
 func (s *MenuScreen) HelpView(*core.Shared) string { return "" }
