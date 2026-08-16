@@ -275,6 +275,11 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
+// editorHWheelStep is how many display cells one horizontal wheel notch scrolls. Wider
+// than the vertical step because a cell is a fraction of a word, where a line is a whole
+// thought — six lands roughly a word over per notch.
+const editorHWheelStep = 6
+
 // editorMultiClickWindow is how long a left press stays eligible to be the
 // second or third click of a same-button multi-click. tea.MouseMsg carries neither a
 // timestamp nor a click count, so the editor keeps both itself.
@@ -575,15 +580,12 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 				if s.contextMenu {
 					return s, s.pressContext(sh, m.X, m.Y)
 				}
-			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown,
+				tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
 				// The wheel is browse-only and only while focused: mouse msgs are
 				// broadcast to every pane, so an unfocused editor must not roll.
 				if s.focused {
-					if m.Button == tea.MouseButtonWheelUp {
-						s.scrollLines(-editorWheelStep)
-					} else {
-						s.scrollLines(editorWheelStep)
-					}
+					s.wheel(m)
 				}
 			}
 		// A drag is the only state motion and release can act on now that the left button

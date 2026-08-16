@@ -1293,6 +1293,133 @@ func TestEditorWheelFocus(t *testing.T) {
 	}
 }
 
+func altWheel(s *EditorScreen, sh *core.Shared, btn tea.MouseButton) {
+	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: btn, X: 5, Y: 5, Alt: true})
+}
+
+// wideDoc is one 200-cell line between two short ones: a buffer that overflows the
+// 80-column viewport horizontally but not vertically, so no scrollbar narrows textW.
+func wideDoc() string {
+	return "short\n" + strings.Repeat("x", 200) + "\nalso short"
+}
+
+// TestEditorHorizontalWheel: the horizontal wheel buttons a trackpad swipe emits browse
+// sideways without moving the caret, floored at 0 and bounded by the widest line.
+func TestEditorHorizontalWheel(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(wideDoc())
+
+	wheel(s, sh, tea.MouseButtonWheelRight)
+	if s.scrX != editorHWheelStep {
+		t.Fatalf("wheel right → scrX %d, want %d", s.scrX, editorHWheelStep)
+	}
+	if s.curY != 0 || s.curX != 0 {
+		t.Fatalf("the horizontal wheel must not move the caret, got (%d,%d)", s.curY, s.curX)
+	}
+	if s.scrY != 0 {
+		t.Fatalf("the horizontal wheel must not scroll vertically, scrY = %d", s.scrY)
+	}
+
+	wheel(s, sh, tea.MouseButtonWheelLeft)
+	wheel(s, sh, tea.MouseButtonWheelLeft) // past the left edge: clamps
+	if s.scrX != 0 {
+		t.Fatalf("wheel left past the edge → scrX %d, want 0", s.scrX)
+	}
+
+	// Right past the end of the widest line: scrX stops one column past its last cell,
+	// where clampScroll would park it for a caret at end-of-line.
+	want := 200 - s.contentW() + 1
+	if got := s.maxScrollX(); got != want {
+		t.Fatalf("maxScrollX = %d, want %d (widest - contentW + 1)", got, want)
+	}
+	for i := 0; i < 60; i++ {
+		wheel(s, sh, tea.MouseButtonWheelRight)
+	}
+	if s.scrX != want {
+		t.Fatalf("wheel right at the end → scrX %d, want %d", s.scrX, want)
+	}
+	// Bounded, not blank: the window still lands on text rather than past the line.
+	if row := strings.Split(s.body(), "\n")[1]; !strings.Contains(row, "x") {
+		t.Fatalf("the fully-scrolled window shows no text: %q", row)
+	}
+	assertRowGeometry(t, s, "scrolled fully right")
+
+	// The router re-lays out after every message; the browse position must survive it.
+	s.SetSize(sh, 80, 20)
+	if s.scrX != want {
+		t.Fatalf("SetSize undid the horizontal scroll: scrX %d, want %d", s.scrX, want)
+	}
+
+	// The caret sits far left of the view; one arrow snaps the view back to it. Landing
+	// ON the caret's cell rather than at column 0 is clampScroll's "just enough" rule.
+	s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+	if s.curX != 1 || s.scrX != 1 {
+		t.Fatalf("right with the caret off-screen → (curX %d, scrX %d), want (1, 1)", s.curX, s.scrX)
+	}
+}
+
+// TestEditorAltWheelHorizontal: ⌥ turns the vertical wheel sideways, for the terminals
+// and mice that never emit the horizontal buttons. Without ⌥ it stays vertical.
+func TestEditorAltWheelHorizontal(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent(wideDoc())
+
+	altWheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrX != editorHWheelStep || s.scrY != 0 {
+		t.Fatalf("alt+wheel down → (scrX %d, scrY %d), want (%d, 0)", s.scrX, s.scrY, editorHWheelStep)
+	}
+	altWheel(s, sh, tea.MouseButtonWheelUp)
+	if s.scrX != 0 {
+		t.Fatalf("alt+wheel up → scrX %d, want 0", s.scrX)
+	}
+
+	// The plain wheel is untouched: vertical only, scrX left alone.
+	s.setContent(longDoc())
+	wheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrY != editorWheelStep || s.scrX != 0 {
+		t.Fatalf("plain wheel down → (scrY %d, scrX %d), want (%d, 0)", s.scrY, s.scrX, editorWheelStep)
+	}
+}
+
+// TestEditorHorizontalWheelSuppressed: the horizontal wheel obeys the same guards as the
+// vertical one — an unfocused pane must not roll — and wrap leaves nothing to roll to.
+func TestEditorHorizontalWheelSuppressed(t *testing.T) {
+	s, sh := newPaneEditor(EditorOpts{})
+	s.setContent(wideDoc())
+
+	s.SetFocused(false)
+	wheel(s, sh, tea.MouseButtonWheelRight)
+	altWheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrX != 0 {
+		t.Fatalf("an unfocused pane must not scroll sideways, scrX = %d", s.scrX)
+	}
+
+	s.SetFocused(true)
+	wheel(s, sh, tea.MouseButtonWheelRight)
+	if s.scrX != editorHWheelStep {
+		t.Fatalf("focused wheel right → scrX %d, want %d", s.scrX, editorHWheelStep)
+	}
+
+	// Wrapped, every cell of a line is on screen already and renderWrappedRow windows on
+	// the chunk start, so scrX is inert — the gesture is a no-op and the position it had
+	// unwrapped is carried across untouched.
+	before := s.scrX
+	s.ToggleWrap()
+	wheel(s, sh, tea.MouseButtonWheelRight)
+	altWheel(s, sh, tea.MouseButtonWheelDown)
+	if s.scrX != before {
+		t.Fatalf("wrapped, the horizontal wheel must be a no-op: scrX %d, want %d", s.scrX, before)
+	}
+	// No assertRowGeometry here: an embedded pane already renders gutter() cells wider
+	// than s.w with scrX at 0 (body prepends the inset pad that textW never subtracts),
+	// so the invariant is broken before the wheel ever runs. TestEditorHorizontalWheel
+	// asserts it on the unembedded editor instead.
+	s.ToggleWrap()
+	if s.scrX != before {
+		t.Fatalf("unwrapping lost the horizontal position: scrX %d, want %d", s.scrX, before)
+	}
+}
+
 // TestEditorScrollbar: a buffer taller than the viewport draws a proportional
 // scrollbar in the rightmost column — a thumb sized to the viewport's share of the
 // buffer, placed by scrY — and the text window narrows one column so the caret

@@ -3,6 +3,7 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -13,6 +14,56 @@ import (
 func (s *EditorScreen) scrollLines(delta int) {
 	s.scrY += delta
 	s.clampScrollBounds()
+}
+
+// wheel routes one wheel notch. The vertical pair turns sideways while ⌥ is held: the
+// terminals that matter claim ctrl+wheel for their own font zoom and shift+wheel for
+// bypassing mouse reporting, so alt is the one modifier that reaches the app. A
+// trackpad's horizontal swipe arrives as its own button and needs no modifier at all.
+func (s *EditorScreen) wheel(m tea.MouseMsg) {
+	switch m.Button {
+	case tea.MouseButtonWheelUp:
+		if m.Alt {
+			s.scrollCells(-editorHWheelStep)
+		} else {
+			s.scrollLines(-editorWheelStep)
+		}
+	case tea.MouseButtonWheelDown:
+		if m.Alt {
+			s.scrollCells(editorHWheelStep)
+		} else {
+			s.scrollLines(editorWheelStep)
+		}
+	case tea.MouseButtonWheelLeft:
+		s.scrollCells(-editorHWheelStep)
+	case tea.MouseButtonWheelRight:
+		s.scrollCells(editorHWheelStep)
+	}
+}
+
+// scrollCells rolls the horizontal window without moving the caret, as scrollLines does
+// vertically. Wrapped, there is nowhere to roll to: soft wrap puts every cell of a line
+// on screen already, and renderWrappedRow windows on the chunk's start rather than scrX.
+func (s *EditorScreen) scrollCells(delta int) {
+	if s.wrap {
+		return
+	}
+	s.scrX += delta
+	s.clampScrollBounds()
+}
+
+// maxScrollX is how far right browse mode may roll: one column past the widest line,
+// which is exactly where clampScroll parks scrX when the caret sits at the end of that
+// line. Any tighter and the two clamps would fight — the bounds clamp would pull the
+// caret back under the overflow marker on every wheel tick.
+func (s *EditorScreen) maxScrollX() int {
+	widest := 0
+	for _, line := range s.lines {
+		if c := cellOfCol(line, len(line)); c > widest {
+			widest = c
+		}
+	}
+	return max(widest-s.contentW()+1, 0)
 }
 
 // clampScrollBounds keeps the scroll offsets inside the buffer WITHOUT chasing the
@@ -29,6 +80,14 @@ func (s *EditorScreen) clampScrollBounds() {
 	}
 	if s.scrX < 0 {
 		s.scrX = 0
+	}
+	// Wrapped, scrX is inert, so it is left alone: unwrapping should restore the
+	// horizontal position wrapping suspended. At 0 there is nothing to bound either, and
+	// skipping the measurement there keeps ordinary editing off a whole-buffer scan.
+	if !s.wrap && s.scrX > 0 {
+		if m := s.maxScrollX(); s.scrX > m {
+			s.scrX = m
+		}
 	}
 }
 
