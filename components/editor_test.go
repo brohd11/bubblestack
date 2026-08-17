@@ -931,6 +931,42 @@ func TestEditorLoadAndDirty(t *testing.T) {
 	}
 }
 
+// TestEditorSetTextSuppressesTheInitRead: SetText is a load a host performs itself, so
+// Init must not then read the file back over it. The suppression is the whole point —
+// Init's read returns a message, and a message reaches this editor only while it is the
+// top screen, so a host that is about to push something over it seeds the buffer instead
+// of racing a read whose result would be dropped.
+func TestEditorSetTextSuppressesTheInitRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(path, []byte("on disk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, sh := newEditor(EditorOpts{Path: path})
+	s.SetText("seeded")
+	if cmd := s.Init(sh); cmd != nil {
+		t.Fatal("Init must dispatch no read once the buffer has been seeded")
+	}
+	if got := buffer(s); got != "seeded" {
+		t.Fatalf("buffer = %q, want the seeded text", got)
+	}
+
+	// A load, not an edit: clean, with nothing behind it to undo back to.
+	if s.Dirty() {
+		t.Error("a seeded buffer must be clean — nothing has been typed into it")
+	}
+	if len(s.undoStack) != 0 {
+		t.Errorf("a seeded buffer must carry no undo history, got %d entries", len(s.undoStack))
+	}
+
+	// Called AFTER Init it is an ordinary buffer swap — the flag is already set, so
+	// there is nothing left for it to suppress.
+	s.SetText("replaced")
+	if got := buffer(s); got != "replaced" {
+		t.Fatalf("buffer = %q, want the replacement", got)
+	}
+}
+
 // TestEditorExitCleanPops: ctrl+x on an unmodified buffer pops without a prompt.
 func TestEditorExitCleanPops(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})

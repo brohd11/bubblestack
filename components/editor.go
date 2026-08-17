@@ -462,6 +462,23 @@ func (s *EditorScreen) Text() string {
 	return b.String()
 }
 
+// SetText replaces the buffer with content, exactly as a completed load does: the caret
+// returns to the top, the undo history is dropped and the buffer is clean (setContent).
+//
+// It also marks the editor LOADED, which is the point of it. Init's read comes back as an
+// editorLoadedMsg, and the router delivers a message only to the TOP screen — so a host
+// that pushes something over this editor before that read lands loses it, leaving an empty
+// buffer pointed at a file that is not empty. A host already holding the document (it read
+// the file to show it somewhere else) seeds the buffer here instead, and Init then
+// dispatches no read at all rather than one whose result goes nowhere.
+//
+// Setting the flag first matters only when this runs BEFORE Init, which is the case it
+// exists for; afterwards Init has already set it.
+func (s *EditorScreen) SetText(content string) {
+	s.loaded = true
+	s.setContent(content)
+}
+
 // SetPaneOrigin implements PaneOriginer: ScreenPanel forwards the host layout's
 // rendered origin, which the save-as overlay anchors from (see saveAsEdit).
 func (s *EditorScreen) SetPaneOrigin(x, y int) {
