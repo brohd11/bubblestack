@@ -296,15 +296,32 @@ func TestDialogOnKey(t *testing.T) {
 	}
 }
 
+// TestDialogCrumbLabel pins the split the Overlay flag makes: the confirm REPLACES the
+// screen below it and gets a breadcrumb segment, the popup is drawn OVER one and gets
+// none — the stance MenuScreen and LineEditScreen already take.
 func TestDialogCrumbLabel(t *testing.T) {
-	if got := (&DialogScreen{Overlay: true, Title: "Pop"}).CrumbLabel(false); got != "Pop" {
-		t.Errorf("overlay CrumbLabel should be the Title, got %q", got)
+	// Both crumb fields are ignored on an overlay, not just left unset: they are the
+	// ones a caller sets out of habit, and either leaking would put the segment back.
+	for _, d := range []*DialogScreen{
+		{Overlay: true, Title: "Pop"},
+		{Overlay: true, Crumb: "Pop"},
+		{Overlay: true, CrumbShort: "P"},
+	} {
+		if got := d.CrumbLabel(false); got != "" {
+			t.Errorf("an overlay must contribute no segment, got %q", got)
+		}
+		if got := d.CrumbLabel(true); got != "" {
+			t.Errorf("an overlay must contribute no short segment, got %q", got)
+		}
 	}
 	if got := (&DialogScreen{}).CrumbLabel(false); got != "Conf" {
 		t.Errorf("confirm CrumbLabel default should be Conf, got %q", got)
 	}
 	if got := (&DialogScreen{Crumb: "X"}).CrumbLabel(false); got != "X" {
 		t.Errorf("confirm CrumbLabel should use Crumb, got %q", got)
+	}
+	if got := (&DialogScreen{Crumb: "X", CrumbShort: "S"}).CrumbLabel(true); got != "S" {
+		t.Errorf("confirm CrumbLabel(short) should use CrumbShort, got %q", got)
 	}
 }
 

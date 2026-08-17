@@ -15,16 +15,17 @@ import (
 //     confirms.
 //   - Overlay true (a popup): the router draws it as a centered modal over the screen
 //     below it (core.Overlayer), rendered via core.PopupBox with its hints inside the
-//     box; the background screen's help bar stays.
+//     box; the background screen's help bar stays, and so does its breadcrumb — a popup
+//     contributes no segment of its own (see CrumbLabel).
 //
-// Either way it is context-agnostic: it snapshots a breadcrumb and renders its body
-// via a closure, and the OnYes/OnKey closures (supplied by the caller) decide what
-// happens — it names no domain type. OnYes runs on confirm (y/enter); No (esc/n) pops
-// it; any other key is handed to OnKey when set.
+// Either way it is context-agnostic: it renders its body via a closure, and the
+// OnYes/OnKey closures (supplied by the caller) decide what happens — it names no domain
+// type. OnYes runs on confirm (y/enter); No (esc/n) pops it; any other key is handed to
+// OnKey when set.
 type DialogScreen struct {
 	Title      string // in-body title bar (confirm) / accent line (overlay); omitted ⇒ none
-	Crumb      string // breadcrumb segment (CrumbLabel); omitted ⇒ contributes none
-	CrumbShort string // optional short breadcrumb-bar segment; defaults to Crumb/Title
+	Crumb      string // CONFIRM ONLY: breadcrumb segment (CrumbLabel); omitted ⇒ "Conf"
+	CrumbShort string // CONFIRM ONLY: optional short breadcrumb-bar segment; defaults to Crumb
 	Render     func(*core.Shared) string
 	OnYes      func(*core.Shared) core.Action
 	OnKey      func(*core.Shared, string) core.Action // handles keys other than the reserved confirm/cancel keys
@@ -70,12 +71,16 @@ func (s *DialogScreen) QuitGate(sh *core.Shared) (core.Action, bool) {
 // over the screen below it (Overlay) rather than full-screen.
 func (s *DialogScreen) IsOverlay() bool { return s.Overlay }
 
-// CrumbLabel contributes the dialog's breadcrumb segment. A confirm uses its Crumb
-// (default "Conf"); a popup uses its Title (no fallback), since a popup sets Title
-// rather than Crumb.
+// CrumbLabel contributes the dialog's breadcrumb segment — for the CONFIRM shape only,
+// which uses its Crumb (default "Conf"). An overlay returns "", which crumbTrail skips.
+//
+// That is the stance MenuScreen (menu.go) and LineEditScreen (lineedit.go) already take,
+// and the rule behind all three: a screen that REPLACES the screen below it is somewhere
+// you navigated to and gets a segment; a box drawn OVER one is not, and a trail that grew
+// a segment each time a popup opened would flicker a step in and out under it.
 func (s *DialogScreen) CrumbLabel(short bool) string {
 	if s.Overlay {
-		return crumbSeg(short, s.CrumbShort, s.Title, "")
+		return ""
 	}
 	return crumbSeg(short, s.CrumbShort, s.Crumb, "Conf")
 }
