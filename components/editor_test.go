@@ -1215,6 +1215,43 @@ func TestEditorSaveAs(t *testing.T) {
 	}
 }
 
+// TestEditorSaveAsExpandsHome: a "~/..." name at the filename prompt resolves to the
+// home directory rather than to a directory literally named "~" under the CWD — the
+// buffer takes the RESOLVED path, so the write, the title and the path reported to
+// OnSaved all name the same file. A "~user" form is refused: nothing is written, the
+// buffer keeps the path it had, and no "~user" directory is left behind.
+func TestEditorSaveAsExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var saved string
+	s, sh := newEditor(EditorOpts{OnSaved: func(_ *core.Shared, p string) core.Action {
+		saved = p
+		return core.Action{}
+	}})
+	typeRunes(s, 'h', 'i')
+
+	s.saveAsEdit(sh).OnDone(sh, "~/notes.md")
+	want := filepath.Join(home, "notes.md")
+	if s.path != want || s.title != "notes.md" {
+		t.Fatalf("~/notes.md should resolve to %q, got path %q title %q", want, s.path, s.title)
+	}
+	s.Update(sh, s.saveCmd()())
+	if b, err := os.ReadFile(want); err != nil || string(b) != "hi" {
+		t.Fatalf("the expanded path should hold the buffer: %q, err = %v", b, err)
+	}
+	if saved != want {
+		t.Fatalf("OnSaved should report the expanded path, got %q", saved)
+	}
+
+	s.saveAsEdit(sh).OnDone(sh, "~someone/notes.md")
+	if s.path != want {
+		t.Fatalf("a refused ~user name must not touch the path, got %q", s.path)
+	}
+	if _, err := os.Lstat("~someone"); err == nil {
+		t.Fatal(`a refused ~user name must not create a "~someone" directory`)
+	}
+}
+
 // longDoc is a 100-line buffer, taller than any test viewport.
 func longDoc() string {
 	return strings.TrimSuffix(strings.Repeat("x\n", 100), "\n")

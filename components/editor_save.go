@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/goutil/strutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,6 +26,13 @@ import (
 // nothing happened. A relative name resolves against the process CWD, nano's rule.
 // saveExits, set by the caller before the push, is what decides where the write lands.
 //
+// A leading "~" is resolved here, the one place the user's typed text enters, so the
+// buffer takes the RESOLVED path: unexpanded it would reach os.WriteFile as a literal
+// directory named "~" under the CWD, and the title, the prefill of the next ctrl+s and
+// the path handed to OnSaved would all name a file that isn't where the user asked for
+// it. A "~user" form is refused rather than guessed (strutil.ExpandHome's rule) and the
+// write is abandoned — writing it literally is the very surprise this resolves.
+//
 // The anchor covers the bottom of just this editor: embedded, the host layout
 // pushes the pane's absolute origin and the box spans the pane's width (SetPaneOrigin);
 // standalone there is no pane, so the box spans the full terminal width at the
@@ -34,10 +42,16 @@ func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
 	x, y, w, h := s.paneGeometry(sh)
 	edit := NewLineEdit("file name to write", x, y+max(h-2, 0), w,
 		func(_ *core.Shared, name string) core.Action {
-			if strings.TrimSpace(name) == "" {
+			name = strings.TrimSpace(name)
+			if name == "" {
 				return core.Pop()
 			}
-			s.applySaveName(name)
+			path, err := strutil.ExpandHome(name)
+			if err != nil {
+				// The same wording editorSavedMsg reports a failed write with.
+				return core.Seq(core.Pop(), core.SetStatus("save failed: "+err.Error()))
+			}
+			s.applySaveName(path)
 			return core.Seq(core.Pop(), core.Action{Cmd: s.saveCmd()})
 		}, nil)
 	if s.path != "" {
