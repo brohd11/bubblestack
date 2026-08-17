@@ -8,7 +8,8 @@ import (
 )
 
 // Cursor movement, mouse gestures and selection for EditorScreen: arrow/click positioning,
-// the drag and multi-click (word/line) selections, and the selection range itself.
+// the drag and multi-click (word/line) selections, the shifted-motion and shift+click
+// selections, and the selection range itself.
 
 // ---------- cursor movement ----------
 
@@ -29,6 +30,13 @@ func (s *EditorScreen) moveRight() {
 		s.curY++
 		s.curX = 0
 	}
+	s.wantX = s.curX
+}
+
+func (s *EditorScreen) moveHome() { s.curX, s.wantX = 0, 0 }
+
+func (s *EditorScreen) moveEnd() {
+	s.curX = len(s.lines[s.curY])
 	s.wantX = s.curX
 }
 
@@ -282,6 +290,113 @@ func (s *EditorScreen) cellEnd(p textPos) textPos {
 func posLess(a, b textPos) bool { return a.y < b.y || a.y == b.y && a.x < b.x }
 
 func (s *EditorScreen) selectionActive() bool { return posLess(s.selStart, s.selEnd) }
+
+// ---------- keyboard selection ----------
+
+// selectionAnchor is the FIXED end of the current selection — the one a shifted motion
+// pivots on. It is derived rather than stored, which is the whole reason a shifted key
+// can pick up a selection the mouse made: with no selection the caret is its own anchor,
+// so the first shifted key drops the anchor where the caret already stands; with one, the
+// caret is always sitting on an end (extendDrag, selectWordAt and selectLineAt all leave
+// it there), so the anchor is the OTHER end.
+//
+// A stored anchor field would be a second copy of that fact, and every mouse gesture
+// writing selStart/selEnd directly would have to remember to keep it honest.
+func (s *EditorScreen) selectionAnchor() textPos {
+	caret := textPos{s.curY, s.curX}
+	switch {
+	case !s.selectionActive():
+		return caret
+	case caret == s.selEnd:
+		return s.selStart
+	default:
+		return s.selEnd
+	}
+}
+
+// selectFrom sets the selection to the ordered range between anchor and the caret. A
+// caret back on its own anchor is no selection at all, and clearing there is what makes
+// a shift+→ that undoes a shift+← leave nothing highlighted — and what lets the next
+// shifted key re-anchor at that spot, since selectionAnchor reads an empty selection as
+// "anchor at the caret".
+//
+// clampScroll, not clampScrollBounds: a shifted motion is a caret move and the view has
+// to follow it, unlike a drag whose off-pane endpoints are clamped in place instead.
+func (s *EditorScreen) selectFrom(anchor textPos) {
+	caret := textPos{s.curY, s.curX}
+	switch {
+	case posLess(caret, anchor):
+		s.selStart, s.selEnd = caret, anchor
+	case posLess(anchor, caret):
+		s.selStart, s.selEnd = anchor, caret
+	default:
+		s.clearSelection()
+	}
+	s.clampScroll()
+}
+
+// extendSelection runs an ordinary caret move as a selection gesture: read the anchor
+// BEFORE the move (the move is what shifts the caret off it), then span the two.
+func (s *EditorScreen) extendSelection(move func()) {
+	anchor := s.selectionAnchor()
+	move()
+	s.selectFrom(anchor)
+}
+
+// selectMove returns the caret move a shifted motion chord extends the selection over,
+// or nil when k is not one of them.
+//
+// ctrl+shift+←/→ carries the word moves rather than the alt+shift+←/→ that would pair
+// with the editor's own alt+←/→: bubbletea has keycodes for the ctrl form (KeyCtrlShift*)
+// and none for the alt one, so alt+shift+← does not arrive as a distinct key at all.
+//
+// shift+↑/↓ are bound even though Apple Terminal strips the modifier off the vertical
+// arrows — there they arrive as a bare "up"/"down" and degrade to plain moves that clear
+// the selection. That is a graceful loss on one terminal, unlike the pane-navigation case
+// (core.Keys.PaneUp), where the same fact would have silently handed a reserved key to
+// the panel underneath and is why those stayed unbound.
+func (s *EditorScreen) selectMove(k string) func() {
+	switch k {
+	case "shift+left":
+		return s.moveLeft
+	case "shift+right":
+		return s.moveRight
+	case "shift+up":
+		return func() { s.moveVertical(-1) }
+	case "shift+down":
+		return func() { s.moveVertical(1) }
+	case "shift+home":
+		return s.moveHome
+	case "shift+end":
+		return s.moveEnd
+	case "ctrl+shift+left":
+		return s.moveWordBack
+	case "ctrl+shift+right":
+		return s.moveWordForward
+	}
+	return nil
+}
+
+// extendSelectionTo is the shift+click gesture: keep the anchor, put the caret on the
+// pointer. A press that maps to no buffer cell (the scrollbar column, the title bar) is
+// ignored, exactly as an ordinary press there is.
+//
+// The drag is left running from the same anchor so shift+click-and-drag keeps extending.
+// Both its ends are the caret position rather than the inclusive cell startDragAt uses,
+// which is what stops a keyboard extension and a mouse one from disagreeing about whether
+// the anchored character is itself selected.
+func (s *EditorScreen) extendSelectionTo(sh *core.Shared, x, y int) {
+	p, ok := s.positionAt(sh, x, y, false)
+	if !ok {
+		return
+	}
+	anchor := s.selectionAnchor()
+	s.clickCount = 0 // an extend is never a step in a multi-click run
+	s.curY, s.curX, s.wantX = p.y, p.x, p.x
+	s.selectFrom(anchor)
+	s.dragAnchor, s.dragAnchorEnd = anchor, anchor
+	s.dragging = true
+}
 
 func (s *EditorScreen) clearSelection() { s.selStart, s.selEnd = textPos{}, textPos{} }
 

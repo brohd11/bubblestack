@@ -9,8 +9,9 @@ import (
 )
 
 // Clipboard verbs for EditorScreen: the alt+c/alt+x/alt+v chords and the optional
-// right-click menu behind them. With no selection they act on the cursor's line, which is
-// what stands in for the keyboard selection this editor deliberately doesn't have.
+// right-click menu behind them. With no selection they act on the cursor's line — the
+// whole-line shorthand, kept for when nothing is highlighted; a selection (shifted
+// motions or the mouse) is what they act on otherwise.
 
 func copySelectionCmd(text string, cut bool) core.Action {
 	return core.Async(func() tea.Msg {
@@ -65,10 +66,10 @@ func (s *EditorScreen) copySelection(cut bool) core.Action {
 // write, whereas holding the deletion until the clipboard round trip returns would race
 // the buffer the user can go on editing.
 //
-// Without a selection the target is the whole current line, its newline included — the
-// keyboard has no way to select (selection is a mouse gesture here), so inert chords
-// would be the common case rather than the corner one. It is what an editor with the
-// same chords does, and it keeps a cut+paste a line move.
+// Without a selection the target is the whole current line, its newline included, rather
+// than an inert chord. It is what an editor with the same chords does, and it keeps a
+// cut+paste a line move — worth keeping now that shifted motions mean the caret is no
+// longer the only thing the keyboard can offer.
 func (s *EditorScreen) copyOrCut(cut bool) core.Action {
 	if s.selectionActive() {
 		text := s.selectedText()

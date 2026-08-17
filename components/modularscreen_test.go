@@ -164,21 +164,16 @@ func TestMouseDragStaysWithOriginatingPane(t *testing.T) {
 	}
 }
 
-// paneKey builds the tea.KeyMsg for a pane binding's first keycode.
+// paneKey builds the tea.KeyMsg for a pane binding's first keycode. Only PaneNext
+// carries one today; the rest are keyless (see core.Keys.PanePrev), and a test wanting
+// those drives cycleFocus or neighbor directly. Binding one is what makes the default
+// below fire, and adding its tea.KeyType here is the whole fix.
 func paneKey(t *testing.T, b key.Binding) tea.KeyMsg {
 	t.Helper()
 	if len(b.Keys()) == 0 {
 		t.Fatal("binding carries no keycodes")
 	}
 	switch k := b.Keys()[0]; k {
-	case "shift+up":
-		return tea.KeyMsg{Type: tea.KeyShiftUp}
-	case "shift+down":
-		return tea.KeyMsg{Type: tea.KeyShiftDown}
-	case "shift+left":
-		return tea.KeyMsg{Type: tea.KeyShiftLeft}
-	case "shift+right":
-		return tea.KeyMsg{Type: tea.KeyShiftRight}
 	case "shift+tab":
 		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	default:
@@ -187,10 +182,14 @@ func paneKey(t *testing.T, b key.Binding) tea.KeyMsg {
 	}
 }
 
-// TestPaneCycle walks the shift+←/→ cycle over the gote-shaped grid: two stacked
-// sidebar panels beside a single editor pane. The cycle runs in flat declaration
-// order (down column 0, then column 1), wraps at both ends, and skips panels that
-// aren't Focusable.
+// TestPaneCycle walks the pane cycle over the gote-shaped grid: two stacked sidebar
+// panels beside a single editor pane. The cycle runs in flat declaration order (down
+// column 0, then column 1), wraps at both ends, and skips panels that aren't Focusable.
+//
+// Forward goes through the real key; backward calls cycleFocus directly, because
+// PanePrev carries no keycodes now that the shift+arrows are the editor's selection keys
+// (core.Keys.PanePrev). The backward step is still live code, and wrapping is what makes
+// the forward-only binding sufficient — both are worth pinning either way.
 func TestPaneCycle(t *testing.T) {
 	a, b, c := &capturePanel{}, &capturePanel{}, &capturePanel{}
 	m := NewModularScreen([][]Slot{
@@ -202,7 +201,6 @@ func TestPaneCycle(t *testing.T) {
 	m.SetSize(sh, 80, 20)
 
 	next := paneKey(t, core.Keys.PaneNext)
-	prev := paneKey(t, core.Keys.PanePrev)
 
 	// Flat order is [a, b, <informational>, c]; the cycle visits 0, 1, 3.
 	for i, want := range []int{1, 3, 0, 1} {
@@ -212,7 +210,7 @@ func TestPaneCycle(t *testing.T) {
 		}
 	}
 	for i, want := range []int{0, 3, 1, 0} {
-		m.Update(sh, prev)
+		m.cycleFocus(-1)
 		if m.focus != want {
 			t.Fatalf("backward step %d: focus = %d, want %d", i+1, m.focus, want)
 		}
@@ -225,20 +223,16 @@ func TestPaneCycle(t *testing.T) {
 	}
 }
 
-// TestPaneCycleOnShiftTab pins shift+tab as a full peer of shift+→ rather than a
-// convenience that defers to the panel: it is the second keycode on PaneNext, so it
-// walks the same cycle and — the part that distinguishes it from a capture-aware
-// alias — takes the key off a capturing panel too, even though that panel would
-// otherwise use shift+tab itself (an embedded editor types a tab with it, a form
-// moves to the previous field).
+// TestPaneCycleOnShiftTab pins shift+tab as the whole pane-navigation scheme: it is the
+// ONLY keycode on PaneNext, so a grid is navigable through it alone, and it is not a
+// capture-aware alias — it takes the key off a capturing panel too, even though that
+// panel would otherwise use shift+tab itself (an embedded editor types a tab with it, a
+// form moves to the previous field).
 func TestPaneCycleOnShiftTab(t *testing.T) {
-	if !core.MatchKey("shift+tab", core.Keys.PaneNext) {
-		t.Fatal("shift+tab must be a PaneNext keycode")
-	}
-	if core.Keys.PaneNext.Keys()[0] != "shift+right" {
-		// Hint labels a binding with its first keycode; a reorder would swap the
-		// always-visible "⇧←/⇧→ panes" bar entry for "⇧tab".
-		t.Fatalf("shift+right must lead PaneNext, got %q", core.Keys.PaneNext.Keys()[0])
+	if got := core.Keys.PaneNext.Keys(); len(got) != 1 || got[0] != "shift+tab" {
+		// The rest of the pane binds are keyless, so this one key is the only way round
+		// a grid from the keyboard, and PaneHint's bar entry reads off it.
+		t.Fatalf("PaneNext must carry shift+tab and nothing else, got %q", got)
 	}
 
 	editor := &capturePanel{capturing: true}
@@ -337,7 +331,9 @@ func TestPaneNavEscapesCapturingPanel(t *testing.T) {
 	if len(editor.got) != 1 {
 		t.Fatal("tab is the panel's key now: a capturing panel must receive it")
 	}
-	m.Update(sh, paneKey(t, core.Keys.PanePrev))
+	// Two panes, so the forward cycle wraps off the editor straight back to the sidebar —
+	// which is exactly why a forward-only binding is enough to escape.
+	m.Update(sh, paneKey(t, core.Keys.PaneNext))
 	if m.focus != 0 {
 		t.Fatalf("a pane key must escape a capturing panel, focus stayed at %d", m.focus)
 	}

@@ -575,7 +575,11 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		case tea.MouseActionPress:
 			switch m.Button {
 			case tea.MouseButtonLeft:
-				s.pressSelection(sh, m.X, m.Y, time.Now())
+				if editorExtendClick(m) {
+					s.extendSelectionTo(sh, m.X, m.Y)
+				} else {
+					s.pressSelection(sh, m.X, m.Y, time.Now())
+				}
 			case tea.MouseButtonRight:
 				if s.contextMenu {
 					return s, s.pressContext(sh, m.X, m.Y)
@@ -605,6 +609,14 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	}
 	return s, core.Action{}
 }
+
+// editorExtendClick reports whether a left press EXTENDS the selection rather than
+// starting a fresh one. It is a predicate of its own, on one line, on purpose: shift is
+// the modifier terminals reserve for bypassing mouse reporting to run their own text
+// selection (the same fact that put the wheel's sideways mode on alt — see wheel), so on
+// many terminals this press never reaches us at all. If that proves too many of them,
+// moving the gesture to alt is this line and nothing else.
+func editorExtendClick(m tea.MouseMsg) bool { return m.Shift }
 
 // copySelectionCmd is the clipboard write the menu's Copy and Cut rows issue. The write
 // travels in the cmd lane because atotto shells out to pbcopy/xclip, which must never run
@@ -651,6 +663,18 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		return s, s.copyOrCut(true)
 	case "alt+v":
 		return s, pasteClipboardCmd(s)
+	}
+	// The shifted motions are matched HERE, above the selection pre-pass below: that
+	// switch clears the selection for every UNSHIFTED move, so extending one has to be
+	// decided before the code that would throw it away. They are above the editorEditKey
+	// gate too — they touch no text, so they take no undo step — and above the keyHandler
+	// hook, because a selection gesture is not file-type business.
+	//
+	// The early return skips the tail's wrapDirty (nothing moved in the buffer), which is
+	// why selectFrom does its own clampScroll.
+	if move := s.selectMove(k); move != nil {
+		s.extendSelection(move)
+		return s, core.Action{}
 	}
 	if editorEditKey(k, m) {
 		before, seq := s.snapshot(), s.editSeq
@@ -746,10 +770,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	case "alt+right", "ctrl+right", "alt+f":
 		s.moveWordForward()
 	case "home", "ctrl+a":
-		s.curX, s.wantX = 0, 0
+		s.moveHome()
 	case "end", "ctrl+e":
-		s.curX = len(s.lines[s.curY])
-		s.wantX = s.curX
+		s.moveEnd()
 	default:
 		// A single typed opening delimiter brings its closer with it and leaves the caret
 		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
@@ -807,6 +830,9 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
+		key.NewBinding(key.WithKeys("shift+left", "shift+right", "shift+up", "shift+down",
+			"shift+home", "shift+end", "ctrl+shift+left", "ctrl+shift+right"),
+			key.WithHelp("shift+←→", "select")),
 		// Written "alt+", not "⌥": the keycodes are alt+ and every other modifier in
 		// these bars spells itself out (ctrl+s, shift+tab), so the option glyph was the
 		// one entry a reader had to translate. A host listing these alongside its own

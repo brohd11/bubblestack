@@ -102,9 +102,9 @@ var Keys = KeyMap{
 	Yes: key.NewBinding(key.WithKeys("enter", "y", "Y", "e")),
 	No:  key.NewBinding(key.WithKeys("esc", "n", "N", "c")),
 
-	// The shift+arrows used to alias these; they are the pane-navigation keys now
-	// (see PaneLeft et al.), which the router must leave alone so they reach the
-	// screen. [ ] and z x remain.
+	// The shift+arrows used to alias these. They belong to the focused screen now —
+	// an editor selects text with them (components.EditorScreen.selectMove) — so the
+	// router must leave them alone rather than claim them here. [ ] and z x remain.
 	NextTab:      key.NewBinding(key.WithKeys("]", "x")),
 	PrevTab:      key.NewBinding(key.WithKeys("[", "z")),
 	ToggleOutput: key.NewBinding(key.WithKeys("O")),
@@ -117,23 +117,27 @@ var Keys = KeyMap{
 	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
 	OpenDir:      key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "open dir")),
 
-	// shift+tab is a second forward keycode: the shift+arrows are a two-handed reach,
-	// and it is the one shift combo every terminal delivers intact (as backtab). There
-	// is no backtab-equivalent to pair it with, so the cycle is forward-only on tab —
-	// shift+← stays the way back.
+	// shift+tab is the whole scheme now, and the cycle is FORWARD-ONLY: it wraps at both
+	// ends, so every pane is still reachable by stepping on round. The shift+arrows that
+	// used to carry it went to the editor, which selects text with them — a reserved key
+	// costs every panel that key on every screen, and text selection is worth more on
+	// shift+←/→ than a second way round a cycle that already wraps.
 	//
-	// It therefore SHADOWS PrevField and the editor's tab alias inside a ModularScreen:
+	// PanePrev keeps its field and its moveFocus case rather than being deleted: like the
+	// directional binds below it is live code with no keycodes on it, and giving the
+	// backward step a key again is a WithKeys list here and nothing else.
+	//
+	// shift+tab is also the one shift combo every terminal delivers intact (as backtab),
+	// which is what makes it safe as the only pane key.
+	//
+	// It SHADOWS PrevField and the editor's tab alias inside a ModularScreen:
 	// moveFocus consumes pane keys above the capture gate, so a form or editor sitting
 	// in a pane never sees it. That cost was weighed and taken — a form keeps ↑/↓ for
 	// field moves and the editor keeps bare tab for indent, while a reserved key that
 	// only sometimes moves panes would be worse than one that always does. Outside a
 	// ModularScreen nothing claims these, so a pushed form behaves as it always did.
-	//
-	// shift+right leads the list on purpose: Hint labels a binding with its FIRST
-	// keycode, so PaneHint stays "⇧←/⇧→ panes" in the always-visible bar and ⇧tab
-	// surfaces in full help (FullHint) instead of widening every bar.
-	PaneNext: key.NewBinding(key.WithKeys("shift+right", "shift+tab")),
-	PanePrev: key.NewBinding(key.WithKeys("shift+left")),
+	PaneNext: key.NewBinding(key.WithKeys("shift+tab")),
+	PanePrev: key.NewBinding(),
 
 	// The directional moves are implemented (see ModularScreen.neighbor) but carry
 	// no keycodes yet, so they match nothing: MatchKey against an empty binding is
@@ -145,7 +149,10 @@ var Keys = KeyMap{
 	// panel instead, which reads as the feature being broken. Whatever replaces
 	// them has to be something a stock terminal delivers unmodified; shift+tab
 	// (above) is the proof that such keys exist, and ctrl+letter combos are the
-	// realistic space for the remaining three.
+	// realistic space for them.
+	//
+	// The horizontal pair has no fallback to shift+←/→ either: those are the
+	// editor's selection keys now, so all four directions need somewhere new.
 	PaneUp:    key.NewBinding(),
 	PaneDown:  key.NewBinding(),
 	PaneLeft:  key.NewBinding(),
