@@ -74,11 +74,16 @@ func SelectedTitle(l *list.Model) string { return itemTitle(l.SelectedItem()) }
 // SelectByTitle moves the cursor to the first row whose Title matches title (a
 // no-op for an empty title or no match), so a caller can keep the cursor on the
 // same row after SetItems reorders the list.
+//
+// It scans the VISIBLE rows, because that is the set Select indexes: under a filter,
+// walking l.Items() would hand Select a position in the unfiltered slice and land the
+// cursor somewhere unrelated — or past the end, where the selection reads as nil and
+// the page renders blank. (The same trap WrapNav carried.)
 func SelectByTitle(l *list.Model, title string) {
 	if title == "" {
 		return
 	}
-	for i, it := range l.Items() {
+	for i, it := range l.VisibleItems() {
 		if itemTitle(it) == title {
 			l.Select(i)
 			return
@@ -93,7 +98,9 @@ func SelectByTitle(l *list.Model, title string) {
 func CycleSort(l *list.Model, mode *SortMode, modes []SortMode, base string, items func(SortMode) []list.Item) {
 	sel := SelectedTitle(l)
 	*mode = NextSort(*mode, modes)
-	l.SetItems(items(*mode))
+	// SetListItems, not l.SetItems: the latter drops the filter's recompute cmd, which
+	// leaves a filtered list rendering empty after a re-sort.
+	SetListItems(l, items(*mode))
 	SelectByTitle(l, sel)
 	l.Title = SortTitle(base, *mode)
 }

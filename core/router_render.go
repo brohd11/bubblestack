@@ -220,9 +220,13 @@ func (r Router) frame(s Screen) string {
 	below := r.belowChrome(mask)
 	help := r.helpViewFor(s, mask)
 	// Pad the body so the status/output chrome and the always-visible help bar sit
-	// at the very bottom.
-	if pad := (sh.height - vheight(chrome) - vheight(below) - vheight(help)) - lipgloss.Height(body); pad > 0 {
+	// at the very bottom. Clamp an overflowing body to the same allocation so the
+	// terminal renderer never has to recover by dropping rows from the frame's top.
+	avail := sh.height - vheight(chrome) - vheight(below) - vheight(help)
+	if pad := avail - lipgloss.Height(body); pad > 0 {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, Blanks(pad))
+	} else if pad < 0 {
+		body = lipgloss.NewStyle().MaxHeight(avail).Render(body)
 	}
 	var parts []string
 	if chrome != "" {

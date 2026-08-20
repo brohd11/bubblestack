@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ListPanel is a picker-style list.Model packaged as a ModularScreen panel — the
@@ -29,7 +32,13 @@ type ListPanel struct {
 	title    string // kept for the border legend (the list's own title bar is off when bordered)
 	bordered bool   // ListPanelOpts.Border: draw the shared frame
 	width    int    // outer cell width, for the frame's inner run
+	height   int    // outer cell height, so the list can be re-sized when the filter line appears
 	itemRows int    // delegate height + spacing; drives mouse and overlay geometry
+
+	// ownFilter: this panel draws the filter line itself (SetShowFilter is off on the
+	// list), so the header costs a row only while a filter is live. Compact panels only —
+	// see NewCompactListPanel.
+	ownFilter bool
 
 	// Marquee state, live only on a CompactListPanel (see startMarquee). marquee is the
 	// cell offset core.CompactDelegate reads through a pointer; marqueeID identifies this
@@ -84,6 +93,21 @@ var _ Panel = (*CompactListPanel)(nil)
 // row marquees whenever its name plus suffix is wider than the column — see startMarquee.
 func NewCompactListPanel(items []list.Item, title string, opts ListPanelOpts) *CompactListPanel {
 	p := newListPanel(core.NewCompactList, items, title, opts, compactListItemRows)
+	// The panel draws the filter itself (filterLine), so bubbles draws no header at all:
+	// with the title off too (Border blanks it) that is the empty row a compact sidebar
+	// used to carry above its first item, and the second row the filter's own bottom
+	// padding used to add. SetShowFilter is presentational ONLY — the filter still runs,
+	// since bubbles dispatches on filterState alone (list.Model.Update).
+	p.ownFilter = true
+	p.list.SetShowFilter(false)
+	// bubbles forces MarginTop(1) onto pagination whenever a delegate has zero
+	// spacing. Inline rendering suppresses that margin while keeping the dots; add
+	// back PaginationStyle's left padding through its transform so only the blank
+	// ROW disappears and the paginator stays aligned exactly where it was.
+	paginationIndent := strings.Repeat(" ", p.list.Styles.PaginationStyle.GetPaddingLeft())
+	p.list.Styles.PaginationStyle = p.list.Styles.PaginationStyle.
+		Inline(true).
+		Transform(func(s string) string { return paginationIndent + s })
 	p.startMarquee()
 	return &CompactListPanel{p}
 }
@@ -251,8 +275,13 @@ func (p *ListPanel) Focus()        { p.focused = true }
 func (p *ListPanel) Blur()         { p.focused = false }
 func (p *ListPanel) Focused() bool { return p.focused }
 
-// SetItems replaces the rows (e.g. a refresh after the detail panel reloads).
-func (p *ListPanel) SetItems(items []list.Item) { p.list.SetItems(items) }
+// SetItems replaces the rows (e.g. a refresh after the detail panel reloads), keeping
+// any live filter applied to the new set — see SetListItems for why that needs saying.
+// The re-size covers the filter collapsing to nothing on the new rows.
+func (p *ListPanel) SetItems(items []list.Item) {
+	SetListItems(&p.list, items)
+	p.sizeList()
+}
 
 // List exposes the underlying list model for the read access the panel API
 // doesn't cover (SelectedItem, Index, FilterState).
@@ -265,7 +294,8 @@ func (p *ListPanel) Capturing() bool { return p.list.FilterState() == list.Filte
 
 // UpdatePanel runs the picker dispatch (listDispatch) with the one host-owned key
 // carved out first: Back is the screen's pop, so it is not consumed here (contrast
-// PickerScreen, which binds Back to Pop itself). While filtering, esc stays —
+// PickerScreen, which binds Back to Pop itself) — unless a filter is APPLIED, which
+// esc clears before the pop is reached. While filtering, esc stays —
 // listDispatch's filtering branch feeds it to the list, which cancels the filter.
 // tab needs no carve-out now that the host owns no such key: unfiltered the list
 // binds nothing to it, and while filtering bubbles takes it as "accept the filter".
@@ -282,6 +312,15 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 	}
 	if km, ok := msg.(tea.KeyMsg); ok {
 		if k := km.String(); core.MatchKey(k, core.Keys.Back) && !p.Capturing() {
+			// An APPLIED filter is the one thing back must clear before it pops: the
+			// carve-out below hands esc to the host, so bubbles' own ClearFilter binding
+			// (live in exactly this state) could never be reached, leaving a filtered
+			// list with no way out of the filter but to open it and empty it by hand.
+			if p.list.FilterState() == list.FilterApplied {
+				p.list.ResetFilter()
+				p.sizeList()
+				return core.Action{}, true
+			}
 			return core.Action{}, false
 		}
 	}
@@ -305,13 +344,18 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		return core.Action{}, false
 	}
 	// ModularScreen has already translated a mouse event into panel-local
-	// coordinates. A bordered panel still has its own top frame row before the
-	// inner list, so remove that row as listDispatchRows does its list-local math.
-	mouseYOff := 0
-	if p.bordered {
-		mouseYOff = 1
+	// coordinates. The panel's own chrome — the top frame row, and the filter line
+	// when one is live — still sits above the list, so remove it before
+	// listDispatchRows does its list-local math.
+	rows := p.filterRows()
+	act := p.marqueeArm(listDispatchRows(sh, &p.list, msg, p.chromeRows(), p.itemRows, onSelect, onKey))
+	// The key just handled may have opened or closed the filter, which changes how much
+	// height the list has. Re-size on the transition only — every message would otherwise
+	// pay for a pagination recompute.
+	if p.filterRows() != rows {
+		p.sizeList()
 	}
-	return p.marqueeArm(listDispatchRows(sh, &p.list, msg, mouseYOff, p.itemRows, onSelect, onKey)), true
+	return act, true
 }
 
 // PanelHelp contributes the list's select/filter hints plus any caller-supplied
@@ -323,29 +367,121 @@ func (p *ListPanel) PanelHelp() []key.Binding {
 	}, p.help...)
 }
 
-// View renders the list, framed when ListPanelOpts.Border asked for it — then the
-// focused arg tints the frame and its title legend. Unbordered (the default) the
-// panel draws nothing of its own and the arg only answers the Panel contract: the
-// list cursor already marks which panel is live.
-func (p *ListPanel) View(focused bool) string {
-	if !p.bordered {
-		return p.list.View()
+// filterLine is the panel-drawn filter row, empty when no filter is live. It exists
+// because bubbles draws the filter only while it is being TYPED (list.titleView), and
+// the status bar that would otherwise name an applied one is off framework-wide: an
+// accepted filter left the list with rows missing and nothing on screen saying why.
+//
+// The look is bubbles' own, deliberately — the yellow "Filter: " prompt with the query
+// in plain text is what the user already recognizes. While typing, that IS bubbles'
+// input (cursor included); once applied, the same prompt and text without a cursor.
+// The prompt style is read off FilterInput rather than Styles.FilterPrompt because the
+// list copies that style into the input at construction and never reads it again.
+func (p *ListPanel) filterLine() string {
+	if !p.ownFilter {
+		return ""
 	}
-	return frame(p.title, p.list.View(), p.innerWidth(), focused)
+	in := p.list.FilterInput
+	var line string
+	switch p.list.FilterState() {
+	case list.Filtering:
+		line = in.View()
+	case list.FilterApplied:
+		line = in.PromptStyle.Render(in.Prompt) + in.Value()
+	default:
+		return ""
+	}
+	// The indent is the one bubbles' TitleBar carried (its left padding), so the line
+	// still sits over the rows' own left pad; only the bottom padding — the blank row
+	// under it — is gone. Truncated rather than left to wrap: a query wider than the
+	// column would become a second row, and filterRows promises exactly one.
+	w := max(p.listWidth()-filterIndent, 1)
+	return lipgloss.NewStyle().PaddingLeft(filterIndent).Render(ansi.Truncate(line, w, "…"))
+}
+
+// filterIndent aligns the filter line with the rows below it.
+const filterIndent = 2
+
+// listWidth is the cell width the list itself renders at: the panel's, net of the frame.
+func (p *ListPanel) listWidth() int {
+	if p.bordered {
+		return p.innerWidth()
+	}
+	return p.width
+}
+
+// filterRows is filterLine's height: the row the list body loses while a filter is live.
+func (p *ListPanel) filterRows() int {
+	if p.filterLine() == "" {
+		return 0
+	}
+	return 1
+}
+
+// RowY is the panel-relative row at which visible item idx starts — the frame's top
+// edge and the filter line included, where CompactListItemRow counts only rows inside
+// the list. It is what an overlay anchored over a row must use: those two offsets used
+// to be a constant a caller could hard-code, and the filter line makes them vary.
+func (p *ListPanel) RowY(idx int) (int, bool) {
+	row, ok := listItemRow(&p.list, idx, p.itemRows)
+	if !ok {
+		return 0, false
+	}
+	return row + p.chromeRows(), true
+}
+
+// chromeRows is what sits above the list inside the panel: the frame's top edge, then
+// the filter line. Both the click math (mouseYOff) and RowY are built on it, so they
+// cannot drift apart.
+func (p *ListPanel) chromeRows() int {
+	rows := p.filterRows()
+	if p.bordered {
+		rows++
+	}
+	return rows
+}
+
+// View renders the list under its filter line (when one is live), framed when
+// ListPanelOpts.Border asked for it — then the focused arg tints the frame and its
+// title legend. Unbordered (the default) the panel draws nothing of its own and the
+// arg only answers the Panel contract: the list cursor already marks which panel is
+// live.
+func (p *ListPanel) View(focused bool) string {
+	body := p.list.View()
+	if line := p.filterLine(); line != "" {
+		body = line + "\n" + body
+	}
+	if p.bordered {
+		body = frame(p.title, body, p.innerWidth(), focused)
+	}
+	// A panel's rendered footprint is also ModularScreen's hit-test geometry. Keep
+	// it within the allocation even if an embedded model ever over-renders again;
+	// clipping the bottom preserves every panel and the router chrome above it.
+	return lipgloss.NewStyle().MaxHeight(p.height).Render(body)
 }
 
 // SetSize takes the outer cell dims; the list gets them verbatim unless the panel
-// is bordered, in which case the frame comes off both axes first.
+// is bordered, in which case the frame comes off both axes first. The filter line
+// comes off the height too, so the list's own pagination knows about the row the
+// panel is drawing above it.
 func (p *ListPanel) SetSize(width, height int) {
-	p.width = width
-	if !p.bordered {
-		p.list.SetSize(width, height)
-		return
+	p.width, p.height = width, height
+	p.sizeList()
+}
+
+// sizeList applies the stored outer dims to the list, net of the panel's own chrome.
+// Called again whenever the filter line appears or goes (see UpdatePanel): the list
+// computes PerPage from the height it was given and View clamps its body to the same
+// number, so a header height that changes without this clips the last row.
+func (p *ListPanel) sizeList() {
+	w, h := p.listWidth(), p.height
+	if p.bordered {
+		h -= 2 // the frame's top and bottom edges
 	}
-	if height -= 2; height < 1 {
-		height = 1
+	if h -= p.filterRows(); h < 1 {
+		h = 1
 	}
-	p.list.SetSize(p.innerWidth(), height)
+	FitList(&p.list, w, h)
 }
 
 // innerWidth is the run between the frame's corners: the outer width minus the two

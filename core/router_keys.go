@@ -362,8 +362,7 @@ func (r *Router) crumbClick(x, y int) (Action, bool) {
 // inOutput reports whether terminal row y falls inside the output box. The box is
 // bottom-anchored chrome — frame stacks the status line, the output box, then the help
 // bar against the bottom edge — so its rows are the Height() sitting above the help.
-// Clamped at 0 because frame pads a short body but doesn't clamp an overflowing one,
-// which would otherwise drift the range negative on a very short terminal.
+// Clamped at 0 for terminals too short to hold all router-owned chrome.
 func (r Router) inOutput(y int) bool {
 	top := r.Top()
 	last := r.sh.height - r.helpHeightFor(top, r.maskOf(top)) - 1

@@ -102,9 +102,9 @@ func itemKeys(item list.Item) func(*core.Shared, string) (core.Action, bool) {
 }
 
 // listDispatch is the dispatch skeleton shared by RootUpdate and PickerScreen.Update:
-// wheel nav above the filter branch (the list already moves its cursor on up/down
-// while filtering, so the wheel does too rather than going dead over a filtered
-// list), every message straight to the list while filtering, then real keypresses
+// wheel nav above the filter branch (so the wheel is not dead over a list being
+// filtered), then the arrow keys and every other message to the list while filtering,
+// then real keypresses
 // through the select hook (always consumed) or the key hook + WrapNav, and anything
 // left over to the list itself. What differs between screens — what Select runs,
 // which extra keys exist, whether Back pops — lives in the hooks; the order lives
@@ -133,6 +133,26 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 		}
 	}
 	if l.FilterState() == list.Filtering {
+		// ↑/↓ move the cursor through the matches while the query is still being typed.
+		// bubbles does not: Model.Update routes to handleFiltering, which knows only
+		// cancel/accept and feeds the text input, so without this the cursor is stuck on
+		// the first match until the filter is accepted.
+		//
+		// Matched on the key TYPE, not the usual core.Keys strings: Keys.Up/Down carry
+		// typable letters (k/j) that must stay text in a filter, and even the arrows'
+		// string form is ambiguous here — a bracketed paste of "up" is one KeyRunes msg
+		// whose String() is "up". The type is what a real arrow key alone produces.
+		// (LineEditScreen.Update states the same rule for its enter/esc.)
+		if km, ok := msg.(tea.KeyMsg); ok && (km.Type == tea.KeyUp || km.Type == tea.KeyDown) {
+			if !WrapNav(l, km.String()) {
+				if km.Type == tea.KeyUp {
+					l.CursorUp()
+				} else {
+					l.CursorDown()
+				}
+			}
+			return core.Action{}
+		}
 		var cmd tea.Cmd
 		*l, cmd = l.Update(msg)
 		return core.Async(cmd)
@@ -262,14 +282,71 @@ func listItemRow(l *list.Model, idx, itemRows int) (int, bool) {
 	return listHeaderHeight(l) + (idx-start)*itemRows, true
 }
 
+// SetListItems replaces a list's rows and keeps any live filter working. Use it in place
+// of list.Model.SetItems everywhere.
+//
+// bubbles' SetItems nils filteredItems SYNCHRONOUSLY and puts the recompute in the
+// tea.Cmd it returns (list.go SetItems). Drop that cmd — which every call site in this
+// workspace did, because the wrappers it travels through return a core.Action — and the
+// list renders EMPTY for as long as the filter is applied, with the row count sitting in
+// a "N filtered" counter nobody can see. That is the "refresh emptied my sidebar" bug.
+//
+// It gets worse on the way out: pressing / again keeps the old query (bubbles tests the
+// input's VALUE, not the match set, before repopulating), so nothing recomputes, and the
+// next enter — or up, or down, which are all "accept" keys — hits bubbles' "filtered down
+// to nothing, clear the filter" branch and silently wipes the query. Hence the second
+// half of the report: the filter appears to reject the text you just gave it.
+//
+// The repair is synchronous rather than a propagated cmd: SetFilterText runs the filter
+// inline and assigns the result. A cmd-returning signature would be correct too, but it
+// has to be threaded through every Receive hook and item-refresh path to work, and one
+// forgetful caller re-arms the whole trap. This cannot rot.
+func SetListItems(l *list.Model, items []list.Item) {
+	state, query := l.FilterState(), l.FilterValue()
+	l.SetItems(items)
+	if state == list.Unfiltered || query == "" {
+		return
+	}
+	// Recomputes the matches against the new rows and lands in FilterApplied.
+	l.SetFilterText(query)
+	if state == list.Filtering {
+		// Back to typing, with the matches just computed left in place.
+		l.SetFilterState(list.Filtering)
+	}
+}
+
+// FitList sizes l to (w, h), repeating the calculation until bubbles' pagination
+// reaches a fixed point. bubbles computes PerPage from the CURRENT pagination view,
+// then updates TotalPages from that new PerPage; for a compact delegate using bubbles'
+// default pagination style, crossing the one-page boundary changes the pagination view
+// by one row, so one SetSize can leave the rendered list a row taller than h. Three
+// bounded passes cover the possible 1 -> many -> adjusted-many transition without
+// risking an unbounded layout loop.
+func FitList(l *list.Model, w, h int) {
+	pages := l.Paginator.TotalPages
+	for range 3 {
+		l.SetSize(w, h)
+		if l.Paginator.TotalPages == pages {
+			return
+		}
+		pages = l.Paginator.TotalPages
+	}
+}
+
 // WrapNav wraps the cursor at a list boundary: up on the first row selects the
 // last, down on the last selects the first. Returns handled=true when it wrapped
-// (caller skips forwarding the key to the list). Call only when not filtering, so
-// len(l.Items()) is the visible count. Uses the central core.Keys bindings, so the
-// wrap follows any added scheme (e.g. wasd); l.Select adjusts pagination itself, so
-// wrapping works across pages.
+// (caller skips forwarding the key to the list). Uses the central core.Keys bindings,
+// so the wrap follows any added scheme (e.g. wasd); l.Select adjusts pagination
+// itself, so wrapping works across pages.
+//
+// The count is the VISIBLE set, which is what Index() and Select() are indexed over.
+// It used to be len(l.Items()) with a "call only when not filtering" note that the
+// dispatch above did not honor — so under a filter matching 3 of 100 rows, down at the
+// last match never met Index() == n-1 and did not wrap, while up at the first ran
+// Select(99): unclamped, so the cursor landed outside the filtered set, SelectedItem
+// went nil and the page rendered blank.
 func WrapNav(l *list.Model, k string) bool {
-	n := len(l.Items())
+	n := len(l.VisibleItems())
 	if n < 2 {
 		return false
 	}

@@ -1,9 +1,12 @@
 package core
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // stubScreen is a minimal Screen for exercising the router's stack/chrome plumbing
@@ -24,6 +27,36 @@ func (stubScreen) Filtering() bool           { return false }
 type filterScreen struct{ stubScreen }
 
 func (filterScreen) Filtering() bool { return true }
+
+type overheightScreen struct {
+	stubScreen
+	rows int
+}
+
+func (s overheightScreen) View(*Shared) string {
+	lines := make([]string, s.rows)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("row%d", i)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestFrameClampsOverflowingBody(t *testing.T) {
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{Output: &fakeOutput{}, Status: &fakeStatus{}}
+	screen := overheightScreen{rows: 7}
+	r := NewRouter(sh, []TabEntry{{Title: "Tall", New: func(*Shared) Screen { return screen }}})
+	tm, _ := r.Update(tea.WindowSizeMsg{Width: 30, Height: 4})
+	r = tm.(Router)
+
+	v := r.frame(r.Top())
+	if got := lipgloss.Height(v); got != sh.height {
+		t.Fatalf("frame rendered %d rows, want terminal height %d", got, sh.height)
+	}
+	if lines := strings.Split(v, "\n"); lines[0] != "row0" || lines[len(lines)-1] != "row3" {
+		t.Fatalf("frame should preserve the top and clip the bottom, got %q", lines)
+	}
+}
 
 // wrapScreen is a stubScreen that owns a wrap mode of its own (core.Wrapper) — a diff
 // view, say. Pointer receiver: ToggleWrap mutates, and the router holds the screen.

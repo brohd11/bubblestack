@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/brohd11/bubblestack/core"
 
@@ -31,12 +32,44 @@ func startFiltering(l *list.Model, query string) {
 	for _, r := range query {
 		var cmd tea.Cmd
 		*l, cmd = l.Update(keyMsg(string(r)))
-		if cmd == nil {
-			continue
+		pumpList(l, cmd)
+	}
+}
+
+// pumpList runs cmd and feeds what it produces back into the list, flattening the
+// batches — the filter's matches arrive inside one, so a pump that skips batches
+// leaves the list "filtering" over an empty match set, a state no user ever sees.
+//
+// Each cmd is run under a deadline because the same batch carries the cursor's blink
+// TIMER: calling that one straight through would block for the blink interval, and
+// following the cmd it produces would loop forever.
+func pumpList(l *list.Model, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := runCmd(cmd)
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			pumpList(l, c)
 		}
-		if msg := cmd(); msg != nil {
-			*l, _ = l.Update(msg)
-		}
+		return
+	}
+	if msg == nil {
+		return
+	}
+	*l, _ = l.Update(msg)
+}
+
+// runCmd runs cmd, giving up on one that has not produced a message promptly — a
+// timer cmd (the cursor blink) would otherwise stall the test for its whole interval.
+func runCmd(cmd tea.Cmd) tea.Msg {
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		return msg
+	case <-time.After(50 * time.Millisecond):
+		return nil
 	}
 }
 
@@ -205,5 +238,256 @@ func TestCompactListGeometry(t *testing.T) {
 	l.Paginator.Page = 1
 	if row, ok := CompactListItemRow(&l, firstNextPage); !ok || row != header {
 		t.Fatalf("page-two first row = (%d, %v), want (%d, true)", row, ok, header)
+	}
+}
+
+// ---------- wrap ----------
+
+// wrapList builds a titled list of n items named "item i", sized so every item is on
+// one page (wrapping across pages is Select's job, pinned by TestListItemAt).
+func wrapList(n int) list.Model {
+	items := make([]list.Item, n)
+	for i := range items {
+		items[i] = Item{Name: fmt.Sprintf("item %d", i)}
+	}
+	l := core.NewSelectList(items, "T")
+	l.SetSize(40, 40)
+	return l
+}
+
+// TestWrapNav: up on the first row selects the last and down on the last selects the
+// first, and a list too short to have two ends does not wrap at all.
+func TestWrapNav(t *testing.T) {
+	l := wrapList(4)
+
+	if !WrapNav(&l, "up") || l.Index() != 3 {
+		t.Fatalf("up at the top should wrap to the last item, got %d", l.Index())
+	}
+	if !WrapNav(&l, "down") || l.Index() != 0 {
+		t.Fatalf("down at the bottom should wrap to the first item, got %d", l.Index())
+	}
+	// Mid-list the key is not ours: the list moves the cursor itself.
+	l.Select(1)
+	if WrapNav(&l, "up") || WrapNav(&l, "down") {
+		t.Error("mid-list keys must fall through to the list")
+	}
+
+	one := wrapList(1)
+	if WrapNav(&one, "up") || WrapNav(&one, "down") {
+		t.Error("a one-item list has no boundary to wrap at")
+	}
+}
+
+// TestWrapNavCountsVisibleItems is the reported bug: under a filter the cursor could
+// not reach either end. WrapNav counted len(l.Items()) — the WHOLE set — while Index
+// and Select are indexed over the visible one, so down at the last match never met
+// Index() == n-1 and up at the first ran Select on an index outside the filtered set,
+// which left the selection nil and the page blank.
+func TestWrapNavCountsVisibleItems(t *testing.T) {
+	items := []list.Item{
+		Item{Name: "alpha"}, Item{Name: "zulu"}, Item{Name: "alto"},
+		Item{Name: "yankee"}, Item{Name: "also"},
+	}
+	l := core.NewSelectList(items, "T")
+	l.SetSize(40, 40)
+	startFiltering(&l, "al") // alpha, alto, also — 3 of 5
+	var cmd tea.Cmd
+	l, cmd = l.Update(keyMsg("enter"))
+	pumpList(&l, cmd)
+	if l.FilterState() != list.FilterApplied || len(l.VisibleItems()) != 3 {
+		t.Fatalf("want 3 matches under an applied filter, got %d in state %v",
+			len(l.VisibleItems()), l.FilterState())
+	}
+
+	l.Select(2) // the last match
+	if !WrapNav(&l, "down") || l.Index() != 0 {
+		t.Fatalf("down at the last match should wrap to the first, got %d", l.Index())
+	}
+	if !WrapNav(&l, "up") || l.Index() != 2 {
+		t.Fatalf("up at the first match should wrap to the last, got %d", l.Index())
+	}
+	// The wrap has to land on a REAL row: an index past the filtered set selects
+	// nothing and renders an empty page.
+	if l.SelectedItem() == nil {
+		t.Fatal("the wrap selected an index outside the filtered set")
+	}
+}
+
+// TestListDispatchFilteringArrows: ↑/↓ move (and wrap) the cursor while the query is
+// still being typed. bubbles' own filtering handler ignores them, so the cursor used to
+// be stuck on the first match until the filter was accepted — and WrapNav was never
+// even reached, since every message went straight to the list.
+func TestListDispatchFilteringArrows(t *testing.T) {
+	sh := core.NewShared(nil)
+	l := wrapList(4)
+	startFiltering(&l, "item") // matches all four
+	if l.FilterState() != list.Filtering {
+		t.Fatal("the list should still be filtering")
+	}
+
+	RootUpdate(sh, &l, keyMsg("down"))
+	if l.Index() != 1 {
+		t.Fatalf("down while filtering should move the cursor, got %d", l.Index())
+	}
+	RootUpdate(sh, &l, keyMsg("up"))
+	if l.Index() != 0 {
+		t.Fatalf("up while filtering should move the cursor back, got %d", l.Index())
+	}
+	RootUpdate(sh, &l, keyMsg("up"))
+	if l.Index() != 3 {
+		t.Fatalf("up at the top should wrap while filtering, got %d", l.Index())
+	}
+	RootUpdate(sh, &l, keyMsg("down"))
+	if l.Index() != 0 {
+		t.Fatalf("down at the bottom should wrap while filtering, got %d", l.Index())
+	}
+
+	// The query is still text: an arrow must not have disturbed it, and letters must
+	// still reach the filter input rather than moving anything.
+	if got := l.FilterInput.Value(); got != "item" {
+		t.Fatalf("the arrows must leave the query alone, got %q", got)
+	}
+	RootUpdate(sh, &l, keyMsg("0"))
+	if got := l.FilterInput.Value(); got != "item0" {
+		t.Fatalf("typing should still filter, got %q", got)
+	}
+}
+
+// ---------- reseeding a filtered list ----------
+
+// docList is a titled list of Item rows named by names.
+func docList(names ...string) list.Model {
+	items := make([]list.Item, len(names))
+	for i, n := range names {
+		items[i] = Item{Name: n}
+	}
+	l := core.NewSelectList(items, "T")
+	l.SetSize(40, 40)
+	return l
+}
+
+func visibleNames(l *list.Model) []string {
+	var out []string
+	for _, it := range l.VisibleItems() {
+		out = append(out, it.(Item).Name)
+	}
+	return out
+}
+
+// TestSetListItemsKeepsAppliedFilter is the "refresh emptied my sidebar" bug. bubbles'
+// SetItems nils the match set on the spot and returns the recompute as a cmd; every
+// wrapper in this workspace drops that cmd, so the list rendered blank for as long as
+// the filter was applied. SetListItems recomputes inline instead.
+func TestSetListItemsKeepsAppliedFilter(t *testing.T) {
+	l := docList("alpha.md", "also.md", "beta.md")
+	startFiltering(&l, "al")
+	var cmd tea.Cmd
+	l, cmd = l.Update(keyMsg("enter"))
+	pumpList(&l, cmd)
+	if l.FilterState() != list.FilterApplied || len(l.VisibleItems()) != 2 {
+		t.Fatalf("setup: want 2 matches applied, got %d in %v", len(l.VisibleItems()), l.FilterState())
+	}
+
+	// A reseed that adds a match and drops one, the shape a refresh takes.
+	SetListItems(&l, []list.Item{
+		Item{Name: "alpha.md"}, Item{Name: "altimeter.md"}, Item{Name: "beta.md"},
+	})
+
+	if got := visibleNames(&l); len(got) != 2 {
+		t.Fatalf("the filter should still be applied to the new rows, got %v", got)
+	}
+	if l.FilterValue() != "al" {
+		t.Fatalf("the query should survive a reseed, got %q", l.FilterValue())
+	}
+	if l.SelectedItem() == nil {
+		t.Fatal("a reseeded filtered list must still have a selection")
+	}
+	for _, name := range visibleNames(&l) {
+		if name == "beta.md" {
+			t.Error("a non-matching row leaked into the filtered view")
+		}
+	}
+}
+
+// TestSetListItemsKeepsLiveFilter: reseeding while the query is still being TYPED must
+// leave the list in Filtering, not silently accept the filter under the user.
+func TestSetListItemsKeepsLiveFilter(t *testing.T) {
+	l := docList("alpha.md", "beta.md")
+	startFiltering(&l, "al")
+
+	SetListItems(&l, []list.Item{Item{Name: "alpha.md"}, Item{Name: "also.md"}, Item{Name: "beta.md"}})
+
+	if l.FilterState() != list.Filtering {
+		t.Fatalf("still typing: state should stay Filtering, got %v", l.FilterState())
+	}
+	if got := visibleNames(&l); len(got) != 2 {
+		t.Fatalf("the live query should match the new rows, got %v", got)
+	}
+	// Typing must still work from here.
+	var cmd tea.Cmd
+	l, cmd = l.Update(keyMsg("p"))
+	pumpList(&l, cmd)
+	if got := visibleNames(&l); len(got) != 1 || got[0] != "alpha.md" {
+		t.Fatalf("typing after a reseed should narrow further, got %v", got)
+	}
+}
+
+// TestSetListItemsUnfiltered: no filter, no behavior change.
+func TestSetListItemsUnfiltered(t *testing.T) {
+	l := docList("a.md", "b.md")
+	SetListItems(&l, []list.Item{Item{Name: "c.md"}})
+	if got := visibleNames(&l); len(got) != 1 || got[0] != "c.md" {
+		t.Fatalf("an unfiltered reseed just replaces the rows, got %v", got)
+	}
+	if l.FilterState() != list.Unfiltered {
+		t.Fatalf("an unfiltered list must stay unfiltered, got %v", l.FilterState())
+	}
+}
+
+// TestReseedThenReopenFilter is the second half of the report, verbatim: after the
+// blanking reseed, pressing / and then an arrow key used to wipe the query, because
+// bubbles treats up/down as "accept the filter" and its accept branch resets a filter
+// that matches nothing. With the match set intact there is nothing to reset.
+func TestReseedThenReopenFilter(t *testing.T) {
+	l := docList("alpha.md", "also.md", "beta.md")
+	startFiltering(&l, "al")
+	var cmd tea.Cmd
+	l, cmd = l.Update(keyMsg("enter"))
+	pumpList(&l, cmd)
+
+	SetListItems(&l, []list.Item{Item{Name: "alpha.md"}, Item{Name: "also.md"}, Item{Name: "beta.md"}})
+
+	l, cmd = l.Update(keyMsg("/")) // reopen the filter
+	pumpList(&l, cmd)
+	l, cmd = l.Update(keyMsg("down"))
+	pumpList(&l, cmd)
+
+	if l.FilterState() == list.Unfiltered {
+		t.Fatal("reopening the filter after a reseed must not reset it")
+	}
+	if l.FilterValue() != "al" {
+		t.Fatalf("the query should still be there, got %q", l.FilterValue())
+	}
+	if got := visibleNames(&l); len(got) != 2 {
+		t.Fatalf("the matches should still be there, got %v", got)
+	}
+}
+
+// TestSelectByTitleUsesVisibleRows: Select indexes the visible list, so a title scan
+// that walked every row put the cursor somewhere unrelated under a filter — the trap
+// CycleSort would have stepped on the moment a sort toggle met a filtered list.
+func TestSelectByTitleUsesVisibleRows(t *testing.T) {
+	l := docList("zulu.md", "yankee.md", "xray.md", "alpha.md", "also.md")
+	startFiltering(&l, "al")
+	var cmd tea.Cmd
+	l, cmd = l.Update(keyMsg("enter"))
+	pumpList(&l, cmd)
+	if len(l.VisibleItems()) != 2 {
+		t.Fatalf("setup: want 2 matches, got %v", visibleNames(&l))
+	}
+
+	SelectByTitle(&l, "also.md")
+	if it := l.SelectedItem(); it == nil || it.(Item).Name != "also.md" {
+		t.Fatalf("the cursor should land on the named visible row, got %v", it)
 	}
 }

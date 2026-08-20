@@ -91,7 +91,7 @@ func (s *PickerScreen) Receive(sh *core.Shared, payload any) core.Action {
 	}
 	if s.refresh != nil {
 		if items, ok := s.refresh(sh, payload); ok {
-			s.list.SetItems(items)
+			SetListItems(&s.list, items)
 		}
 	}
 	return core.Action{}

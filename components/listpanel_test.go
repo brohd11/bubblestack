@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type compactTestItem struct{ title, suffix string }
@@ -90,14 +91,172 @@ func TestCompactListPanelRowsAndPagination(t *testing.T) {
 	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
 	p.SetSize(30, 8)
 
-	if got := p.List().Paginator.PerPage; got != 3 {
-		t.Fatalf("compact per-page count = %d, want 3", got)
+	// 8 outer rows − 2 frame edges = 6 for the list: five entries and the pagination
+	// dots. Neither bubbles' empty title section nor its forced pre-pagination margin
+	// gets a row anymore (this was originally only three entries).
+	if got := p.List().Paginator.PerPage; got != 5 {
+		t.Fatalf("compact per-page count = %d, want 5", got)
 	}
 	if lines := strings.Split(p.View(false), "\n"); len(lines) != 8 {
 		t.Fatalf("compact bordered panel height = %d, want 8", len(lines))
+	} else {
+		if !strings.Contains(lines[5], "doc4.md") {
+			t.Fatalf("the fifth row should use the reclaimed pagination-margin row, got %q", lines[5])
+		}
+		if !strings.Contains(lines[6], "•") && !strings.Contains(lines[6], "○") {
+			t.Fatalf("pagination should immediately follow the entries, got %q", lines[6])
+		}
 	}
+	// The footprint must not change when the filter line appears — the list gives up a
+	// row for it, rather than the panel growing past the height the layout assigned.
+	startFiltering(p.List(), "doc")
+	p.sizeList()
+	if lines := strings.Split(p.View(false), "\n"); len(lines) != 8 {
+		t.Fatalf("filtered compact panel height = %d, want 8", len(lines))
+	}
+	if got := p.List().Paginator.PerPage; got != 4 {
+		t.Fatalf("the filter line should cost the list a row: per-page = %d, want 4", got)
+	}
+	p.List().ResetFilter()
+	p.sizeList()
 	if v := p.View(false); !strings.Contains(v, "doc0.md  notes/") {
 		t.Fatalf("compact row should place suffix on the title line, got:\n%s", v)
+	}
+}
+
+// TestCompactListPanelFilterPaginationCrossing is the reported regression: a compact
+// list filtered down to one page and then widened back to many pages used the old
+// one-row pagination shape to compute PerPage. Its next View was one row taller than
+// the panel, which ultimately made Bubble Tea discard the breadcrumb row above it.
+func TestCompactListPanelFilterPaginationCrossing(t *testing.T) {
+	items := make([]list.Item, 27)
+	for i := range items {
+		prefix := "dd"
+		if i < 4 {
+			prefix = "ddd"
+		}
+		items[i] = compactTestItem{title: fmt.Sprintf("%s-%02d.txt", prefix, i)}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	sh := core.NewShared(nil)
+	const width, height = 30, 10
+	p.SetSize(width, height)
+
+	drive := func(k string) {
+		t.Helper()
+		act, handled := p.UpdatePanel(sh, keyMsg(k))
+		if !handled {
+			t.Fatalf("filter key %q was not handled", k)
+		}
+		pumpList(p.List(), act.Cmd)
+		// This is the router's resize-after-every-message contract.
+		p.SetSize(width, height)
+		if got := lipgloss.Height(p.View(true)); got != height {
+			t.Fatalf("query %q rendered %d rows, want %d", p.List().FilterValue(), got, height)
+		}
+	}
+
+	drive("/")
+	for _, k := range []string{"d", "d", "d"} {
+		drive(k)
+	}
+	if got := len(p.List().VisibleItems()); got != 4 {
+		t.Fatalf("narrow query matched %d rows, want 4", got)
+	}
+	if got := p.List().Paginator.TotalPages; got != 1 {
+		t.Fatalf("narrow query has %d pages, want 1", got)
+	}
+
+	drive("backspace")
+	if got := len(p.List().VisibleItems()); got != 27 {
+		t.Fatalf("widened query matched %d rows, want 27", got)
+	}
+	if got := p.List().Paginator.TotalPages; got < 2 {
+		t.Fatalf("widened query has %d pages, want at least 2", got)
+	}
+}
+
+// TestCompactListPanelHeightSweep walks every visible count across the one-page
+// boundary in both directions. Prefix length controls the count exactly: among
+// a, aa, aaa, ... a query of length q matches n-q+1 rows.
+func TestCompactListPanelHeightSweep(t *testing.T) {
+	const n, width, height = 16, 30, 10
+	items := make([]list.Item, n)
+	for i := range items {
+		items[i] = compactTestItem{title: strings.Repeat("a", i+1)}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	sh := core.NewShared(nil)
+	p.SetSize(width, height)
+
+	drive := func(k string, wantVisible int) {
+		t.Helper()
+		act, _ := p.UpdatePanel(sh, keyMsg(k))
+		pumpList(p.List(), act.Cmd)
+		p.SetSize(width, height)
+		if got := len(p.List().VisibleItems()); got != wantVisible {
+			t.Fatalf("query %q matched %d rows, want %d", p.List().FilterValue(), got, wantVisible)
+		}
+		if got := lipgloss.Height(p.View(true)); got != height {
+			t.Fatalf("query %q with %d matches rendered %d rows, want %d",
+				p.List().FilterValue(), wantVisible, got, height)
+		}
+	}
+
+	drive("/", n)
+	for q := 1; q <= n; q++ {
+		drive("a", n-q+1)
+	}
+	for q := n - 1; q >= 1; q-- {
+		drive("backspace", n-q+1)
+	}
+	drive("backspace", n)
+}
+
+func TestCompactListPanelHeightAfterSetItems(t *testing.T) {
+	p := NewCompactListPanel([]list.Item{
+		compactTestItem{title: "one"},
+		compactTestItem{title: "two"},
+	}, "Docs", ListPanelOpts{Border: true})
+	const height = 10
+	p.SetSize(30, height)
+
+	items := make([]list.Item, 30)
+	for i := range items {
+		items[i] = compactTestItem{title: fmt.Sprintf("doc-%02d", i)}
+	}
+	p.SetItems(items)
+	if got := lipgloss.Height(p.View(true)); got != height {
+		t.Fatalf("panel after SetItems rendered %d rows, want %d", got, height)
+	}
+	if got := p.List().Paginator.TotalPages; got < 2 {
+		t.Fatalf("grown list has %d pages, want at least 2", got)
+	}
+}
+
+// TestListPanelClampsOvertallList pins the panel boundary independently of FitList:
+// even if the embedded list's pagination state is stale, the panel must keep its
+// allocation so ModularScreen's rendered hit rectangles remain truthful.
+func TestListPanelClampsOvertallList(t *testing.T) {
+	items := make([]list.Item, 20)
+	for i := range items {
+		items[i] = compactTestItem{title: fmt.Sprintf("doc-%02d", i)}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	const height = 10
+	p.SetSize(30, height)
+	p.List().Paginator.PerPage += 3 // synthesize an upstream over-render
+
+	raw := frame(p.title, p.List().View(), p.innerWidth(), true)
+	if got := lipgloss.Height(raw); got <= height {
+		t.Fatalf("test setup did not produce an over-tall list: got %d rows", got)
+	}
+	v := p.View(true)
+	if got := lipgloss.Height(v); got != height {
+		t.Fatalf("clamped panel rendered %d rows, want %d", got, height)
+	}
+	if !strings.HasPrefix(v, "┌─ Docs ") {
+		t.Fatal("height clamping must preserve the panel's top edge")
 	}
 }
 
@@ -125,14 +284,12 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 		p.SetSize(30, 8)
 		p.Focus()
 
-		for _, y := range []int{0, 1} { // frame, then the list's filter/title row
-			picked = ""
-			p.UpdatePanel(sh, click(y))
-			if picked != "" {
-				t.Fatalf("panel row %d should not pick an item, picked %q", y, picked)
-			}
+		picked = ""
+		p.UpdatePanel(sh, click(0)) // the frame's top edge, and nothing else above the rows
+		if picked != "" {
+			t.Fatalf("panel row 0 is the frame, picked %q", picked)
 		}
-		for y, want := range map[int]string{2: "zero", 3: "one", 4: "two"} {
+		for y, want := range map[int]string{1: "zero", 2: "one", 3: "two"} {
 			picked = ""
 			p.UpdatePanel(sh, click(y))
 			if picked != want {
@@ -141,12 +298,18 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 		}
 
 		// Select moves the paginator to page two. Its first item occupies the
-		// same rendered row as page one's first item.
-		p.List().Select(p.List().Paginator.PerPage)
+		// same rendered row as page one's first item. Shortened first, since four
+		// compact rows now fit on one page in an 8-row panel.
+		p.SetSize(30, 5)
+		perPage := p.List().Paginator.PerPage
+		if perPage >= len(items) {
+			t.Fatalf("the panel should be too short for one page: per-page = %d", perPage)
+		}
+		p.List().Select(perPage)
 		picked = ""
-		p.UpdatePanel(sh, click(2))
-		if picked != "three" {
-			t.Fatalf("page-two first row picked %q, want three", picked)
+		p.UpdatePanel(sh, click(1))
+		if want := items[perPage].(compactTestItem).title; picked != want {
+			t.Fatalf("page-two first row picked %q, want %q", picked, want)
 		}
 	})
 
@@ -176,18 +339,24 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 			t.Fatal("the panel's list should be filtering")
 		}
 
-		for _, y := range []int{0, 1, 2} { // frame, filter input, the input's pad row
+		for _, y := range []int{0, 1} { // the frame, then the panel's own filter line
 			picked = ""
 			p.UpdatePanel(sh, click(y))
 			if picked != "" {
 				t.Fatalf("panel row %d is chrome while filtering, picked %q", y, picked)
 			}
 		}
-		for y, want := range map[int]string{3: "alpha", 4: "beta", 5: "gamma"} {
+		// The rows are the MATCHES in match order (bubbles ranks them), so the
+		// expectation comes from the visible set rather than from the item order.
+		visible := l.VisibleItems()
+		if len(visible) != 3 {
+			t.Fatalf("want 3 matches, got %d", len(visible))
+		}
+		for i, item := range visible {
 			picked = ""
-			p.UpdatePanel(sh, click(y))
-			if picked != want {
-				t.Fatalf("filtering, panel row %d picked %q, want %q", y, picked, want)
+			p.UpdatePanel(sh, click(2+i))
+			if want := item.(compactTestItem).title; picked != want {
+				t.Fatalf("filtering, panel row %d picked %q, want %q", 2+i, picked, want)
 			}
 		}
 	})
@@ -212,6 +381,153 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 			}
 		}
 	})
+}
+
+// filterPanel is a bordered compact panel of named rows, sized and focused.
+func filterPanel(t *testing.T, names ...string) *CompactListPanel {
+	t.Helper()
+	items := make([]list.Item, len(names))
+	for i, n := range names {
+		items[i] = compactTestItem{title: n}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	p.SetSize(30, 10)
+	p.Focus()
+	return p
+}
+
+// TestCompactPanelFilterLine: the panel draws the filter itself, so it survives the
+// enter that accepts it. bubbles draws the filter only while it is being TYPED and the
+// status bar that would name an applied one is off framework-wide — so an accepted
+// filter used to leave the sidebar with rows missing and nothing saying why, which is
+// how you set one and forget it.
+func TestCompactPanelFilterLine(t *testing.T) {
+	p := filterPanel(t, "notes.md", "note-2.md", "todo.md")
+	l := p.List()
+
+	if got := ansi.Strip(p.View(true)); strings.Contains(got, "Filter") {
+		t.Fatalf("an unfiltered panel shows no filter line; got:\n%s", got)
+	}
+
+	startFiltering(l, "note")
+	if got := ansi.Strip(p.filterLine()); !strings.Contains(got, "Filter: note") {
+		t.Fatalf("while typing, the line shows the query; got %q", got)
+	}
+
+	var cmd tea.Cmd
+	*l, cmd = l.Update(keyMsg("enter"))
+	pumpList(l, cmd)
+	if l.FilterState() != list.FilterApplied {
+		t.Fatalf("enter should apply the filter, got %v", l.FilterState())
+	}
+	if got := ansi.Strip(p.filterLine()); got != "  Filter: note" {
+		t.Fatalf("an applied filter stays on screen; got %q", got)
+	}
+	if got := ansi.Strip(p.View(true)); !strings.Contains(got, "Filter: note") ||
+		strings.Contains(got, "todo.md") {
+		t.Fatalf("the panel should show the filter and hide the non-matches; got:\n%s", got)
+	}
+	// The prompt keeps the color bubbles gives it — that yellow is what makes the line
+	// read as a filter rather than as a row.
+	if !strings.Contains(p.filterLine(), l.FilterInput.PromptStyle.Render(l.FilterInput.Prompt)) {
+		t.Error("the applied line should carry the filter prompt's own styling")
+	}
+}
+
+// TestCompactPanelFilterLineTruncates: filterRows promises exactly one row, and the
+// click math is built on that — a query too wide for the column must not wrap into a
+// second one.
+func TestCompactPanelFilterLineTruncates(t *testing.T) {
+	p := filterPanel(t, "aaaa.md")
+	l := p.List()
+	// The value is set directly rather than typed: this is a width assertion, and the
+	// match set is beside the point.
+	*l, _ = l.Update(keyMsg("/"))
+	l.FilterInput.SetValue(strings.Repeat("a", 60))
+	if got := lipgloss.Height(p.filterLine()); got != 1 {
+		t.Fatalf("the filter line is one row, got %d", got)
+	}
+	if got := lipgloss.Width(p.filterLine()); got > p.listWidth() {
+		t.Fatalf("filter line width %d overflows the list column %d", got, p.listWidth())
+	}
+}
+
+// TestCompactPanelEscClearsAppliedFilter: esc is the host's pop, carved out of the
+// panel's dispatch — but with a filter merely APPLIED that carve-out made bubbles' own
+// ClearFilter binding unreachable, so a filtered list had no way out of its filter.
+// Now that the filter is permanently on screen, that is the first thing a user reaches
+// for. Unfiltered, esc must still fall through to the host.
+func TestCompactPanelEscClearsAppliedFilter(t *testing.T) {
+	sh := core.NewShared(nil)
+	p := filterPanel(t, "notes.md", "todo.md")
+	l := p.List()
+
+	if _, handled := p.UpdatePanel(sh, keyMsg("esc")); handled {
+		t.Fatal("unfiltered, esc belongs to the host screen")
+	}
+
+	startFiltering(l, "note")
+	var cmd tea.Cmd
+	*l, cmd = l.Update(keyMsg("enter"))
+	pumpList(l, cmd)
+
+	if _, handled := p.UpdatePanel(sh, keyMsg("esc")); !handled {
+		t.Fatal("esc should clear an applied filter instead of popping the screen")
+	}
+	if l.FilterState() != list.Unfiltered {
+		t.Fatalf("the filter should be gone, state = %v", l.FilterState())
+	}
+	if got := ansi.Strip(p.View(true)); !strings.Contains(got, "todo.md") {
+		t.Fatalf("clearing should bring the rows back; got:\n%s", got)
+	}
+}
+
+// TestCompactPanelRowY: RowY is the anchor an overlay drawn over a row needs — the
+// frame edge and the filter line included. It must agree with the click mapping in
+// every filter state, since the two are the same geometry read in opposite directions.
+func TestCompactPanelRowY(t *testing.T) {
+	sh := core.NewShared(nil)
+	picked := ""
+	items := []list.Item{
+		compactTestItem{title: "alpha"}, compactTestItem{title: "also"},
+		compactTestItem{title: "beta"},
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{
+		Border: true,
+		OnSelect: func(_ *core.Shared, it list.Item) core.Action {
+			picked = it.(compactTestItem).title
+			return core.Action{}
+		},
+	})
+	p.SetSize(30, 10)
+	p.Focus()
+	l := p.List()
+
+	check := func(label string) {
+		t.Helper()
+		for i, item := range l.VisibleItems() {
+			row, ok := p.RowY(i)
+			if !ok {
+				t.Fatalf("%s: item %d has no row", label, i)
+			}
+			picked = ""
+			p.UpdatePanel(sh, tea.MouseMsg{
+				Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: row,
+			})
+			if want := item.(compactTestItem).title; picked != want {
+				t.Fatalf("%s: RowY(%d) = %d selects %q, want %q", label, i, row, picked, want)
+			}
+		}
+	}
+	check("unfiltered")
+	startFiltering(l, "al")
+	p.sizeList()
+	check("filtering")
+	var cmd tea.Cmd
+	*l, cmd = l.Update(keyMsg("enter"))
+	pumpList(l, cmd)
+	p.sizeList()
+	check("applied")
 }
 
 // marqueeRows: a row that overflows a 30-cell sidebar (26 cells of text) and one that

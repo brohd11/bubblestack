@@ -7,6 +7,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -43,6 +44,26 @@ func TestSlotAtUsesRenderedLayout(t *testing.T) {
 	}
 	if got := m.slotAt(sh, 5, 7); got != 1 {
 		t.Errorf("row 7 is inside the grown bottom panel (allocation would say top), got slot %d", got)
+	}
+}
+
+func TestModularScreenKeepsAssignedBodyHeight(t *testing.T) {
+	items := make([]list.Item, 20)
+	for i := range items {
+		items[i] = compactTestItem{title: strings.Repeat("x", i+1)}
+	}
+	p := NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true})
+	m := NewModularScreen([][]Slot{{{Panel: p}}}, ModularOpts{})
+	sh := core.NewShared(nil)
+	const bodyHeight = 10
+	m.SetSize(sh, 30, bodyHeight)
+	p.List().Paginator.PerPage += 3 // force the child model past its allocation
+
+	if got := lipgloss.Height(m.View(sh)); got != bodyHeight {
+		t.Fatalf("ModularScreen rendered %d rows, want its assigned %d", got, bodyHeight)
+	}
+	if len(m.hitRects) != 1 || m.hitRects[0].h != bodyHeight {
+		t.Fatalf("rendered hit rect = %+v, want one rect %d rows tall", m.hitRects, bodyHeight)
 	}
 }
 
