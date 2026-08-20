@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // clickList builds a titled select list of n items, sized so bubbles computes its
@@ -489,5 +491,33 @@ func TestSelectByTitleUsesVisibleRows(t *testing.T) {
 	SelectByTitle(&l, "also.md")
 	if it := l.SelectedItem(); it == nil || it.(Item).Name != "also.md" {
 		t.Fatalf("the cursor should land on the named visible row, got %v", it)
+	}
+}
+
+func TestCycleSortPreservesFilterTitleUntilClear(t *testing.T) {
+	mode := SortAlpha
+	l := docList("alpha.md", "also.md", "beta.md")
+	l.Title = SortTitle("Repos", mode)
+	l.SetFilterText("al")
+
+	items := func(m SortMode) []list.Item {
+		rows := []list.Item{
+			Item{Name: "alpha.md"}, Item{Name: "also.md"}, Item{Name: "beta.md"},
+		}
+		SortItemsByTitle(rows, m == SortReverse)
+		return rows
+	}
+	CycleSort(&l, &mode, []SortMode{SortAlpha, SortReverse}, "Repos", items)
+
+	if mode != SortReverse || l.Title != SortTitle("Repos", SortReverse) {
+		t.Fatalf("sort state/title = (%v, %q), want reverse title", mode, l.Title)
+	}
+	if got := ansi.Strip(core.RenderList(l)); !strings.Contains(got, "Filter: al") || strings.Contains(got, "Z→A") {
+		t.Fatalf("active filter should hide the updated sort title, got:\n%s", got)
+	}
+
+	l.ResetFilter()
+	if got := ansi.Strip(core.RenderList(l)); !strings.Contains(got, "Repos — Z→A") {
+		t.Fatalf("clearing the filter should reveal the latest sort title, got:\n%s", got)
 	}
 }

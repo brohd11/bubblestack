@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestTruncLeft(t *testing.T) {
@@ -157,6 +159,61 @@ func TestShortHelpFullColumns(t *testing.T) {
 	}
 	if n := strings.Count(out, "clear log"); n != 1 {
 		t.Errorf("clear log should render once (deduped from actions), got %d:\n%s", n, out)
+	}
+}
+
+type renderListItem string
+
+func (i renderListItem) Title() string       { return string(i) }
+func (renderListItem) Description() string   { return "" }
+func (i renderListItem) FilterValue() string { return string(i) }
+
+func TestRenderListKeepsAppliedFilterInTitle(t *testing.T) {
+	prevProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prevProfile) })
+
+	const title = "Repos — A→Z"
+	l := NewSelectList([]list.Item{renderListItem("alpha"), renderListItem("beta")}, title)
+	l.SetSize(40, 8)
+
+	if got := ansi.Strip(RenderList(l)); !strings.Contains(got, title) {
+		t.Fatalf("unfiltered list should render its supplied title, got:\n%s", got)
+	}
+
+	l.SetFilterText("alp")
+	if l.FilterState() != list.FilterApplied {
+		t.Fatalf("setup: filter state = %v, want applied", l.FilterState())
+	}
+	filter := l.FilterInput.PromptStyle.Render(l.FilterInput.Prompt) + "alp"
+	if got := RenderFilter(&l); got != filter {
+		t.Fatalf("applied filter rendering = %q, want prompt-only styling %q", got, filter)
+	}
+	rendered := RenderList(l)
+	// bubbles reserves two cells after any non-editing title for its status message.
+	if wantPrefix := l.Styles.TitleBar.Render(filter + "  "); !strings.HasPrefix(rendered, wantPrefix) {
+		t.Fatalf("filter title should bypass the normal title foreground/background:\ngot  %q\nwant prefix %q", rendered, wantPrefix)
+	}
+	if got := ansi.Strip(rendered); !strings.Contains(got, "Filter: alp") || strings.Contains(got, title) {
+		t.Fatalf("applied filter should replace the rendered title, got:\n%s", got)
+	}
+	if l.Title != title {
+		t.Fatalf("rendering mutated the underlying title to %q, want %q", l.Title, title)
+	}
+
+	// While the query is being edited, bubbles already renders FilterInput (including
+	// its cursor); RenderList must leave that path intact.
+	l.SetFilterState(list.Filtering)
+	if got, want := RenderFilter(&l), l.FilterInput.View(); got != want {
+		t.Fatalf("live filter rendering diverged from bubbles:\ngot  %q\nwant %q", got, want)
+	}
+	if got := ansi.Strip(RenderList(l)); !strings.Contains(got, "Filter: alp") || strings.Contains(got, title) {
+		t.Fatalf("live filter should keep bubbles' filter title, got:\n%s", got)
+	}
+
+	l.ResetFilter()
+	if got := ansi.Strip(RenderList(l)); !strings.Contains(got, title) || strings.Contains(got, "Filter: alp") {
+		t.Fatalf("clearing the filter should restore the supplied title, got:\n%s", got)
 	}
 }
 

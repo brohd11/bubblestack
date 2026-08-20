@@ -135,7 +135,7 @@ func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	return s, listDispatch(sh, &s.list, msg, sh.BodyY(), onSelect, onKey)
 }
 
-func (s *PickerScreen) View(*core.Shared) string     { return s.list.View() }
+func (s *PickerScreen) View(*core.Shared) string     { return core.RenderList(s.list) }
 func (s *PickerScreen) HelpView(*core.Shared) string { return core.ShortHelp(s.list, core.HelpMinimal) }
 
 func (s *PickerScreen) SetSize(sh *core.Shared, width, bodyHeight int) {

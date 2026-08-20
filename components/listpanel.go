@@ -373,22 +373,14 @@ func (p *ListPanel) PanelHelp() []key.Binding {
 // accepted filter left the list with rows missing and nothing on screen saying why.
 //
 // The look is bubbles' own, deliberately — the yellow "Filter: " prompt with the query
-// in plain text is what the user already recognizes. While typing, that IS bubbles'
-// input (cursor included); once applied, the same prompt and text without a cursor.
-// The prompt style is read off FilterInput rather than Styles.FilterPrompt because the
-// list copies that style into the input at construction and never reads it again.
+// in plain text is what the user already recognizes. core.RenderFilter owns that shared
+// rendering for both this panel and full-screen lists.
 func (p *ListPanel) filterLine() string {
 	if !p.ownFilter {
 		return ""
 	}
-	in := p.list.FilterInput
-	var line string
-	switch p.list.FilterState() {
-	case list.Filtering:
-		line = in.View()
-	case list.FilterApplied:
-		line = in.PromptStyle.Render(in.Prompt) + in.Value()
-	default:
+	line := core.RenderFilter(&p.list)
+	if line == "" {
 		return ""
 	}
 	// The indent is the one bubbles' TitleBar carried (its left padding), so the line

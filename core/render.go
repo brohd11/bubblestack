@@ -175,6 +175,36 @@ func NewCompactList(items []list.Item, title string, extra ...key.Binding) list.
 	return newSelectList(items, title, CompactDelegate{}, extra...)
 }
 
+// RenderFilter is the shared filter heading for lists that keep an applied filter
+// visible. While editing it is bubbles' input verbatim (cursor included); once applied
+// it keeps the same adaptive prompt style and leaves the value unstyled, so it inherits
+// the terminal's foreground with no background.
+func RenderFilter(l *list.Model) string {
+	switch l.FilterState() {
+	case list.Filtering:
+		return l.FilterInput.View()
+	case list.FilterApplied:
+		in := l.FilterInput
+		return in.PromptStyle.Render(in.Prompt) + in.Value()
+	default:
+		return ""
+	}
+}
+
+// RenderList renders a full-screen list while keeping an applied filter visible in
+// its title bar. bubbles already replaces the title with FilterInput while the query
+// is being edited, but restores l.Title as soon as the filter is accepted; rendering
+// a copy preserves the real title for breadcrumbs and sort-mode updates. Clearing the
+// copy's Title style is what avoids applying the normal title foreground/background
+// over RenderFilter's prompt-only styling.
+func RenderList(l list.Model) string {
+	if l.ShowTitle() && l.FilterState() == list.FilterApplied {
+		l.Title = RenderFilter(&l)
+		l.Styles.Title = lipgloss.NewStyle()
+	}
+	return l.View()
+}
+
 func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, extra ...key.Binding) list.Model {
 	l := list.New(items, delegate, 0, 0)
 	if title != "" {
@@ -316,6 +346,11 @@ func StyleList(l *list.Model) {
 	// Theme the list's own title bar to match the breadcrumb (RenderTitleBar)
 	// instead of bubbles' default purple.
 	l.Styles.Title = listStyles.Title
+	// Unlike the title bar, the filter prompt intentionally keeps bubbles' adaptive
+	// yellow. Re-apply it (and its cursor) from the live shared styles so a theme
+	// broadcast refreshes every style cached inside FilterInput too.
+	l.FilterInput.PromptStyle = listStyles.FilterPrompt
+	l.FilterInput.Cursor.Style = listStyles.FilterCursor
 	// l.Styles.TitleBar = l.Styles.TitleBar.Margin(0) // how to set themes
 	// Drive list scrolling from the central keymap so an added scheme (e.g. wasd)
 	// reaches lists too; FullHint keeps the list's own full (?) help reading well.
