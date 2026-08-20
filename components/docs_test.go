@@ -86,6 +86,57 @@ func TestRenderMarkdownInlineIsolation(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdownHeadingInline: a heading is prose too — inline markup inside one
+// renders instead of printing its delimiters. Headings were the one block type that
+// skipped the inline pass (table headers and quotes always had it), so "## the `--flag`
+// option" used to reach the page with its backticks on.
+func TestRenderMarkdownHeadingInline(t *testing.T) {
+	withColor(t)
+
+	got := RenderMarkdown("# one **b**\n\n## two `c`\n\n### three *e*\n", 60)
+	if plain := ansi.Strip(got); strings.ContainsAny(plain, "*`") {
+		t.Errorf("heading delimiters must not reach the page, got %q", plain)
+	}
+	// The construct inherits the heading it sits in rather than dropping to the
+	// terminal default mid-line: bold in an h1 keeps the accent and the underline.
+	for _, want := range []string{
+		boldStyle().Inherit(h1Style()).Render("b"),
+		codeChip("c"),
+		italicStyle().Inherit(subheadingStyle()).Render("e"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing heading inline render %q in %q", want, got)
+		}
+	}
+}
+
+// TestRenderMarkdownInlineNesting: a construct nested in another renders, because
+// inlineOver recurses with the outer style as the new base. inlineAny only ever
+// excluded the delimiter the same alternative would consume, so these all MATCHED
+// before — they just came out with the inner delimiters printed.
+func TestRenderMarkdownInlineNesting(t *testing.T) {
+	withColor(t)
+
+	got := RenderMarkdown("a **bold `--flag` opt** and [**b** l](http://x)\n", 80)
+	if plain := ansi.Strip(got); plain != "a bold  --flag  opt and b l" {
+		t.Errorf("nested delimiters should be dropped, got %q", plain)
+	}
+	for _, want := range []string{
+		codeChip("--flag"),                           // the chip keeps its own colors
+		boldStyle().Render("bold "),                  // the run around it stays bold
+		boldStyle().Inherit(linkStyle()).Render("b"), // bold in a link is both
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing nested render %q in %q", want, got)
+		}
+	}
+
+	// The floor under the recursion: a code span is literal all the way down.
+	if lit := RenderMarkdown("`a **b** [c](d)`\n", 80); !strings.Contains(lit, codeChip("a **b** [c](d)")) {
+		t.Errorf("a code span must not recurse, got %q", lit)
+	}
+}
+
 // TestRenderMarkdownLists: bullets get the bullet mark, ordered items keep the
 // author's own number, and continuation rows hang under the marker's width.
 func TestRenderMarkdownLists(t *testing.T) {

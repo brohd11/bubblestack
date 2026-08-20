@@ -407,11 +407,11 @@ func (r *docRenderer) line(line, next string) {
 		}
 		r.pending = append(r.pending, quoteText(trimmed))
 	case strings.HasPrefix(trimmed, "### "):
-		r.heading(subheadingStyle().Render(strings.TrimPrefix(trimmed, "### ")))
+		r.heading(inlineOver(strings.TrimPrefix(trimmed, "### "), subheadingStyle()))
 	case strings.HasPrefix(trimmed, "## "):
-		r.heading(headingStyle().Render(strings.TrimPrefix(trimmed, "## ")))
+		r.heading(inlineOver(strings.TrimPrefix(trimmed, "## "), headingStyle()))
 	case strings.HasPrefix(trimmed, "# "):
-		r.heading(h1Style().Render(strings.TrimPrefix(trimmed, "# ")))
+		r.heading(inlineOver(strings.TrimPrefix(trimmed, "# "), h1Style()))
 	case r.table && tableOpen(trimmed):
 		r.pending = append(r.pending, trimmed)
 	case tableStart(trimmed, next):
@@ -481,6 +481,10 @@ func quoteText(trimmed string) string {
 // heading emits an already-styled heading under a separator. It is wrapped like any
 // other block: a heading longer than the pane is narrow — a preview beside an editor,
 // say — would otherwise be the one thing that overflows the box.
+//
+// The callers style it through inlineOver, not Style.Render, so a heading carrying an
+// inline construct renders it instead of printing its delimiters — the one block type
+// that used to skip the inline pass, while table headers and quotes always had it.
 func (r *docRenderer) heading(rendered string) {
 	r.flush()
 	r.blank()
@@ -941,6 +945,21 @@ func inline(s string) string { return inlineOver(s, lipgloss.Style{}) }
 // obvious alternative — style the finished row — does not work, because every inline
 // span ends in a reset and everything after it would lose the tint.
 //
+// A construct INHERITS base for whatever it does not set itself, so bold inside an
+// accent heading is bold AND accent rather than dropping to the terminal's default
+// mid-line — the emphasis styles set only their attribute, which is what makes them
+// compose. The code span is deliberately left out of that: its chip carries its own
+// foreground and background and is meant to read the same wherever it lands.
+//
+// Emphasis and links RECURSE with that composed style as the new base, which is what
+// renders a construct nested in another one (**the `--flag` option**, a [**bold**
+// link](x)) instead of printing the inner delimiters. Only the delimiters the same
+// alternative would consume are excluded by inlineAny, so a span may already contain
+// a different construct — recursing is all that was missing. A code span does NOT
+// recurse: its contents are literal, which is both correct markdown and pinned by
+// TestRenderMarkdownInlineIsolation. Each step strips a delimiter pair, so the
+// recursion is over strictly shorter text and terminates.
+//
 // The zero base (what inline passes) renders each run unchanged, so the plain path
 // is byte-identical to a single ReplaceAllStringFunc pass.
 func inlineOver(s string, base lipgloss.Style) string {
@@ -961,11 +980,11 @@ func inlineOver(s string, base lipgloss.Style) string {
 			// the code rather than as a smear ending flush against the next word.
 			b.WriteString(codeSpanStyle().Render(" " + p.text + " "))
 		case inlineKindBold:
-			b.WriteString(boldStyle().Render(p.text))
+			b.WriteString(inlineOver(p.text, boldStyle().Inherit(base)))
 		case inlineKindEm:
-			b.WriteString(italicStyle().Render(p.text))
+			b.WriteString(inlineOver(p.text, italicStyle().Inherit(base)))
 		case inlineKindLink:
-			b.WriteString(linkStyle().Render(p.text))
+			b.WriteString(inlineOver(p.text, linkStyle().Inherit(base)))
 		default:
 			write(p.text) // an image: its literal source, in the base style
 		}
