@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // This file collects the shared Update helpers: the small pieces of key-handling
@@ -156,16 +157,56 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 }
 
 // The list layout constants are bubbles' internals, pinned by tests
-// (update_test.go): titleView occupies one row whenever the title shows or the
-// filter is enabled (the filter input replaces the title in it), and each item
-// is NewDelegate's Height(2) + Spacing(1) rows. listItemAt and ListItemRow are
-// inverses over these; a bubbles upgrade that changes either breaks the tests
-// loudly instead of misplacing clicks and overlays silently.
+// (update_test.go): each item is NewDelegate's Height(2) + Spacing(1) rows.
+// listItemAt and ListItemRow are inverses over these; a bubbles upgrade that
+// changes either breaks the tests loudly instead of misplacing clicks and
+// overlays silently.
 const (
 	listItemRows        = 3 // core.NewDelegate: Height 2 + Spacing 1
 	compactListItemRows = 1 // core.CompactDelegate: Height 1 + Spacing 0
-	listHeaderRows      = 1 // bubbles renders a one-row titleView for NewSelectList lists
 )
+
+// listHeaderHeight is the height of the section bubbles draws above the items —
+// what a view row must have subtracted from it to become an item row. It is
+// MEASURED rather than assumed, because it is not one number: this was a
+// `listHeaderRows = 1` constant, and the row it named was only right for an
+// untitled list that is not filtering.
+//
+//	titled                          2   the bar, plus TitleBar's bottom padding
+//	titled, filtering               2   the filter input replaces the title in it
+//	untitled                        1   an empty section is still a row
+//	untitled, filtering             2   the input arrives, and the padding with it
+//	untitled, filter APPLIED        1   the input is gone again
+//
+// Two of those cost a row the constant never gave back. The visible symptom was
+// the filter case — the rows slide down while the click regions stay put, so the
+// hit target for the top row sits on the filter input — but a TITLED list (every
+// tab root and picker) was off by one all the time, masked by 3-row items where a
+// one-row slip usually lands inside the same item.
+//
+// The shape mirrors bubbles' own Model.View/titleView (list.go), which is the
+// contract being tracked: the section is drawn whenever the title shows or
+// filtering is enabled, it holds the filter input while filtering and the title
+// otherwise, and an EMPTY section still occupies the row JoinVertical gives it.
+// Everything read here is exported, so this stays a measurement, not a copy of
+// bubbles' internals. The status bar and help are off for every list built through
+// core.StyleList, so the title section is the whole header.
+func listHeaderHeight(l *list.Model) int {
+	if !l.ShowTitle() && !(l.ShowFilter() && l.FilteringEnabled()) {
+		return 0
+	}
+	var view string
+	switch {
+	case l.ShowFilter() && l.FilterState() == list.Filtering:
+		view = l.FilterInput.View()
+	case l.ShowTitle():
+		view = l.Styles.Title.Render(l.Title)
+	}
+	if view == "" {
+		return 1
+	}
+	return lipgloss.Height(l.Styles.TitleBar.Render(view))
+}
 
 // listItemAt maps a row within the list's rendered view to a visible-item
 // index, reporting false for clicks outside the items (the header, the spacing
@@ -176,7 +217,7 @@ func listItemAt(l *list.Model, relY int) (int, bool) {
 }
 
 func listItemAtRows(l *list.Model, relY, itemRows int) (int, bool) {
-	row := relY - listHeaderRows
+	row := relY - listHeaderHeight(l)
 	if row < 0 {
 		return 0, false
 	}
@@ -218,7 +259,7 @@ func listItemRow(l *list.Model, idx, itemRows int) (int, bool) {
 	if idx < start || idx >= start+l.Paginator.PerPage {
 		return 0, false
 	}
-	return listHeaderRows + (idx-start)*itemRows, true
+	return listHeaderHeight(l) + (idx-start)*itemRows, true
 }
 
 // WrapNav wraps the cursor at a list boundary: up on the first row selects the

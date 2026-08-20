@@ -52,9 +52,12 @@ func TruncLeft(s string, max int) string {
 // ---------- breadcrumb / title bars ----------
 
 // renderTitleBar renders text as a list-title-styled bar, so screens without
-// their own list title keep a consistent header. The bubbles default TitleBar
-// carries a bottom padding of 1; we drop it (keeping the left pad) so the
-// breadcrumb sits flush against the body below it.
+// their own list title keep a consistent header. It is TWO rows: bubbles' default
+// TitleBar carries a bottom padding of 1 (listStyles is DefaultStyles with only
+// Title recolored), and that blank row under the bar is what a real list's title
+// section has too, so a bar rendered here lines up with one. Anything mapping rows
+// to items must measure it rather than assume — see components.listHeaderHeight,
+// where assuming one row put every titled list's clicks a row out.
 func RenderTitleBar(text string) string {
 	return listStyles.TitleBar.Render(listStyles.Title.Render(text))
 }

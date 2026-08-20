@@ -150,6 +150,48 @@ func TestBorderedListPanelMouseRows(t *testing.T) {
 		}
 	})
 
+	// The reported bug, at the panel level: opening the filter pushes every row down
+	// one, and the click regions have to follow. Before this, the row that still picked
+	// the top item was the one the filter input had just moved onto.
+	t.Run("compact while filtering", func(t *testing.T) {
+		items := []list.Item{
+			compactTestItem{title: "alpha"},
+			compactTestItem{title: "beta"},
+			compactTestItem{title: "gamma"},
+		}
+		picked := ""
+		p := NewCompactListPanel(items, "Docs", ListPanelOpts{
+			Border: true,
+			OnSelect: func(_ *core.Shared, item list.Item) core.Action {
+				picked = item.(compactTestItem).title
+				return core.Action{}
+			},
+		})
+		p.SetSize(30, 8)
+		p.Focus()
+
+		l := p.List()
+		startFiltering(l, "a") // matches all three
+		if l.FilterState() != list.Filtering {
+			t.Fatal("the panel's list should be filtering")
+		}
+
+		for _, y := range []int{0, 1, 2} { // frame, filter input, the input's pad row
+			picked = ""
+			p.UpdatePanel(sh, click(y))
+			if picked != "" {
+				t.Fatalf("panel row %d is chrome while filtering, picked %q", y, picked)
+			}
+		}
+		for y, want := range map[int]string{3: "alpha", 4: "beta", 5: "gamma"} {
+			picked = ""
+			p.UpdatePanel(sh, click(y))
+			if picked != want {
+				t.Fatalf("filtering, panel row %d picked %q, want %q", y, picked, want)
+			}
+		}
+	})
+
 	t.Run("standard", func(t *testing.T) {
 		items := []list.Item{Item{Name: "zero"}, Item{Name: "one"}}
 		picked := ""
