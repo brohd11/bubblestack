@@ -20,12 +20,13 @@ import (
 // no nav keys, no Push/Pop, no domain type; the caller owns the content via
 // SetLines/SetStatus.
 type ScrollContainer struct {
-	vp      viewport.Model
-	title   string
-	focused bool
-	pinned  bool // content has been set once (the first set opens at the top)
-	width   int
-	height  int
+	vp         viewport.Model
+	title      string
+	focused    bool
+	pinned     bool // content has been set once (the first set opens at the top)
+	noKeyHints bool // the focused border carries the title alone (SetKeyHints)
+	width      int
+	height     int
 }
 
 var _ Panel = (*ScrollContainer)(nil)
@@ -37,6 +38,14 @@ var _ PanelHelper = (*ScrollContainer)(nil)
 func NewScrollContainer(title string) *ScrollContainer {
 	return &ScrollContainer{vp: viewport.New(0, 0), title: title}
 }
+
+// SetKeyHints turns the key legend the focused border carries on or off; on is the
+// default, so a panel that says nothing keeps it. Off leaves the title alone on the
+// edge, which is what a ListPanel's bordered legend has always shown (see its View) —
+// so a layout that pairs the two reads as one set of elements rather than one pane
+// shouting its keys next to a quiet one. The keys are unchanged either way: they are
+// still in the host's help bar via PanelHelp, which is the bar's job.
+func (p *ScrollContainer) SetKeyHints(show bool) { p.noKeyHints = !show }
 
 func (p *ScrollContainer) Focus()        { p.focused = true }
 func (p *ScrollContainer) Blur()         { p.focused = false }
@@ -174,8 +183,14 @@ func (p *ScrollContainer) contentHeight() int {
 // so a detail pane and the output pane read as the same kind of element.
 func (p *ScrollContainer) View(focused bool) string {
 	label := p.title
-	if focused {
-		label = p.title + " · ↑/↓ scroll · ⇧←→ panes"
+	if focused && !p.noKeyHints {
+		// Built from the live bindings rather than spelled out: this legend once read
+		// "⇧←→ panes" long after the pane keys became shift+tab alone, contradicting
+		// the host's own help bar one row below it.
+		label = p.title + " · " + core.Legend(
+			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
+			core.PaneHint(),
+		)
 	}
 	// The run between the corners is the same width as the bottom border: the
 	// inner text plus the 1-col padding on each side. Composed from the frame

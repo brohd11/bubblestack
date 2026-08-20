@@ -167,7 +167,14 @@ func (p *LogPane) View(focused bool) string {
 	}
 	if focused {
 		color = core.FocusedColor
-		label = "Output · ↑/↓ scroll · O/esc back · o hide · w wrap"
+		// Derived from the keymap for the same reason ScrollContainer's is: a spelled-out
+		// legend goes stale silently the next time one of these keys is rebound.
+		label += " · " + core.Legend(
+			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
+			core.Hint("back", core.Keys.ToggleOutput, core.Keys.Back),
+			core.Hint("hide", core.Keys.Output),
+			core.Hint("wrap", core.Keys.Wrap),
+		)
 	}
 
 	inner := p.innerWidth()

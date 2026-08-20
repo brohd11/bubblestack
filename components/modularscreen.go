@@ -18,11 +18,11 @@ import (
 //
 // Focus moves two ways, both permanent and neither a fallback for the other:
 //
-//   - a CYCLE (shift+←/→, or shift+tab for the forward step) walks the focusable
-//     slots in declaration order, wrapping — the right gesture on the two- or
-//     three-pane screens that make up most layouts, where "the next pane" is
-//     unambiguous. shift+tab is forward-only: no terminal sends a "backtab" the
-//     other way, so shift+← remains the reverse;
+//   - a CYCLE (shift+tab) walks the focusable slots in declaration order,
+//     wrapping — the right gesture on the two- or three-pane screens that make up
+//     most layouts, where "the next pane" is unambiguous. It is forward-only: no
+//     terminal sends a "backtab" the other way, and PanePrev carries no keys, so
+//     the wrap is what reaches every pane;
 //   - DIRECTIONAL moves aim at a pane by its place in the grid: one column over
 //     keeping the current row, or one row up inside the column (see neighbor).
 //     That reads off the layout the user is looking at, and is what a grid big
@@ -619,14 +619,14 @@ func (s *ModularScreen) cycleFocus(delta int) tea.Cmd {
 // reach this. Its behavior is pinned by TestPaneNavOverUnevenGrid, which calls it
 // directly for exactly that reason.
 //
-// A horizontal step walks column by column, aiming at the current ROW: shift+→
-// from row 1 lands on row 1 of the next column, or its nearest focusable row
+// A horizontal step walks column by column, aiming at the current ROW: a
+// PaneRight from row 1 lands on row 1 of the next column, or its nearest focusable row
 // when it is shorter or that row is informational. A vertical step walks row by
 // row inside the current column. Either way a column or row with nothing
 // focusable is skipped and the scan continues in the same direction.
 //
 // Movement CLAMPS at the grid's edge rather than wrapping, so a direction key
-// always means the same thing — a shift+← that sometimes jumped to the far right
+// always means the same thing — a PaneLeft that sometimes jumped to the far right
 // would make the grid unreadable. One consequence worth knowing: across columns
 // of unequal length the round trip isn't symmetric (row 1 → a one-row column →
 // back to row 0), because the row index is clamped on the way over and there is

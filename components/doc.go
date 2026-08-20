@@ -109,6 +109,18 @@ func (s *DocScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Acti
 				return s, act
 			}
 		}
+		// The bar advertises core.Keys.Up/Down for scrolling, but the viewport's own
+		// keymap knows only its subset (up/k, down/j) — so the alias keys (alt+w/alt+s,
+		// and anything a new scheme adds) were advertised and dead. Scroll here instead,
+		// after OnKey so a caller can still claim one of these.
+		switch {
+		case core.MatchKey(k, core.Keys.Up):
+			s.vp.LineUp(1)
+			return s, core.Action{}
+		case core.MatchKey(k, core.Keys.Down):
+			s.vp.LineDown(1)
+			return s, core.Action{}
+		}
 	}
 	var cmd tea.Cmd
 	s.vp, cmd = s.vp.Update(msg)

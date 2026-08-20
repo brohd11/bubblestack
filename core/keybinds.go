@@ -233,6 +233,25 @@ func Hint(desc string, binds ...key.Binding) key.Binding {
 	return key.NewBinding(key.WithKeys(keys...), key.WithHelp(strings.Join(labels, "/"), desc))
 }
 
+// Legend renders bindings as the plain "key desc · key desc" run a bordered pane
+// paints into its top edge. It is the border-legend analog of Shared.BindingHelp:
+// the same entries, unstyled, because the legend takes the border's own color.
+// Entries whose bindings carry no keycodes are skipped, so an unbound hint (the
+// directional entries inside PaneHint) costs nothing and appears by itself the
+// moment it is given keys. Building a legend from bindings rather than spelling
+// one out is what keeps a pane's advertised keys from drifting off the keymap.
+func Legend(binds ...key.Binding) string {
+	var parts []string
+	for _, b := range binds {
+		h := b.Help()
+		if h.Key == "" {
+			continue
+		}
+		parts = append(parts, h.Key+" "+h.Desc)
+	}
+	return strings.Join(parts, " · ")
+}
+
 // FullHint is Hint but the label lists ALL keycodes (the "more help" / full-help
 // menu rule): adding "w" to Keys.Up makes this read "↑/k/w" automatically.
 func FullHint(desc string, binds ...key.Binding) key.Binding {
