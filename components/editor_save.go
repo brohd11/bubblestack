@@ -26,6 +26,12 @@ import (
 // nothing happened. A relative name resolves against the process CWD, nano's rule.
 // saveExits, set by the caller before the push, is what decides where the write lands.
 //
+// A name that DIFFERS from the buffer's own goes through saveAsConfirm first. The box is
+// seeded with the full path, so it is one stray keystroke away from silently moving the
+// document — the buffer, its title, its crumb and the host's idea of which file it is
+// all follow the new name. A first save (no path yet) is not that, and prompts for
+// nothing.
+//
 // A leading "~" is resolved here, the one place the user's typed text enters, so the
 // buffer takes the RESOLVED path: unexpanded it would reach os.WriteFile as a literal
 // directory named "~" under the CWD, and the title, the prefill of the next ctrl+s and
@@ -51,6 +57,9 @@ func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
 				// The same wording editorSavedMsg reports a failed write with.
 				return core.Seq(core.Pop(), core.SetStatus("save failed: "+err.Error()))
 			}
+			if s.path != "" && path != s.path {
+				return core.Push(s.saveAsConfirm(path))
+			}
 			s.applySaveName(path)
 			return core.Seq(core.Pop(), core.Action{Cmd: s.saveCmd()})
 		}, nil)
@@ -58,6 +67,37 @@ func (s *EditorScreen) saveAsEdit(sh *core.Shared) *LineEditScreen {
 		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
 	}
 	return edit
+}
+
+// saveAsConfirm is the y/n step between a NEW name in the save-as box and the write.
+// This is a save-as, not a rename: the write creates the new file and the BUFFER moves to
+// it, while the old file stays on disk holding whatever was last saved to it. Both halves
+// are worth stating before the y — the second is the one that surprises, since the
+// document appears to have moved and a copy is left behind.
+//
+// It is pushed OVER the save-as box rather than replacing it so cancelling returns to the
+// name still typed there: the reason to say no is usually a typo, and a confirm that
+// threw the name away would make correcting one mean retyping the whole path. Both
+// overlays composite (Router.overlayBase walks the whole chain), so the box stays visible
+// under the modal. Yes pops both levels before the write.
+func (s *EditorScreen) saveAsConfirm(path string) *DialogScreen {
+	target := filepath.Base(path)
+	if filepath.Dir(path) != filepath.Dir(s.path) {
+		target = path // another folder is a move, and the folder is the whole point of it
+	}
+	body := "write the buffer to " + target + "?\n\n" +
+		"the buffer follows it; " + filepath.Base(s.path) + " stays on disk"
+	return &DialogScreen{
+		Title:  "save as",
+		Render: func(*core.Shared) string { return body },
+		OnYes: func(*core.Shared) core.Action {
+			s.applySaveName(path)
+			// Two levels: this confirm and the save-as box under it.
+			return core.Seq(core.Pop(2), core.Action{Cmd: s.saveCmd()})
+		},
+		Help:    DefaultHelpKeys,
+		Overlay: true,
+	}
 }
 
 // paneGeometry is the editor's assigned outer rectangle in absolute terminal cells.

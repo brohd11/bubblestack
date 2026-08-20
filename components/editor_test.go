@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // newEditor builds a sized screen over a shared with no chrome (BodyY 0, so mouse
@@ -1100,7 +1101,11 @@ func TestEditorSaveKey(t *testing.T) {
 		typeRunes(s, 'x')
 		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
 		after := filepath.Join(dir, "nested", "after.txt") // a dir that does not exist yet
-		s.saveAsEdit(sh).OnDone(sh, after)
+		s.saveAsEdit(sh).OnDone(sh, after)                 // raises the confirm; nothing has moved yet
+		if s.path == after {
+			t.Fatal("the buffer must not adopt the new path before the confirm is answered")
+		}
+		s.saveAsConfirm(after).OnYes(sh) // the y the router would deliver
 		s.Update(sh, s.saveCmd()())
 		if s.path != after || s.title != "after.txt" {
 			t.Fatalf("save-as should rename the buffer, got path %q title %q", s.path, s.title)
@@ -1221,7 +1226,8 @@ func TestEditorSaveAs(t *testing.T) {
 		t.Fatalf("a blank name must not touch the path, got %q", s.path)
 	}
 	renamed := filepath.Join(dir, "renamed.txt")
-	edit.OnDone(sh, renamed)
+	edit.OnDone(sh, renamed)           // the confirm, not the write
+	s.saveAsConfirm(renamed).OnYes(sh) // answered yes
 	if s.path != renamed || s.title != "renamed.txt" {
 		t.Fatalf("save-as should rename the buffer, got path %q title %q", s.path, renamed)
 	}
@@ -1248,6 +1254,83 @@ func TestEditorSaveAs(t *testing.T) {
 	}
 	if b, err := os.ReadFile(fresh); err != nil || string(b) != "no" {
 		t.Fatalf("scratch saved content = %q, err = %v", b, err)
+	}
+}
+
+// TestEditorSaveAsConfirm: the save-as box is seeded with the buffer's own path, so a
+// changed name is one stray keystroke away from moving the document — the write goes
+// through a y/n confirm now. An UNCHANGED name is a plain save and must still be silent,
+// and so must a first save of a scratch buffer, which has no old file to leave behind.
+func TestEditorSaveAsConfirm(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(old, []byte("orig"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, sh := newEditor(EditorOpts{Path: old})
+	s.Update(sh, s.Init(sh)())
+	typeRunes(s, '!')
+
+	// Unchanged: no confirm stands between the enter and the write.
+	s.saveAsEdit(sh).OnDone(sh, old)
+	s.Update(sh, s.saveCmd()())
+	if b, _ := os.ReadFile(old); string(b) != "!orig" {
+		t.Fatalf("an unchanged name should save straight through, got %q", b)
+	}
+
+	// Changed: nothing moves and nothing is written until the confirm is answered.
+	moved := filepath.Join(dir, "moved.txt")
+	s.saveAsEdit(sh).OnDone(sh, moved)
+	if s.path != old || s.title != "old.txt" {
+		t.Fatalf("the buffer must not move before the y, got path %q title %q", s.path, s.title)
+	}
+	if _, err := os.Stat(moved); !os.IsNotExist(err) {
+		t.Fatalf("nothing should be written before the y, stat err = %v", err)
+	}
+
+	// The confirm names both halves: where the buffer is going, and what stays behind.
+	dlg := s.saveAsConfirm(moved)
+	body := ansi.Strip(dlg.Render(sh))
+	for _, want := range []string{"moved.txt", "old.txt", "stays on disk"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the confirm should say %q; got:\n%s", want, body)
+		}
+	}
+	// Another folder is a move, so the whole target path is shown, not just the name.
+	elsewhere := filepath.Join(dir, "sub", "moved.txt")
+	if b := ansi.Strip(s.saveAsConfirm(elsewhere).Render(sh)); !strings.Contains(b, elsewhere) {
+		t.Errorf("a move to another folder should name the folder; got:\n%s", b)
+	}
+
+	// No: the dialog pops back to the still-filled box, leaving the buffer alone.
+	if _, act := dlg.Update(sh, tea.KeyMsg{Type: tea.KeyEsc}); act.Msg == nil {
+		t.Error("esc should pop the confirm")
+	}
+	if s.path != old {
+		t.Fatalf("a cancelled confirm must not move the buffer, got %q", s.path)
+	}
+
+	// Yes: the buffer takes the new path, and the old file keeps what was last saved
+	// to it — this is a save-as, not an os.Rename.
+	dlg.OnYes(sh)
+	s.Update(sh, s.saveCmd()())
+	if s.path != moved || s.title != "moved.txt" {
+		t.Fatalf("yes should move the buffer, got path %q title %q", s.path, s.title)
+	}
+	if b, err := os.ReadFile(moved); err != nil || string(b) != "!orig" {
+		t.Fatalf("the new path should hold the buffer: %q, err = %v", b, err)
+	}
+	if b, err := os.ReadFile(old); err != nil || string(b) != "!orig" {
+		t.Fatalf("the old file stays as last saved: %q, err = %v", b, err)
+	}
+
+	// A scratch buffer's first save has no old file to warn about.
+	scratch, sh2 := newEditor(EditorOpts{})
+	typeRunes(scratch, 'n')
+	fresh := filepath.Join(dir, "fresh.txt")
+	scratch.saveAsEdit(sh2).OnDone(sh2, fresh)
+	if scratch.path != fresh {
+		t.Fatalf("a first save should not prompt, got %q", scratch.path)
 	}
 }
 
