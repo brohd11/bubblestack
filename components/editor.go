@@ -726,7 +726,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
 			s.clearSelection()
 		default:
-			if len(m.Runes) > 0 {
+			if len(m.Runes) > 0 && !m.Alt {
 				s.deleteSelection()
 			}
 		}
@@ -802,9 +802,12 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 				break
 			}
 		}
-		// Every rune-bearing key, typed or pasted: a bracketed paste is one KeyMsg whose
-		// Runes carry newlines, so this must go through insertText, not insertRunes.
-		if len(m.Runes) > 0 {
+		// Every unmodified rune-bearing key, typed or pasted: a bracketed paste is one
+		// KeyMsg whose Runes carry newlines, so this must go through insertText, not
+		// insertRunes. Unknown Alt runes are control chords, never text — besides avoiding
+		// accidental chord insertion, that is the editor-side guard against a truncated
+		// terminal escape sequence reaching a screen outside bubblestack.Run's filter.
+		if len(m.Runes) > 0 && !m.Alt {
 			s.insertText(string(m.Runes))
 		}
 	}

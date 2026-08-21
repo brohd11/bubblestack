@@ -10,6 +10,8 @@
 package bubblestack
 
 import (
+	"regexp"
+
 	"github.com/brohd11/bubblestack/config"
 	"github.com/brohd11/bubblestack/core"
 
@@ -32,6 +34,34 @@ type (
 // FullscreenMask re-exports core.FullscreenMask so a consumer's screen can return it
 // from ChromeMask() to claim the whole canvas without importing core.
 var FullscreenMask = core.FullscreenMask
+
+var sgrMouseFragmentTail = regexp.MustCompile(`^<\d+;\d+;\d+[Mm]$`)
+
+// mouseSGRFragmentFilter drops the two KeyMsgs bubbletea v1.3.10 can emit when an
+// SGR mouse report is split across short terminal reads: alt+[ (the report's ESC [)
+// followed by a rune tail such as <64;53;18M. Without this, a text-capturing screen
+// receives the pair as ordinary input. Non-key messages may interleave between the
+// fragments, so they pass through without disarming the pending lead.
+func mouseSGRFragmentFilter() func(tea.Model, tea.Msg) tea.Msg {
+	pending := false
+	return func(_ tea.Model, msg tea.Msg) tea.Msg {
+		k, ok := msg.(tea.KeyMsg)
+		if !ok {
+			return msg
+		}
+		if pending {
+			pending = false
+			if k.Type == tea.KeyRunes && !k.Alt && !k.Paste && sgrMouseFragmentTail.MatchString(string(k.Runes)) {
+				return nil
+			}
+		}
+		if k.Type == tea.KeyRunes && k.Alt && !k.Paste && string(k.Runes) == "[" {
+			pending = true
+			return nil
+		}
+		return msg
+	}
+}
 
 // Config is the consumer-supplied input to Run. App and Tabs are required; Header,
 // Output, Status, and Theme are optional. A nil Header ⇒ no header box; a nil Output ⇒
@@ -111,6 +141,7 @@ func Run(cfg Config) error {
 	// Cell motion (not all motion) reports the wheel and clicks but only streams motion
 	// while a button is held, so there's no hover traffic through Update. It costs the
 	// terminal's own drag-select; the Mouse key (m) turns it back off to copy text out.
-	_, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	_, err := tea.NewProgram(r, tea.WithAltScreen(), tea.WithMouseCellMotion(),
+		tea.WithFilter(mouseSGRFragmentFilter())).Run()
 	return err
 }

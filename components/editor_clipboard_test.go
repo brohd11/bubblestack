@@ -207,3 +207,24 @@ func TestEditorChordsDoNotType(t *testing.T) {
 		}
 	}
 }
+
+// TestEditorUnknownAltRunesDoNotType is the editor-side backstop for malformed
+// terminal escape input. The program filter drops the known SGR fragment pair, but an
+// unrecognized Alt rune must never become text or delete the current selection even
+// when an EditorScreen is driven without bubblestack.Run.
+func TestEditorUnknownAltRunesDoNotType(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("abcdef")
+	selectRange(s, 0, 1, 0, 4)
+
+	s.Update(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	if got := buffer(s); got != "abcdef" {
+		t.Fatalf("unknown Alt rune changed the buffer to %q", got)
+	}
+	if got := s.selectedText(); got != "bcd" {
+		t.Fatalf("unknown Alt rune changed the selection to %q", got)
+	}
+	if s.dirty || len(s.undoStack) != 0 {
+		t.Fatal("ignored Alt input must not create an edit or undo step")
+	}
+}
