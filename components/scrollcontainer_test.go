@@ -66,3 +66,18 @@ func TestScrollContainerKeyHintsOptOut(t *testing.T) {
 		t.Error("SetKeyHints(true) should put the legend back")
 	}
 }
+
+// TestScrollContainerSetTitle: the legend is a construction-time field, so a pane whose
+// content changes shape (a count, a warning) needs the setter to say so on its own edge
+// rather than spending a content row on it.
+func TestScrollContainerSetTitle(t *testing.T) {
+	p := NewScrollContainer("Files to Commit")
+	p.SetSize(40, 6)
+	p.SetLines([]string{"body"})
+
+	p.SetTitle("Files to Commit (2 new)")
+	v := p.View(false)
+	if !strings.Contains(v, "Files to Commit (2 new)") {
+		t.Errorf("the border should carry the new title; got:\n%s", v)
+	}
+}

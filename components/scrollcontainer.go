@@ -47,6 +47,10 @@ func NewScrollContainer(title string) *ScrollContainer {
 // still in the host's help bar via PanelHelp, which is the bar's job.
 func (p *ScrollContainer) SetKeyHints(show bool) { p.noKeyHints = !show }
 
+// SetTitle replaces the top-border legend. A pane whose content changes shape — a
+// count, a warning — says so on its own edge rather than spending a content row on it.
+func (p *ScrollContainer) SetTitle(title string) { p.title = title }
+
 func (p *ScrollContainer) Focus()        { p.focused = true }
 func (p *ScrollContainer) Blur()         { p.focused = false }
 func (p *ScrollContainer) Focused() bool { return p.focused }
