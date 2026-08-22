@@ -266,6 +266,14 @@ func (i marqueeItem) Title() string       { return i.title }
 func (i marqueeItem) SuffixText() string  { return i.suffix }
 func (i marqueeItem) FilterValue() string { return i.title }
 
+// markedItem is a row that also flags a status, for the MarkItem assertions below.
+type markedItem struct {
+	marqueeItem
+	mark string
+}
+
+func (i markedItem) Mark() string { return i.mark }
+
 // renderCompact renders row 0 of a compact list `width` cells wide, with the marquee
 // pointed at off (nil ⇒ the static truncation every list had before).
 func renderCompact(t *testing.T, off *int, width int, items ...list.Item) string {
@@ -357,3 +365,52 @@ func TestCompactMarqueeInert(t *testing.T) {
 }
 
 func ptr(i int) *int { return &i }
+
+// TestCompactMarkSurvivesTruncation: the whole point of MarkItem over SuffixText — the
+// flag's cells are reserved before the name is fitted, so it is still there on a row far
+// too narrow for the name (where the suffix column is dropped entirely).
+func TestCompactMarkSurvivesTruncation(t *testing.T) {
+	item := markedItem{marqueeItem{title: "architecture-notes.md", suffix: "design/"}, " (*)"}
+	for _, width := range []int{40, 24, 16, 12, 8} {
+		out := ansi.Strip(renderCompact(t, nil, width, item))
+		if !strings.HasSuffix(out, " (*)") {
+			t.Errorf("width %d: mark missing from %q", width, out)
+		}
+		if w := lipgloss.Width(out); w > width {
+			t.Errorf("width %d: row overflowed to %d cells: %q", width, w, out)
+		}
+	}
+}
+
+// A row without the mark renders exactly as it did before MarkItem existed.
+func TestCompactUnmarkedRowUnchanged(t *testing.T) {
+	plain := marqueeItem{title: "notes.md", suffix: "design/"}
+	marked := markedItem{plain, ""}
+	if got, want := renderCompact(t, nil, 28, marked), renderCompact(t, nil, 28, plain); got != want {
+		t.Errorf("an empty mark changed the row:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestCompactMarkPinnedUnderMarquee: the flag holds still while the name and path slide
+// beneath it, and the row keeps a constant width at every offset — a mark that scrolled
+// away with the text would be exactly as untrustworthy as a truncated one.
+func TestCompactMarkPinnedUnderMarquee(t *testing.T) {
+	const width = 28
+	item := markedItem{marqueeItem{title: "architecture-notes.md", suffix: "design/deep/"}, " (*)"}
+	row, over := CompactMarquee(item, CompactTextWidth(width))
+	if !over {
+		t.Fatal("test fixture must overflow to exercise the marquee")
+	}
+	if row.Mark != " (*)" {
+		t.Fatalf("CompactMarquee dropped the mark: %q", row.Mark)
+	}
+	for off := 0; off <= row.Width()-CompactTextWidth(width); off++ {
+		out := ansi.Strip(renderCompact(t, &off, width, item))
+		if !strings.HasSuffix(out, " (*)") {
+			t.Errorf("offset %d: mark not pinned: %q", off, out)
+		}
+		if w := lipgloss.Width(out); w != width {
+			t.Errorf("offset %d: rendered width = %d, want %d: %q", off, w, width, out)
+		}
+	}
+}

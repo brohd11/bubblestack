@@ -173,7 +173,7 @@ type wrapRow struct{ line, start, end int }
 // buffer that renamed itself under it (a path-keyed open-file map, a doc list that has
 // a new file in it now). The exit prompt's save does not call it: that path ends in
 // OnExit, which the host is already handling. Left nil, a save is silent — the title
-// bar dropping its [+] marker is the only feedback, which is all a standalone editor
+// bar dropping its (*) marker is the only feedback, which is all a standalone editor
 // needs.
 //
 // Border draws the shared frame (the ScrollContainer look) with the title as its
@@ -865,7 +865,7 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 	)
 }
 
-// Dirty reports unsaved changes in the buffer — what the [+] title marker shows —
+// Dirty reports unsaved changes in the buffer — what the (*) title marker shows —
 // exported so a host (a quit gate) can ask before discarding the buffer.
 func (s *EditorScreen) Dirty() bool { return s.dirty }
 

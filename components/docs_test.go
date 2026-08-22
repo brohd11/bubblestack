@@ -41,6 +41,44 @@ func TestRenderMarkdownHeadings(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdownDeepHeadings: "###" through "######" are all headings and all wear
+// the same dimmed-accent style. They used to match no case at all below three hashes and
+// fell through to the paragraph default, which printed the markers as prose.
+func TestRenderMarkdownDeepHeadings(t *testing.T) {
+	withColor(t)
+
+	for _, marker := range []string{"###", "####", "#####", "######"} {
+		got := RenderMarkdown("intro\n\n"+marker+" Deep\n", 40)
+		if want := subheadingStyle().Render("Deep"); !strings.Contains(got, want) {
+			t.Errorf("%q: missing heading render %q in:\n%s", marker, want, got)
+		}
+		if strings.Contains(ansi.Strip(got), "#") {
+			t.Errorf("%q: heading marker reached the page:\n%s", marker, ansi.Strip(got))
+		}
+	}
+}
+
+// TestSubheadingRanksUnderHeading: a subheading is the SECTION's accent dimmed, not the
+// muted grey body-secondary text wears — the distinction the level is there to draw.
+func TestSubheadingRanksUnderHeading(t *testing.T) {
+	withColor(t)
+
+	sub := subheadingStyle().GetForeground()
+	if sub == headingStyle().GetForeground() {
+		t.Error("a subheading must not render identically to the heading above it")
+	}
+	if sub == codeStyle().GetForeground() {
+		t.Error("a subheading must not fall back to the muted grey of body-secondary text")
+	}
+}
+
+// Seven hashes is not a heading in markdown, and must stay prose here too.
+func TestRenderMarkdownSevenHashesIsProse(t *testing.T) {
+	if got := render("####### Deep\n", 40); !strings.Contains(got, "####### Deep") {
+		t.Errorf("seven hashes should render as prose, got:\n%s", got)
+	}
+}
+
 // TestRenderMarkdownInline: the four inline constructs render styled with their
 // delimiters dropped.
 func TestRenderMarkdownInline(t *testing.T) {

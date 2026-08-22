@@ -537,7 +537,7 @@ func newPaneEditor(opts EditorOpts) (*EditorScreen, *core.Shared) {
 }
 
 // TestEditorBorderedView: bordered, the title moves into the frame's top-edge legend
-// (carrying the [+] dirty marker) and the separate title bar is gone; unbordered, the
+// (carrying the (*) dirty marker) and the separate title bar is gone; unbordered, the
 // title bar stays and no frame is drawn.
 func TestEditorBorderedView(t *testing.T) {
 	s, sh := newPaneEditor(EditorOpts{Title: "notes.md", Border: true})
@@ -553,7 +553,7 @@ func TestEditorBorderedView(t *testing.T) {
 	}
 
 	typeRunes(s, 'x') // dirty
-	if !strings.HasPrefix(s.View(sh), "┌─ notes.md [+] ") {
+	if !strings.HasPrefix(s.View(sh), "┌─ notes.md (*) ") {
 		t.Fatal("the dirty marker should ride the legend")
 	}
 

@@ -168,6 +168,16 @@ type SuffixItem interface {
 	SuffixText() string
 }
 
+// MarkItem is an optional second contract a compact row may also satisfy: Mark is a short
+// status flag (gote's "(*)" for a buffer with unsaved changes) pinned past the title and
+// suffix, at the right of everything the row prints. Unlike SuffixText, its cells are
+// reserved BEFORE the title is truncated, so it survives on a row too narrow for the name
+// — a flag that disappears exactly when the column is tight is a flag the reader cannot
+// trust — and it holds still while a selected row marquees underneath it. Keep it to a
+// couple of cells; every row in the list pays that width. A row that does not implement
+// this renders exactly as it did before.
+type MarkItem interface{ Mark() string }
+
 // NewCompactList builds the single-line counterpart of NewSelectList. It keeps
 // the same title, filtering, keymap, help, and pagination behavior; only the row
 // delegate changes to a one-cell-high title plus optional muted suffix.
@@ -239,13 +249,17 @@ func (CompactDelegate) Height() int                         { return 1 }
 func (CompactDelegate) Spacing() int                        { return 0 }
 func (CompactDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 
-// CompactRow is one row's two raw, untruncated pieces: the title, and the muted tail
-// ("  " + suffix, empty when the item has no suffix).
-type CompactRow struct{ Title, Tail string }
+// CompactRow is one row's raw, untruncated pieces: the title, the muted tail ("  " +
+// suffix, empty when the item has no suffix), and the reserved Mark ("" when the item is
+// not a MarkItem). Title and Tail are what slide under a marquee; Mark never moves.
+type CompactRow struct{ Title, Tail, Mark string }
 
-// Width is the row's full untruncated cell width. Subtracting the text width from it gives
-// the marquee's last offset — the point at which the tail sits flush with the right edge.
-func (r CompactRow) Width() int { return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) }
+// Width is the row's full untruncated cell width, the mark's reserved cells included.
+// Subtracting the text width from it gives the marquee's last offset — the point at which
+// the tail sits flush against the mark at the right edge.
+func (r CompactRow) Width() int {
+	return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) + lipgloss.Width(r.Mark)
+}
 
 // CompactTextWidth is the cells a compact row's text actually gets out of a list of the
 // given width — the delegate's padding taken off. Exported so the panel that drives a
@@ -266,6 +280,12 @@ func CompactMarquee(i SuffixItem, textWidth int) (CompactRow, bool) {
 	if s := i.SuffixText(); s != "" {
 		r.Tail = "  " + s
 	}
+	// Reading the mark here rather than in Render is what keeps the panel driving the
+	// marquee clock and the delegate fitting the row from disagreeing about the width a
+	// marked row has left to scroll in.
+	if m, ok := i.(MarkItem); ok {
+		r.Mark = m.Mark()
+	}
 	return r, r.Width() > textWidth
 }
 
@@ -285,6 +305,12 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		textWidth = 1
 	}
 
+	// The mark's cells come off the top, so what follows fits the title and suffix into
+	// what is left rather than into the whole row. CompactMarquee already counted those
+	// cells in its overflow answer, so the two agree about which rows move.
+	raw, over := CompactMarquee(i, textWidth)
+	fitWidth := max(textWidth-lipgloss.Width(raw.Mark), 1)
+
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
@@ -293,16 +319,18 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// The marquee owns the fit when the selected row overflows: the two pieces slide as one
 	// string, so the tail of a long name and the path behind it both come into view. Never
 	// while a filter is live — the match highlighting below styles the title by rune index,
-	// and those indices stop addressing the string once it has been windowed.
-	if raw, over := CompactMarquee(i, textWidth); over && d.Offset != nil && isSelected && !isFiltered {
+	// and those indices stop addressing the string once it has been windowed. The last
+	// offset is measured against the full row (raw.Width already carries the mark), which
+	// is the same number ListPanel.marqueeOverflow steps the clock to.
+	if over && d.Offset != nil && isSelected && !isFiltered {
 		off := min(max(*d.Offset, 0), raw.Width()-textWidth)
-		title = marqueeSeg(raw.Title, 0, off, textWidth)
-		suffix = marqueeSeg(raw.Tail, lipgloss.Width(raw.Title), off, textWidth)
+		title = marqueeSeg(raw.Title, 0, off, fitWidth)
+		suffix = marqueeSeg(raw.Tail, lipgloss.Width(raw.Title), off, fitWidth)
 	} else {
-		title = ansi.Truncate(i.Title(), textWidth, "…")
-		if s := i.SuffixText(); s != "" {
-			if remaining := textWidth - lipgloss.Width(title) - 2; remaining > 0 {
-				suffix = "  " + ansi.Truncate(s, remaining, "…")
+		title = ansi.Truncate(raw.Title, fitWidth, "…")
+		if raw.Tail != "" {
+			if remaining := fitWidth - lipgloss.Width(title) - 2; remaining > 0 {
+				suffix = "  " + ansi.Truncate(strings.TrimPrefix(raw.Tail, "  "), remaining, "…")
 			}
 		}
 	}
@@ -322,7 +350,15 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if emptyFilter {
 		muted = styles.DimmedDesc.Inline(true)
 	}
-	fmt.Fprint(w, titleStyle.Render(title)+muted.Render(suffix)) //nolint:errcheck
+	// The mark is appended after the highlight pass, never through it: StyleRunes above
+	// addresses the title by rune index, and a flag is not part of the name being matched.
+	// Inline, because titleStyle carries the row's left border and padding — rendering the
+	// mark through it a second time would print a second border two cells wide.
+	mark := ""
+	if raw.Mark != "" {
+		mark = titleStyle.Inline(true).Render(raw.Mark)
+	}
+	fmt.Fprint(w, titleStyle.Render(title)+muted.Render(suffix)+mark) //nolint:errcheck
 }
 
 // newDelegate is the shared list delegate with brightened description text and the

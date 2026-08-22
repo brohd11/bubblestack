@@ -52,7 +52,7 @@ func (s *EditorScreen) insetY() int {
 
 func (s *EditorScreen) baseTitleText() string {
 	if s.dirty {
-		return s.title + " [+]"
+		return s.title + " (*)"
 	}
 	return s.title
 }
@@ -77,7 +77,7 @@ func (s *EditorScreen) searchBar() string {
 }
 
 // View renders the buffer window under its title, both tracking focus: bordered, the
-// title (with its [+] modified marker) is the frame's top-border legend and the frame
+// title (with its (*) modified marker) is the frame's top-border legend and the frame
 // carries the tint; unbordered, it is the title bar above the body, muted while a
 // sibling pane holds the keys.
 func (s *EditorScreen) View(*core.Shared) string {

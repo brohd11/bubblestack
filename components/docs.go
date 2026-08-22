@@ -137,9 +137,9 @@ func docTopics(pages []DocPage) string {
 // dependency and bring its own theme, which would fight core's). Everything is
 // re-flowed to the width the DocScreen hands us:
 //
-//	# heading       bold accent, blank line above
+//	# heading       bold accent, underlined, blank line above
 //	## heading      bold accent, blank line above
-//	### heading     bold, muted
+//	### … ######    bold, the accent dimmed one step; all four levels render alike
 //	---             a full-width rule (also *** and ___, three or more of one char)
 //	- item          bulleted, wrapped with a hanging indent (an indented line continues it)
 //	1. item         same, keeping the author's number as the marker ("1)" too)
@@ -223,6 +223,12 @@ var orderedItem = regexp.MustCompile(`^(\d+[.)])\s+`)
 // nothing else. Standalone lines only — "***bold***" inline never reaches here. An
 // alternation rather than a backreference, which Go's regexp does not have.
 var themeBreak = regexp.MustCompile(`^(-{3,}|\*{3,}|_{3,})$`)
+
+// subheading matches every heading level below "##" — three hashes through six, the
+// deepest markdown has. They share one style rather than fading level by level: a
+// terminal has no type sizes, so six distinguishable heading weights do not exist, and
+// the levels below "##" are in practice one bucket of "smaller than a section".
+var subheading = regexp.MustCompile(`^#{3,6} `)
 
 // tableDelim matches a GFM delimiter row — the line of dashes under a table's header,
 // which is the ONLY thing that makes a row of pipes a table. Each cell is one or more
@@ -406,8 +412,11 @@ func (r *docRenderer) line(line, next string) {
 			r.quote = true
 		}
 		r.pending = append(r.pending, quoteText(trimmed))
-	case strings.HasPrefix(trimmed, "### "):
-		r.heading(inlineOver(strings.TrimPrefix(trimmed, "### "), subheadingStyle()))
+	case subheading.MatchString(trimmed):
+		// Above the "##"/"#" cases so the deepest marker wins, the order every other
+		// nested construct here is written in. Before this, "####" and deeper matched
+		// nothing and fell through to the paragraph default, printing their own hashes.
+		r.heading(inlineOver(subheading.ReplaceAllString(trimmed, ""), subheadingStyle()))
 	case strings.HasPrefix(trimmed, "## "):
 		r.heading(inlineOver(strings.TrimPrefix(trimmed, "## "), headingStyle()))
 	case strings.HasPrefix(trimmed, "# "):
@@ -1074,12 +1083,22 @@ func linkStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Underline(true).Foreground(core.MarkdownAccent())
 }
 
-// subheadingStyle and codeStyle stay on the theme's own muted grey — it reads fine
-// under every preset including mono, so there is nothing to borrow.
+// subheadingStyle is every heading below "##": the same accent, dimmed one step (see
+// core.Dim, which recedes toward the terminal's ground rather than simply darkening, so
+// the dimmed heading is the quieter one under a light background too). It used to be the
+// theme's muted grey, which is what body-secondary text wears — a "###" read as
+// de-emphasized prose rather than as a heading ranking under its section.
 func subheadingStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Foreground(core.MutedColor)
+	return lipgloss.NewStyle().Bold(true).Foreground(core.Dim(core.MarkdownAccent(), subheadingDim))
 }
 
+// subheadingDim is how far a subheading recedes: far enough that every preset accent
+// lands on a different ANSI index (core.Dim steps up until it does), close enough that
+// the hue still reads as the section color rather than a new one.
+const subheadingDim = 0.3
+
+// codeStyle stays on the theme's own muted grey — it reads fine under every preset
+// including mono, so there is nothing to borrow.
 func codeStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(core.MutedColor)
 }
