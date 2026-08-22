@@ -358,12 +358,18 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 	return act, true
 }
 
-// PanelHelp contributes the list's select/filter hints plus any caller-supplied
-// bindings to the host's help bar while this panel is focused.
+// PanelHelp contributes the list's select hint plus any caller-supplied bindings to the
+// host's help bar while this panel is focused.
+//
+// Not the filter key. What a panel contributes lands on a bar, so it is held to the bar's
+// own cap (see core.ShortHelp): panel-local NAVIGATION, not the panel's command set. Select
+// is nav — it is in ShortHelp's sparse literal too — while "/" is a command and belongs in
+// the (?) menu, where ShortHelp's full help gives it a whole column and gote's overlay names
+// it. Filtering is unaffected: the key still dispatches, and filterLine still says so on
+// screen once a filter is applied, which is the part that actually needed saying.
 func (p *ListPanel) PanelHelp() []key.Binding {
 	return append([]key.Binding{
 		core.Hint("select", core.Keys.Select),
-		core.Hint("filter", p.list.KeyMap.Filter),
 	}, p.help...)
 }
 

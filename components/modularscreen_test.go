@@ -77,7 +77,7 @@ func TestHostBlurDimsFocusedPanel(t *testing.T) {
 	sh := core.NewShared(nil)
 	m.SetSize(sh, 80, 20)
 
-	const focusedLegend = "panes" // the focused ScrollContainer's border legend
+	const focusedLegend = "scroll" // the focused ScrollContainer's border legend
 	if v := m.View(sh); !strings.Contains(v, focusedLegend) {
 		t.Fatal("the focused pane should show its focused legend")
 	}

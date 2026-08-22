@@ -29,8 +29,10 @@ type KeyMap struct {
 	Down   key.Binding
 	Left   key.Binding
 	Right  key.Binding
-	Top    key.Binding // jump to the oldest content (output pane)
-	Bottom key.Binding // jump to the newest content (output pane)
+	// Jump to either end of whatever is scrolling — the output pane, a ScrollContainer,
+	// a menu. Never on a help bar (a jump is a command): the (?) menu carries them.
+	Top    key.Binding // jump to the oldest content
+	Bottom key.Binding // jump to the newest content
 
 	// actions
 	Select key.Binding
@@ -243,10 +245,15 @@ func Hint(desc string, binds ...key.Binding) key.Binding {
 // Legend renders bindings as the plain "key desc · key desc" run a bordered pane
 // paints into its top edge. It is the border-legend analog of Shared.BindingHelp:
 // the same entries, unstyled, because the legend takes the border's own color.
-// Entries whose bindings carry no keycodes are skipped, so an unbound hint (the
-// directional entries inside PaneHint) costs nothing and appears by itself the
-// moment it is given keys. Building a legend from bindings rather than spelling
-// one out is what keeps a pane's advertised keys from drifting off the keymap.
+// Entries whose bindings carry no keycodes are skipped, so an unbound hint costs
+// nothing and appears by itself the moment it is given keys. Building a legend from
+// bindings rather than spelling one out is what keeps a pane's advertised keys from
+// drifting off the keymap.
+//
+// A legend carries only keys that act on THAT pane. Screen-wide keys — pane navigation
+// above all — belong to the help bar or the (?) menu; a border that repeats them says
+// the same thing twice a row apart and is free to drift out of step with it, which is
+// exactly how this legend once came to advertise pane keys no binding carried.
 func Legend(binds ...key.Binding) string {
 	var parts []string
 	for _, b := range binds {
@@ -296,6 +303,9 @@ func DirKeyHints() []key.Binding {
 // to the user, and a row of near-identical entries would crowd a bar that already
 // carries the focused panel's own keys. A ModularScreen includes it whenever it
 // has more than one focusable panel.
+//
+// It is a help-bar and (?) entry only, deliberately not a pane legend one: moving
+// between panes is the screen's key, not any one pane's (see Legend).
 //
 // The label is built from whichever bindings actually carry keys, so it widens by
 // itself when the currently-unbound directional keys get keycodes; the entry

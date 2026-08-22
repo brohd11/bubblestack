@@ -429,13 +429,17 @@ const (
 // secondary keys stay out of the short bar.
 //
 // Convention — the bar is intentionally sparse, and stays that way. Its entries are the
-// hardcoded literal below (nav, select, back or tabs, and "? more") and nothing else; a
-// screen's own keys never reach it, which is why the short branch ignores the list's
-// AdditionalShortHelpKeys entirely. A NEW COMMAND ALWAYS GOES IN THE (?) MENU, NEVER ON THE
-// BAR: pass it to NewSelectList (it lands in AdditionalFullHelpKeys, rendered by the actions
-// column above), and on a static-bar screen with no full help leave it off the bar and write
-// it in that app's docs page instead. The bar's job is to say a menu exists, not to be one —
-// once it lists commands it grows with every feature and stops being readable at a glance.
+// hardcoded literal below ("↑/↓ move", "enter select", "esc back" or "[ ] tabs", and
+// "? more") and nothing else; a screen's own keys never reach it, which is why the short
+// branch ignores the list's AdditionalShortHelpKeys entirely. A NEW COMMAND ALWAYS GOES
+// IN THE (?) MENU, NEVER ON THE BAR: pass it to NewSelectList (it lands in
+// AdditionalFullHelpKeys, rendered by the actions column above), and on a static-bar
+// screen with no full help leave it off the bar and write it in that app's docs page
+// instead. The bar's job is to say a menu exists, not to be one — once it lists commands
+// it grows with every feature and stops being readable at a glance. The cap reaches past
+// this function: a focused panel's PanelHelp is merged into a ModularScreen's bar
+// (components.ModularScreen.HelpView), so it is held to the same rule — panel-local
+// navigation, not the panel's command set.
 func ShortHelp(l list.Model, mode HelpMode) string {
 	if l.Help.ShowAll {
 		nav := []key.Binding{
@@ -465,8 +469,11 @@ func ShortHelp(l list.Model, mode HelpMode) string {
 		return l.Styles.HelpStyle.Render(l.Help.FullHelpView(cols))
 	}
 	short := []key.Binding{
-		Hint("up", Keys.Up),
-		Hint("down", Keys.Down),
+		// One entry for the arrows, the form every viewport already uses (Hint("scroll",
+		// Up, Down)): moving the cursor is one idea, and splitting it in two spent a slot
+		// on a description that could only restate the key it sat next to. "move" on a
+		// list, "scroll" on a viewport — the description says what the arrows do there.
+		Hint("move", Keys.Up, Keys.Down),
 		Hint("select", Keys.Select),
 	}
 	switch mode {

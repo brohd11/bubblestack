@@ -121,12 +121,16 @@ func (p *ScrollContainer) UpdatePanel(_ *core.Shared, msg tea.Msg) (core.Action,
 	return core.Action{}, false
 }
 
-// PanelHelp contributes the scroll hints shown in the host's help bar while this
+// PanelHelp contributes the scroll hint shown in the host's help bar while this
 // panel is focused.
+//
+// Scrolling only. g/G still jump to either end (see UpdatePanel), but a jump is a
+// command rather than navigation, and what a panel contributes lands on a bar — which
+// is capped (core.ShortHelp). So the (?) menu owns it: every list already lists g/G
+// there through bubbles' own GoToStart/GoToEnd, and gote names it in its overlay.
 func (p *ScrollContainer) PanelHelp() []key.Binding {
 	return []key.Binding{
 		core.Hint("scroll", core.Keys.Up, core.Keys.Down),
-		core.Hint("top/bottom", core.Keys.Top, core.Keys.Bottom),
 	}
 }
 
@@ -183,17 +187,20 @@ func (p *ScrollContainer) contentHeight() int {
 }
 
 // View draws the content inside a bordered box whose top edge is interrupted by
-// the title legend (plus a scroll/pane hint while focused) — the LogPane shape,
-// so a detail pane and the output pane read as the same kind of element.
+// the title legend (plus a scroll hint while focused) — the LogPane shape, so a
+// detail pane and the output pane read as the same kind of element.
 func (p *ScrollContainer) View(focused bool) string {
 	label := p.title
 	if focused && !p.noKeyHints {
-		// Built from the live bindings rather than spelled out: this legend once read
-		// "⇧←→ panes" long after the pane keys became shift+tab alone, contradicting
-		// the host's own help bar one row below it.
+		// Scrolling only: a border legend advertises what acts on THIS pane, and pane
+		// navigation is the screen's, not the pane's — it belongs to the host's help bar
+		// one row below (and to the (?) menu), which is where it now lives alone. That is
+		// also the durable fix for the rot this legend had: it read "⇧←→ panes" for months
+		// after the pane keys became shift+tab alone, contradicting the bar beneath it.
+		// The scroll hint that remains is still built from the live bindings rather than
+		// spelled out, so it can't drift the same way.
 		label = p.title + " · " + core.Legend(
 			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
-			core.PaneHint(),
 		)
 	}
 	// The run between the corners is the same width as the bottom border: the

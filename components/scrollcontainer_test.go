@@ -9,9 +9,10 @@ import (
 
 // TestScrollContainerLegendTracksKeymap is the guard the stale legend got past: the
 // focused pane's border once advertised "⇧←→ panes" for months after the pane keys
-// became shift+tab alone, while the host's help bar one row below it said ⇧tab. The
-// legend is derived now, so this pins it to whatever core.Keys actually carries —
-// rebinding a pane key moves both, and neither can drift from the other again.
+// became shift+tab alone, while the host's help bar one row below it said ⇧tab. Two
+// things pin it now — the legend carries no pane keys at all (they are the screen's,
+// so the bar owns them alone), and the scroll hint that remains is derived from
+// core.Keys rather than spelled out, so rebinding moves it too.
 func TestScrollContainerLegendTracksKeymap(t *testing.T) {
 	p := NewScrollContainer("preview")
 	p.SetSize(40, 6)
@@ -26,11 +27,15 @@ func TestScrollContainerLegendTracksKeymap(t *testing.T) {
 	for _, want := range []string{
 		"preview",
 		core.Legend(core.Hint("scroll", core.Keys.Up, core.Keys.Down)),
-		core.Legend(core.PaneHint()),
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("focused legend is missing %q; got:\n%s", want, v)
 		}
+	}
+	// Pane navigation is the screen's key, not this pane's: the host's help bar
+	// advertises it and the border does not repeat it.
+	if strings.Contains(v, "panes") {
+		t.Errorf("the border legend must not carry the pane hint; got:\n%s", v)
 	}
 	// The specific rot: keys no binding carries must not appear.
 	for _, stale := range []string{"⇧←", "⇧→"} {
