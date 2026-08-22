@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -159,5 +160,42 @@ func TestShellQuote(t *testing.T) {
 		if got := ShellQuote(in); got != want {
 			t.Errorf("ShellQuote(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestInlineCmdUsesUserShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("userShell reads COMSPEC on windows")
+	}
+	t.Setenv("SHELL", "/usr/bin/fish")
+	cmd := inlineCmd(nil)
+	if cmd.Path != "/usr/bin/fish" {
+		t.Fatalf("cmd.Path = %q, want /usr/bin/fish", cmd.Path)
+	}
+	// No -i/-l: ExecProcess hands the child a real tty, so the shell works out on its own
+	// that it is interactive, and the flags don't mean the same thing across shells.
+	if want := []string{"/usr/bin/fish"}; !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestInlineCmdFallsBackWithoutShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("userShell reads COMSPEC on windows")
+	}
+	t.Setenv("SHELL", "")
+	if got := userShell(); got != "/bin/sh" {
+		t.Fatalf("userShell() = %q, want /bin/sh", got)
+	}
+}
+
+// TestInlineCmdRunsCommandDirectly checks a command is exec'd as given rather than handed
+// to a shell — nothing re-parses it, so an argument with spaces stays one argument.
+func TestInlineCmdRunsCommandDirectly(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/fish")
+	cmd := inlineCmd([]string{"git", "log", "--author=A B"})
+	want := []string{"git", "log", "--author=A B"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
 	}
 }

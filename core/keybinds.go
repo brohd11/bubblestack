@@ -43,17 +43,18 @@ type KeyMap struct {
 	No  key.Binding
 
 	// global chrome
-	NextTab      key.Binding
-	PrevTab      key.Binding
-	ToggleOutput key.Binding // focus/unfocus the output pane for scrolling (O; o shows/hides)
-	Output       key.Binding // show/hide the output box
-	Wrap         key.Binding // toggle the output pane's wrap render mode (optional Wrapper)
-	Mouse        key.Binding // toggle mouse capture; off restores terminal text selection
-	Clear        key.Binding
-	Unwind       key.Binding
-	Refresh      key.Binding // reload all views; action is consumer-supplied
-	Terminal     key.Binding // open a terminal at the top screen's directory (DirLocator); action is consumer-supplied
-	OpenDir      key.Binding // open the top screen's directory in the OS file manager (DirLocator); action is consumer-supplied
+	NextTab        key.Binding
+	PrevTab        key.Binding
+	ToggleOutput   key.Binding // focus/unfocus the output pane for scrolling (O; o shows/hides)
+	Output         key.Binding // show/hide the output box
+	Wrap           key.Binding // toggle the output pane's wrap render mode (optional Wrapper)
+	Mouse          key.Binding // toggle mouse capture; off restores terminal text selection
+	Clear          key.Binding
+	Unwind         key.Binding
+	Refresh        key.Binding // reload all views; action is consumer-supplied
+	Terminal       key.Binding // open a terminal in this process at the top screen's directory (DirLocator); action is consumer-supplied
+	TerminalWindow key.Binding // open a detached terminal window at the same directory; action is consumer-supplied
+	OpenDir        key.Binding // open the top screen's directory in the OS file manager (DirLocator); action is consumer-supplied
 
 	// pane navigation over a ModularScreen's grid of panels. The host screen
 	// matches these ABOVE every panel, capturing or not, so they stay the way out
@@ -114,8 +115,14 @@ var Keys = KeyMap{
 	Clear:        key.NewBinding(key.WithKeys("C")),
 	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
 	Refresh:      key.NewBinding(key.WithKeys("r")),
-	Terminal:     key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
-	OpenDir:      key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "open dir")),
+	// t hands this process's terminal to a shell and comes back when it exits; T is the
+	// detached window. The inline form gets the unshifted key because it is the one you
+	// reach for mid-task — a two-command detour shouldn't cost a window. That pushed the
+	// file manager off T and onto ctrl+t, which has the side benefit of surviving a
+	// filtering list (see modifiedKey).
+	Terminal:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "terminal")),
+	TerminalWindow: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "term window")),
+	OpenDir:        key.NewBinding(key.WithKeys("ctrl+t"), key.WithHelp("ctrl+t", "open dir")),
 
 	// shift+tab is the whole scheme now, and the cycle is FORWARD-ONLY: it wraps at both
 	// ends, so every pane is still reachable by stepping on round. The shift+arrows that
@@ -265,13 +272,15 @@ func FullHint(desc string, binds ...key.Binding) key.Binding {
 	return key.NewBinding(key.WithKeys(keys...), key.WithHelp(strings.Join(labels, "/"), desc))
 }
 
-// DirKeyHints returns the help entries for the DirLocator-based global keys — the terminal
-// ("t") and open-directory ("T") keys the router fires on any screen advertising a directory.
-// A DirLocator screen includes these in its help so the keys are discoverable; a screen with
-// no directory omits them, so non-repo menus don't advertise keys that wouldn't fire.
+// DirKeyHints returns the help entries for the DirLocator-based global keys — the inline
+// terminal ("t"), the terminal window ("T") and open-directory ("ctrl+t") keys the router
+// fires on any screen advertising a directory. A DirLocator screen includes these in its
+// help so the keys are discoverable; a screen with no directory omits them, so non-repo
+// menus don't advertise keys that wouldn't fire.
 func DirKeyHints() []key.Binding {
 	return []key.Binding{
 		Hint("terminal", Keys.Terminal),
+		Hint("term window", Keys.TerminalWindow),
 		Hint("open dir", Keys.OpenDir),
 	}
 }

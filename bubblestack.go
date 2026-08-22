@@ -91,8 +91,14 @@ type Config struct {
 	// TerminalAction is the Action returned by the global Terminal key (Keys.Terminal),
 	// given the directory resolved from the top screen's core.DirLocator, fired from any
 	// screen/depth except while text is captured. Wire it to a launcher (e.g.
-	// sysopen.Terminal). nil ⇒ the key is left to the active screen.
+	// sysopen.TerminalInline). nil ⇒ the key is left to the active screen.
 	TerminalAction func(dir string) core.Action
+
+	// TerminalWindowAction is the Action returned by the global TerminalWindow key
+	// (Keys.TerminalWindow) — the detached-window sibling of TerminalAction, resolved from
+	// the same core.DirLocator. Wire it to a launcher (e.g. sysopen.Terminal). nil ⇒ the key
+	// is left to the active screen.
+	TerminalWindowAction func(dir string) core.Action
 
 	// OpenDirAction is the Action returned by the global OpenDir key (Keys.OpenDir) — the
 	// file-manager sibling of TerminalAction, resolved from the same core.DirLocator. Wire
@@ -129,6 +135,7 @@ func Run(cfg Config) error {
 	r := core.NewRouter(sh, cfg.Tabs)
 	r.SetRefreshAction(cfg.RefreshAction)
 	r.SetTerminalAction(cfg.TerminalAction)
+	r.SetTerminalWindowAction(cfg.TerminalWindowAction)
 	r.SetOpenDirAction(cfg.OpenDirAction)
 	r.SetInit(cfg.Init)
 	// Prime terminal background detection while the terminal is still in normal mode: the

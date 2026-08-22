@@ -13,8 +13,10 @@ optional header/output/status chrome, a theme, and its tabs, and `bubblestack.Ru
   `LoadingScreen`, `TaskScreen`, `FormScreen`, `DocScreen`, and the default
   `LogPane`/`StatusLine`.
 - **`sysopen/`** — hand a path/URL/directory to the OS: `Path` (file manager), `URL` (browser),
-  and `Terminal(dir, command...)` (an emulator at `dir`, optionally running a command). Returns
-  a `core.Action`; cross-platform, with the launched terminal always rooted at `dir`.
+  `Terminal(dir, command...)` (an emulator at `dir`, optionally running a command) and
+  `TerminalInline(dir, command...)` (the same, but borrowing the running program's own tty via
+  `tea.ExecProcess` — the TUI suspends and is restored on exit, so no window is spawned).
+  Returns a `core.Action`; cross-platform, with the launched terminal always rooted at `dir`.
 
 Used by [gdaddon](https://github.com/brohd11/gdaddon) and
 [repoview](https://github.com/brohd11/repoview).

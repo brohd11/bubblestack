@@ -52,6 +52,12 @@ type Router struct {
 	// screen (which is what preserves any row-level "t" a screen handles itself).
 	terminalAction func(dir string) Action
 
+	// terminalWindowAction supplies the Action for the global TerminalWindow key
+	// (Keys.TerminalWindow) — the detached-window sibling of terminalAction, resolved from
+	// the same DirLocator. Consumer-set via SetTerminalWindowAction; nil ⇒ the key is left
+	// to the active screen.
+	terminalWindowAction func(dir string) Action
+
 	// openDirAction supplies the Action for the global OpenDir key (Keys.OpenDir), given the
 	// directory resolved from the top screen's DirLocator — the file-manager sibling of
 	// terminalAction. Consumer-set via SetOpenDirAction; nil ⇒ the key is left to the active
@@ -79,6 +85,12 @@ func (r *Router) SetRefreshAction(f func(*Shared) Action) { r.refreshAction = f 
 // DirLocator, from any depth except while text is captured. Called by the Run facade after
 // NewRouter; nil leaves the key to the active screen.
 func (r *Router) SetTerminalAction(f func(dir string) Action) { r.terminalAction = f }
+
+// SetTerminalWindowAction wires the consumer's "open a detached terminal window at dir"
+// action to the global TerminalWindow key, resolved from the same DirLocator as
+// SetTerminalAction. Two hooks rather than one because the choice between borrowing this
+// tty and spawning a window is the user's, made per keystroke.
+func (r *Router) SetTerminalWindowAction(f func(dir string) Action) { r.terminalWindowAction = f }
 
 // SetOpenDirAction wires the consumer's "open dir in the file manager" action to the global
 // OpenDir key, resolved from the top screen's DirLocator the same way as SetTerminalAction.

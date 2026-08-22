@@ -1,5 +1,6 @@
 // Package sysopen hands a path, URL, or directory to the OS: the file manager
-// (Path), the default browser (URL), and a terminal emulator (Terminal). It names no
+// (Path), the default browser (URL), and a terminal emulator (Terminal, or
+// TerminalInline for a shell that borrows this process's own tty). It names no
 // application domain type and imports only core + stdlib, so any bubblestack consumer
 // (gdaddon, repoview, …) can reuse it instead of copying the launcher logic.
 //
@@ -88,6 +89,57 @@ func Terminal(dir string, command ...string) core.Action {
 			return start(cmd, "terminal at "+dir)
 		}),
 	)
+}
+
+// TerminalInline hands this process's terminal to a shell at dir: bubbletea releases the
+// tty, the child owns it until it exits, and the TUI is restored. The in-process sibling
+// of Terminal — no window is created, so the user lands back on the screen they left
+// rather than accumulating detached windows for a two-command detour.
+//
+// With a command it runs that command instead of a shell (still rooted at dir), matching
+// Terminal's variadic. Unlike Terminal there is no pre-launch status: the screen is about
+// to disappear, so the only line the user reads is the one written when the child exits.
+func TerminalInline(dir string, command ...string) core.Action {
+	if _, err := os.Stat(dir); err != nil {
+		return core.SetStatusAndLog("path not found: " + dir)
+	}
+	cmd := inlineCmd(command)
+	cmd.Dir = dir
+	return core.Async(tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return core.SetStatusAndLog("terminal at " + dir + ": " + err.Error()).Msg
+		}
+		return core.SetStatus("terminal at " + dir + " closed").Msg
+	}))
+}
+
+// inlineCmd builds the child for TerminalInline: the user's shell when command is empty,
+// otherwise command run directly (no shell, so nothing is re-parsed).
+//
+// The shell gets no -i or -l: ExecProcess hands it the real tty, so it decides for itself
+// that it is interactive, and the flags don't mean the same thing across sh/zsh/fish —
+// passing them is how a login-only rc file ends up sourced twice or not at all.
+func inlineCmd(command []string) *exec.Cmd {
+	if len(command) > 0 {
+		return exec.Command(command[0], command[1:]...)
+	}
+	return exec.Command(userShell())
+}
+
+// userShell is the interactive shell to hand the terminal to: the user's own, falling
+// back to the one every system has. On windows $SHELL is normally unset, so COMSPEC is
+// what actually answers there.
+func userShell() string {
+	if runtime.GOOS == "windows" {
+		if sh := os.Getenv("COMSPEC"); sh != "" {
+			return sh
+		}
+		return "cmd.exe"
+	}
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	return "/bin/sh"
 }
 
 // terminalCmd builds the terminal launch command for dir (running command in it, if

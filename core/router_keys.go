@@ -29,9 +29,9 @@ func (r *Router) quitAction() Action {
 	return Async(tea.Quit)
 }
 
-// dirKeyAction resolves a DirLocator-based global key (Terminal, OpenDir): when action is
-// wired, k matches b, the top screen isn't capturing text, and it advertises a directory,
-// it returns (action(dir), true). Otherwise (Action{}, false) so the key falls through to
+// dirKeyAction resolves a DirLocator-based global key (Terminal, TerminalWindow, OpenDir):
+// when action is wired, k matches b, the top screen isn't capturing text, and it advertises
+// a directory, it returns (action(dir), true). Otherwise (Action{}, false) so the key falls through to
 // the active screen — preserving any row-level handling it does itself.
 func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Action) (Action, bool) {
 	if action == nil || !MatchKey(k, b) {
@@ -69,13 +69,17 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 		}
 	}
 
-	// Terminal ("t") opens a terminal and OpenDir ("T") opens the file manager, both at the
-	// top screen's directory from any depth — the whole point is that they work once you've
+	// Terminal ("t") hands this process's terminal to a shell, TerminalWindow ("T") opens a
+	// detached window, and OpenDir ("ctrl+t") opens the file manager — all three at the top
+	// screen's directory from any depth, which is the whole point: they work once you've
 	// drilled into a repo, not only on the list row. dirKeyAction gates each on text capture
 	// (a filtering list / focused form can still type the letter) and resolves the directory
 	// from the top screen's DirLocator; a screen that isn't one lets the key fall through so
 	// its own row-level handling still gets it.
 	if act, ok := r.dirKeyAction(k, Keys.Terminal, r.terminalAction); ok {
+		return act, true
+	}
+	if act, ok := r.dirKeyAction(k, Keys.TerminalWindow, r.terminalWindowAction); ok {
 		return act, true
 	}
 	if act, ok := r.dirKeyAction(k, Keys.OpenDir, r.openDirAction); ok {
