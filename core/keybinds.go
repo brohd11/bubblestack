@@ -275,8 +275,14 @@ func FullHint(desc string, binds ...key.Binding) key.Binding {
 // DirKeyHints returns the help entries for the DirLocator-based global keys — the inline
 // terminal ("t"), the terminal window ("T") and open-directory ("ctrl+t") keys the router
 // fires on any screen advertising a directory. A DirLocator screen includes these in its
-// help so the keys are discoverable; a screen with no directory omits them, so non-repo
-// menus don't advertise keys that wouldn't fire.
+// (?) full help so the keys are discoverable; a screen with no directory omits them, so
+// non-repo menus don't advertise keys that wouldn't fire.
+//
+// These are FULL-HELP entries only. Do not append them into a bar — neither a list's short
+// help nor a BindingHelp bar on a static screen: the bar is kept deliberately sparse (see
+// ShortHelp), and three system-open keys are exactly the kind of secondary command that
+// belongs behind "?". A screen that has no full help simply doesn't advertise them; the
+// keys still fire, and each app's docs page spells them out.
 func DirKeyHints() []key.Binding {
 	return []key.Binding{
 		Hint("terminal", Keys.Terminal),

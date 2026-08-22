@@ -229,6 +229,10 @@ func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, 
 			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		}, extra...)
 	}
+	// Both, but only the full one has an effect on a screen whose HelpView calls ShortHelp —
+	// its short branch builds its own fixed entry list and never consults the short keys. The
+	// short assignment matters solely to raw HelpView(l) screens, which render bubbles' own
+	// help. Extras passed here are, in practice, (?) menu entries; see ShortHelp's convention.
 	l.AdditionalShortHelpKeys = keys
 	l.AdditionalFullHelpKeys = keys
 	return l
@@ -423,6 +427,15 @@ const (
 // list needn't enumerate it, and any entry that duplicates a chrome key is dropped from the
 // actions column (excludeKeys) so it appears once. Tab roots use this instead of helpView so
 // secondary keys stay out of the short bar.
+//
+// Convention — the bar is intentionally sparse, and stays that way. Its entries are the
+// hardcoded literal below (nav, select, back or tabs, and "? more") and nothing else; a
+// screen's own keys never reach it, which is why the short branch ignores the list's
+// AdditionalShortHelpKeys entirely. A NEW COMMAND ALWAYS GOES IN THE (?) MENU, NEVER ON THE
+// BAR: pass it to NewSelectList (it lands in AdditionalFullHelpKeys, rendered by the actions
+// column above), and on a static-bar screen with no full help leave it off the bar and write
+// it in that app's docs page instead. The bar's job is to say a menu exists, not to be one —
+// once it lists commands it grows with every feature and stops being readable at a glance.
 func ShortHelp(l list.Model, mode HelpMode) string {
 	if l.Help.ShowAll {
 		nav := []key.Binding{

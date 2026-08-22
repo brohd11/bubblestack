@@ -93,13 +93,11 @@ type ModularOpts struct {
 // NewModularScreen builds the screen, flattens the slots in declaration order,
 // and focuses the first Focusable panel.
 func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
+	// opts.Dir makes this a DirLocator, so the global terminal/open-dir keys fire on it —
+	// but they are NOT added to the help here. Unlike PickerScreen, whose extras land in the
+	// (?) full help, a ModularScreen's help is the bar itself, and the bar stays sparse
+	// (see core.ShortHelp). The keys work unadvertised; opts.Help is the caller's alone.
 	help := opts.Help
-	if opts.Dir != "" {
-		// A screen with a directory is a DirLocator, so the global terminal/open-dir
-		// keys fire on it — advertise them in its help alongside any caller-supplied
-		// bindings, as PickerScreen does.
-		help = append(append([]key.Binding{}, opts.Help...), core.DirKeyHints()...)
-	}
 	s := &ModularScreen{
 		cols:        columns,
 		colWidths:   opts.ColWidths,

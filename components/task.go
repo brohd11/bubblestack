@@ -162,21 +162,17 @@ func (s *TaskScreen) View(sh *core.Shared) string {
 }
 
 func (s *TaskScreen) HelpView(sh *core.Shared) string {
-	// A task with a directory is a DirLocator, so the terminal/open-dir keys fire on it — the
-	// point of the "resolve it in a terminal (t)" failure message. Advertise them in the bar.
-	dirHints := func(base ...key.Binding) []key.Binding {
-		if s.Dir == "" {
-			return base
-		}
-		return append(base, core.DirKeyHints()...)
-	}
+	// A task with a directory is a DirLocator, so the terminal/open-dir keys still fire on it —
+	// what the "resolve it in a terminal (t)" failure message counts on. They are deliberately
+	// NOT on this bar: the bar stays sparse (see core.ShortHelp), and a task screen has no (?)
+	// help to put them in, so they go unadvertised here rather than crowding four entries in.
 	if s.done && (s.aborting || s.stay) {
-		return sh.BindingHelp(dirHints(core.Hint("back", core.Keys.Back)))
+		return sh.BindingHelp([]key.Binding{core.Hint("back", core.Keys.Back)})
 	}
 	if s.aborting {
 		return sh.NoteHelp("aborting…")
 	}
-	return sh.BindingHelp(dirHints(core.Hint("abort", core.Keys.Back)))
+	return sh.BindingHelp([]key.Binding{core.Hint("abort", core.Keys.Back)})
 }
 
 func (s *TaskScreen) SetSize(sh *core.Shared, width, bodyHeight int) {}
