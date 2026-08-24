@@ -117,7 +117,7 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 	if opts.Border {
 		listTitle = "" // the title moves to the border legend; an empty one hides the bar
 	}
-	return &ListPanel{
+	p := &ListPanel{
 		list:     build(items, listTitle, opts.Help...),
 		onSelect: opts.OnSelect,
 		onKey:    opts.OnKey,
@@ -126,6 +126,16 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 		bordered: opts.Border,
 		itemRows: itemRows,
 	}
+	// A bordered panel has no title bar — the legend took it — but bubbles still draws its
+	// header section, and an EMPTY section is still a row (listHeaderHeight's table). That
+	// row was the blank line above the first item of every framed panel, paid for whether or
+	// not a filter was live. Drawing the filter ourselves turns it into a row that appears
+	// only while one IS live. Unbordered panels keep their title bar and are untouched.
+	if opts.Border {
+		p.ownFilter = true
+		p.list.SetShowFilter(false)
+	}
+	return p
 }
 
 // ---------- marquee ----------

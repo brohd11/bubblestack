@@ -411,3 +411,46 @@ func contains(hay []string, needle string) bool {
 	}
 	return false
 }
+
+// TestFilePanelRowAnchor: the anchor opens below the whole item and flips clear above it,
+// and it tracks the density — the two numbers a caller must not hold a copy of.
+func TestFilePanelRowAnchor(t *testing.T) {
+	root := fileTree(t)
+	p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true})
+	p.SetSize(30, 20)
+
+	const originY = 4
+	idx := 1
+	row, ok := p.RowY(idx)
+	if !ok {
+		t.Fatal("row should be on-page")
+	}
+	a, ok := p.RowAnchor(idx, 0, originY)
+	if !ok {
+		t.Fatal("RowAnchor should agree with RowY about the page")
+	}
+	top := originY + row
+	if a.FlipY != top {
+		t.Fatalf("FlipY = %d, want the item's own top row %d", a.FlipY, top)
+	}
+	if a.Y != top+1 {
+		t.Fatalf("compact: Y = %d, want the row below a 1-row item (%d)", a.Y, top+1)
+	}
+
+	p.SetCompact(false)
+	row, ok = p.RowY(idx)
+	if !ok {
+		t.Fatal("row should still be on-page at the standard density")
+	}
+	a, ok = p.RowAnchor(idx, 0, originY)
+	if !ok {
+		t.Fatal("RowAnchor should agree with RowY at the standard density too")
+	}
+	if want := originY + row + 3; a.Y != want {
+		t.Fatalf("standard: Y = %d, want the row below a 3-row item (%d)", a.Y, want)
+	}
+
+	if _, ok := p.RowAnchor(999, 0, originY); ok {
+		t.Fatal("an off-page index should report false, as RowY does")
+	}
+}

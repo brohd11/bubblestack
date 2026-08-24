@@ -741,3 +741,52 @@ func TestMarqueeInitIdempotent(t *testing.T) {
 		t.Fatal("a second Init over a running marquee must not arm a second clock")
 	}
 }
+
+// TestBorderedPanelSpendsNoRowOnAnEmptyHeader: a framed panel's legend replaces the list's
+// title bar, so bubbles' header section is empty — and an empty section is still a row. The
+// panel draws its own filter line instead, which means the row exists only while a filter
+// does. Pinned at both densities, since RowY and the click math are built on the same count.
+func TestBorderedPanelSpendsNoRowOnAnEmptyHeader(t *testing.T) {
+	items := []list.Item{Item{Name: "one"}, Item{Name: "two"}}
+	for _, tc := range []struct {
+		name string
+		p    *ListPanel
+	}{
+		{"standard", NewListPanel(items, "Docs", ListPanelOpts{Border: true})},
+		{"compact", NewCompactListPanel(items, "Docs", ListPanelOpts{Border: true}).ListPanel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.p.SetSize(30, 12)
+			row, ok := tc.p.RowY(0)
+			if !ok {
+				t.Fatal("the first row should be on-page")
+			}
+			if row != 1 {
+				t.Fatalf("first row at %d, want 1 — the frame's top edge and nothing else", row)
+			}
+			// The row comes back for a live filter, and only then.
+			tc.p.List().SetFilterText("one")
+			if row, _ := tc.p.RowY(0); row != 2 {
+				t.Fatalf("filtered: first row at %d, want 2 — the frame plus the filter line", row)
+			}
+			if !strings.Contains(tc.p.View(false), "one") {
+				t.Fatal("the filtered row should still render inside the frame")
+			}
+			tc.p.List().ResetFilter()
+		})
+	}
+}
+
+// TestUnborderedPanelKeepsItsTitleBar is the no-regression guard for the panels that never
+// asked for a frame (gitstack's tags sidebar): their header is a real title, not an empty
+// row, and the own-filter treatment must not reach them.
+func TestUnborderedPanelKeepsItsTitleBar(t *testing.T) {
+	p := NewListPanel([]list.Item{Item{Name: "one"}}, "Tags", ListPanelOpts{})
+	p.SetSize(30, 12)
+	if !p.List().ShowFilter() {
+		t.Fatal("an unbordered panel leaves the filter to bubbles' own header")
+	}
+	if row, _ := p.RowY(0); row == 0 {
+		t.Fatal("an unbordered panel's title bar still occupies its rows")
+	}
+}

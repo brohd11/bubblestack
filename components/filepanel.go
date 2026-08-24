@@ -543,6 +543,25 @@ func (p *FilePanel) OnFocus() tea.Cmd             { return p.panel.OnFocus() }
 func (p *FilePanel) Capturing() bool              { return p.panel.Capturing() }
 func (p *FilePanel) PanelHelp() []key.Binding     { return p.panel.PanelHelp() }
 
+// RowAnchor is the MenuAnchor for a context menu over visible item idx, given the panel's
+// own top-left in absolute terminal cells (0, Shared.BodyY() for a panel filling the body;
+// its slot's origin inside a larger layout). It is the AnchorListRow family's member for
+// this component: the menu opens on the first row below the whole item and flips clear
+// above it, so the row it acts on stays visible.
+//
+// It lives here rather than in the caller because both numbers it needs change with
+// density — the item's row height, and the chrome above the list — and a consumer holding
+// a copy of either would put the box a row off the moment the density flipped. ok is false
+// when idx is scrolled off-page; the caller picks the fallback, as with RowY.
+func (p *FilePanel) RowAnchor(idx, originX, originY int) (MenuAnchor, bool) {
+	row, ok := p.RowY(idx)
+	if !ok {
+		return MenuAnchor{}, false
+	}
+	top := originY + row
+	return MenuAnchor{X: originX, Y: top + p.panel.itemRows, FlipX: originX + 1, FlipY: top}, true
+}
+
 // UpKey is the binding that walks to the parent directory — the configured one, or the
 // default. Exported so a host's help page states the key the panel actually answers to
 // rather than a copy of it.
