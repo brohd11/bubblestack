@@ -11,22 +11,17 @@ package components
 // inserts both and leaves the caret between them. Nothing else in the pair story is
 // clever: backspace does not swallow the closer, and typing the closing delimiter over
 // an auto-inserted one inserts a second.
-var editorPairs = map[rune]rune{'(': ')', '[': ']', '{': '}', '*': '*', '_': '_'}
-
-// emphasisPairRune marks the pairs that only auto-close in prose. In code '*' is
-// multiplication or a pointer and '_' is an identifier character, so closing them on
-// every keystroke would fight ordinary typing; wrapping a SELECTION in them stays
-// available everywhere because that gesture is always deliberate.
-func emphasisPairRune(r rune) bool { return r == '*' || r == '_' }
-
-// emphasisPairExt reports the file types where emphasisPairRune delimiters auto-close.
-func emphasisPairExt(ext string) bool {
-	switch ext {
-	case ".md", ".markdown":
-		return true
-	}
-	return false
+var editorPairs = map[rune]rune{
+	'(': ')', '[': ']', '{': '}',
+	'\'': '\'', '"': '"', '`': '`',
+	'*': '*', '_': '_',
 }
+
+// selectionOnlyPairRune marks delimiters that wrap selected text but never auto-close
+// at an empty caret. Even in prose, '*' and '_' are common enough in partially typed
+// Markdown and identifiers that a surprise duplicate fights ordinary input; selecting
+// text first makes the surrounding gesture unambiguous.
+func selectionOnlyPairRune(r rune) bool { return r == '*' || r == '_' }
 
 // surroundSelection wraps the selection in open/close and keeps the original text
 // selected, so repeating the key nests another pair: word → *word* → **word**. The

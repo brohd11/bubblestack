@@ -287,10 +287,14 @@ func TestEditorAutoPair(t *testing.T) {
 		{"paren in code", "x.go", '(', "()", 1},
 		{"bracket in code", "x.go", '[', "[]", 1},
 		{"brace in code", "x.go", '{', "{}", 1},
+		{"single quote in code", "x.go", '\'', "''", 1},
+		{"double quote in code", "x.go", '"', "\"\"", 1},
+		{"backtick in code", "x.go", '`', "``", 1},
 		{"star in code stays bare", "x.go", '*', "*", 1},
 		{"underscore in code stays bare", "x.go", '_', "_", 1},
-		{"star in markdown", "x.md", '*', "**", 1},
-		{"underscore in markdown", "x.md", '_', "__", 1},
+		{"star in markdown stays bare", "x.md", '*', "*", 1},
+		{"underscore in markdown stays bare", "x.md", '_', "_", 1},
+		{"backtick in markdown", "x.md", '`', "``", 1},
 		{"paren in markdown", "x.md", '(', "()", 1},
 		{"star in yaml stays bare", "x.yaml", '*', "*", 1},
 		{"unpaired rune", "x.go", 'a', "a", 1},
@@ -332,13 +336,31 @@ func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
 	}
 }
 
-func TestEditorSaveAsPicksUpEmphasisPairs(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "notes.txt"})
-	if s.emphasisPairs {
-		t.Fatal(".txt should not auto-close emphasis")
+func TestEditorSelectionOnlyPairsWrapInEveryFileType(t *testing.T) {
+	for _, path := range []string{"notes.md", "main.go", "config.yaml"} {
+		for _, r := range []rune{'*', '_'} {
+			s, _ := newEditor(EditorOpts{Path: path})
+			s.setContent("word")
+			selectRange(s, 0, 0, 0, 4)
+			typeRunes(s, r)
+			if got, want := buffer(s), string(r)+"word"+string(r); got != want {
+				t.Errorf("%s %q wrap = %q, want %q", path, r, got, want)
+			}
+		}
 	}
-	s.applySaveName("notes.md")
-	if !s.emphasisPairs {
-		t.Fatal("a save-as to .md should start auto-closing emphasis")
+}
+
+func TestEditorQuotePairsSurroundSelection(t *testing.T) {
+	for _, r := range []rune{'\'', '"', '`'} {
+		s, _ := newEditor(EditorOpts{Path: "main.go"})
+		s.setContent("word")
+		selectRange(s, 0, 0, 0, 4)
+		typeRunes(s, r)
+		if got, want := buffer(s), string(r)+"word"+string(r); got != want {
+			t.Errorf("%q wrap = %q, want %q", r, got, want)
+		}
+		if got := s.selectedText(); got != "word" {
+			t.Errorf("%q selection after wrap = %q, want word", r, got)
+		}
 	}
 }

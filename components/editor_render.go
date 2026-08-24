@@ -66,14 +66,20 @@ func (s *EditorScreen) searchBarVisible() bool {
 	return s.searchEnabled && (s.searchEditing || s.searchQuery != "")
 }
 
-// searchBar renders the non-interactive version beneath the viewport. The focused
-// LineEditScreen is composited directly over it, so both states use the same rounded
-// shell and full pane width. Its text is cell-truncated on narrow panes.
+// searchBar renders the unfocused version beneath the viewport. A left click replaces
+// it with the focused LineEditScreen, composited directly over the same rounded shell
+// and full pane width. Its text is cell-truncated on narrow panes.
 func (s *EditorScreen) searchBar() string {
 	w := s.paneW()
 	contentW := max(w-4, 1) // two border cells and one padding cell on each side
 	content := ansi.Truncate("find: "+s.searchQuery, contentW, "…")
-	return lineEditBox().Width(contentW + 2).Render(content)
+	return retainedSearchBox().Width(contentW + 2).Render(content)
+}
+
+// retainedSearchBox is the unfocused counterpart to lineEditBox: same geometry, but
+// the framework's ordinary border color rather than the active accent.
+func retainedSearchBox() lipgloss.Style {
+	return lineEditBox().BorderForeground(core.BorderColor)
 }
 
 // View renders the buffer window under its title, both tracking focus: bordered, the
@@ -485,14 +491,19 @@ func (s *EditorScreen) cellMatched(row, cell int) bool {
 	return lo < len(matches) && cell >= matches[lo].from
 }
 
-// editorSearchStyle is deliberately distinct from selection: a focused match uses
-// the accent, while an unfocused pane mutes it along with the rest of the editor.
+var (
+	// Search yellow is semantic but not thematic: it stays recognizable while themes
+	// and pane focus change. The darker light-terminal shade keeps the block visible
+	// against white, while dark terminals get the bright form.
+	editorSearchYellow = lipgloss.AdaptiveColor{Light: "136", Dark: "226"}
+	editorSearchText   = lipgloss.Color("232")
+)
+
+// editorSearchStyle is deliberately distinct from ordinary selection and independent
+// of both the active theme and pane focus. Selection and the caret still win in the
+// render layer ordering above it.
 func (s *EditorScreen) editorSearchStyle() lipgloss.Style {
-	bg := core.FocusedColor
-	if !s.focused {
-		bg = core.MutedColor
-	}
-	return lipgloss.NewStyle().Background(bg).Foreground(core.OnFocusedColor)
+	return lipgloss.NewStyle().Background(editorSearchYellow).Foreground(editorSearchText)
 }
 
 // hlSpans answers the row's validated spans, reparsing the buffer first when it

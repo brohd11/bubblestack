@@ -1,6 +1,7 @@
 package components
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -74,23 +75,65 @@ func TestEditorSearchInteraction(t *testing.T) {
 
 	edit = s.searchEdit(sh)
 	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyCtrlU})
-	if s.searchQuery != "" {
-		t.Fatalf("clearing the input should clear live matches, query=%q", s.searchQuery)
-	}
+	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beta")})
 	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
-	if s.searchQuery != "alpha" || s.searchEditing {
-		t.Fatalf("escape should restore alpha and unfocus the bar, query=%q editing=%v", s.searchQuery, s.searchEditing)
+	if s.searchQuery != "beta" || s.searchEditing {
+		t.Fatalf("escape should retain beta and unfocus the bar, query=%q editing=%v", s.searchQuery, s.searchEditing)
 	}
 
 	edit = s.searchEdit(sh)
 	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyCtrlU})
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEnter})
+	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
 	if s.searchQuery != "" {
-		t.Fatalf("submitting empty should stop search, query=%q", s.searchQuery)
+		t.Fatalf("escaping an empty search should stop it, query=%q", s.searchQuery)
 	}
 	s.SetSize(sh, 80, 20)
 	if s.searchBarVisible() || s.h != fullH {
-		t.Fatalf("submitting empty should remove the bar and restore viewport %d, visible=%v viewport=%d", fullH, s.searchBarVisible(), s.h)
+		t.Fatalf("escaping empty should remove the bar and restore viewport %d, visible=%v viewport=%d", fullH, s.searchBarVisible(), s.h)
+	}
+}
+
+func TestEditorSearchSeedsSingleLineSelection(t *testing.T) {
+	s, sh := newEditor(EditorOpts{Search: true})
+	s.setContent("alpha beta alpha")
+	setSearchQuery(s, "before")
+	selectRange(s, 0, 6, 0, 10)
+
+	edit := s.searchEdit(sh)
+	if got := edit.input.Value(); got != "beta" {
+		t.Fatalf("seeded field = %q, want selected text beta", got)
+	}
+	if s.searchQuery != "beta" {
+		t.Fatalf("live query = %q, want beta", s.searchQuery)
+	}
+	s.rebuildSearchMatches()
+	if got := len(s.searchMatches[0]); got != 1 {
+		t.Fatalf("seeded selection found %d matches, want 1", got)
+	}
+	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
+	if s.searchQuery != "beta" {
+		t.Fatalf("escape retained %q, want seeded query beta", s.searchQuery)
+	}
+
+	edit = s.searchEdit(sh)
+	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEnter})
+	if s.searchQuery != "beta" {
+		t.Fatalf("enter retained %q, want seeded query beta", s.searchQuery)
+	}
+}
+
+func TestEditorSearchDoesNotSeedMultilineSelection(t *testing.T) {
+	s, sh := newEditor(EditorOpts{Search: true})
+	s.setContent("alpha\nbeta")
+	setSearchQuery(s, "prior")
+	selectRange(s, 0, 2, 1, 2)
+
+	edit := s.searchEdit(sh)
+	if got := edit.input.Value(); got != "prior" {
+		t.Fatalf("multiline seed = %q, want prior query unchanged", got)
+	}
+	if s.searchQuery != "prior" {
+		t.Fatalf("live query = %q, want prior", s.searchQuery)
 	}
 }
 
@@ -181,6 +224,37 @@ func TestEditorSearchRenderingComposesWithEditorLayers(t *testing.T) {
 	assertRowGeometry(t, s, "search-highlighted horizontal scroll")
 }
 
+func TestEditorSearchUsesThemeIndependentYellow(t *testing.T) {
+	previous := core.CurrentTheme()
+	t.Cleanup(func() { core.SetTheme(previous) })
+
+	for _, theme := range core.ThemeNames() {
+		if !core.SetTheme(theme) {
+			t.Fatalf("could not set registered theme %q", theme)
+		}
+		for _, focused := range []bool{true, false} {
+			s, _ := newEditor(EditorOpts{Search: true})
+			s.SetFocused(focused)
+			style := s.editorSearchStyle()
+			if got := style.GetBackground(); !reflect.DeepEqual(got, editorSearchYellow) {
+				t.Errorf("theme=%s focused=%v background=%v, want adaptive yellow %v", theme, focused, got, editorSearchYellow)
+			}
+			if got := style.GetForeground(); !reflect.DeepEqual(got, editorSearchText) {
+				t.Errorf("theme=%s focused=%v foreground=%v, want %v", theme, focused, got, editorSearchText)
+			}
+		}
+	}
+}
+
+func TestEditorSearchFocusedAndRetainedBorders(t *testing.T) {
+	if got := lineEditBox().GetBorderTopForeground(); !reflect.DeepEqual(got, core.FocusedColor) {
+		t.Fatalf("focused line edit border = %v, want theme accent %v", got, core.FocusedColor)
+	}
+	if got := retainedSearchBox().GetBorderTopForeground(); !reflect.DeepEqual(got, core.BorderColor) {
+		t.Fatalf("retained search border = %v, want standard border %v", got, core.BorderColor)
+	}
+}
+
 func TestEditorSearchBarStaysWithinNarrowPaneAndAnchorsBottom(t *testing.T) {
 	s, _ := newEditor(EditorOpts{Title: "a-very-long-document-name.md", Search: true})
 	s.SetSize(nil, 24, 6)
@@ -242,13 +316,65 @@ func TestEditorSearchBarReservesRowsWithoutChangingOuterGeometry(t *testing.T) {
 		})
 	}
 
-	// The retained bar is display-only; a click in its rows must not move the caret.
-	s, sh := newEditor(EditorOpts{Search: true})
-	s.setContent("first\nsecond")
-	setSearchQuery(s, "first")
-	s.SetSize(sh, 80, 20)
-	s.clickAt(sh, 5, s.insetY()+s.h+1)
-	if s.curY != 0 || s.curX != 0 {
-		t.Fatalf("click in retained search bar moved caret to (%d,%d)", s.curY, s.curX)
+}
+
+func TestEditorRetainedSearchBarLeftClickRefocuses(t *testing.T) {
+	tests := []struct {
+		name     string
+		embedded bool
+		border   bool
+	}{
+		{name: "standalone"},
+		{name: "embedded", embedded: true},
+		{name: "bordered pane", embedded: true, border: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sh := newEditor(EditorOpts{Search: true, Border: tc.border})
+			s.SetEmbedded(tc.embedded)
+			s.SetPaneOrigin(7, 4)
+			s.setContent("selected text\nsecond")
+			selectRange(s, 0, 0, 0, 8)
+			setSearchQuery(s, "second")
+			s.SetSize(sh, 32, 10)
+			beforeY, beforeX, beforeSelection := s.curY, s.curX, s.selectedText()
+
+			x, y := 2, 10-editorSearchBarH+1 // pane-relative middle of the retained box
+			if !tc.embedded {
+				x += 7
+				y += 4
+			}
+			_, act := s.Update(sh, tea.MouseMsg{
+				Action: tea.MouseActionPress,
+				Button: tea.MouseButtonLeft,
+				X:      x,
+				Y:      y,
+			})
+			if act.Msg == nil || !s.searchEditing {
+				t.Fatal("left click on retained search should push the focused line edit")
+			}
+			if s.searchQuery != "second" {
+				t.Fatalf("click replaced retained query with %q", s.searchQuery)
+			}
+			if s.curY != beforeY || s.curX != beforeX || s.selectedText() != beforeSelection {
+				t.Fatalf("click changed document cursor/selection: cursor=(%d,%d) selection=%q", s.curY, s.curX, s.selectedText())
+			}
+		})
+	}
+}
+
+func TestEditorRetainedSearchBarNonLeftEventsDoNotFocus(t *testing.T) {
+	for _, msg := range []tea.MouseMsg{
+		{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 2, Y: 18},
+		{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 2, Y: 18},
+		{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 2, Y: 18},
+	} {
+		s, sh := newEditor(EditorOpts{Search: true})
+		setSearchQuery(s, "needle")
+		s.SetSize(sh, 80, 20)
+		_, act := s.Update(sh, msg)
+		if s.searchEditing || act.Msg != nil {
+			t.Errorf("%s unexpectedly focused retained search", msg.String())
+		}
 	}
 }

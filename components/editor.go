@@ -107,15 +107,12 @@ type EditorScreen struct {
 	contextMenu  bool                          // EditorOpts.ContextMenu: a right press raises the edit menu
 	contextItems func(*core.Shared) []MenuItem // host rows appended to that menu below a rule
 
-	emphasisPairs bool // '*'/'_' auto-close here: a prose buffer, not code (see emphasisPairExt)
-
 	undoStack, redoStack                  []editorSnapshot
 	revision, savedRevision, nextRevision uint64
 
 	searchEnabled bool          // EditorOpts.Search: ctrl+f and match rendering are available
 	searchEditing bool          // the modal line edit is open; keeps its bottom rows reserved even while empty
-	searchQuery   string        // live query; retained after enter
-	searchBefore  string        // query restored when an adjustment is cancelled
+	searchQuery   string        // live query; retained after enter or escape
 	searchSeq     int           // editSeq represented by searchMatches (-1 means stale)
 	searchCached  string        // query represented by searchMatches
 	searchMatches [][]textRange // per-line, non-overlapping display-cell ranges
@@ -389,7 +386,6 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl:            hl,
 		hlExplicit:    hlExplicit,
 		keyHandler:    lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
-		emphasisPairs: emphasisPairExt(strings.ToLower(filepath.Ext(opts.Path))),
 		hlSeq:         -1,   // nothing parsed yet, even before the first edit
 		wrapDirty:     true, // no rows measured yet, even before the first edit
 		nextRevision:  1,
@@ -503,7 +499,18 @@ const editorSearchBarH = 3 // one input row plus the rounded box's top and botto
 // editor owns only the live query. A static cursor avoids a blinking box over the
 // document.
 func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
-	s.searchBefore = s.searchQuery
+	return s.buildSearchEdit(sh, true)
+}
+
+// buildSearchEdit creates the focused overlay. ctrl+f asks it to seed from a
+// single-line selection; clicking the retained bar does not, because that gesture means
+// "continue editing this query" and must not silently replace it with selected text.
+func (s *EditorScreen) buildSearchEdit(sh *core.Shared, seedSelection bool) *LineEditScreen {
+	initial := s.searchQuery
+	if selected := s.selectedText(); seedSelection && selected != "" && !strings.ContainsRune(selected, '\n') {
+		initial = selected
+		s.searchQuery = selected
+	}
 	s.searchEditing = true
 	x, y, w, h := s.paneGeometry(sh)
 	y += max(h-editorSearchBarH, 0)
@@ -513,12 +520,13 @@ func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
 			s.searchEditing = false
 			return core.Pop()
 		}, func(*core.Shared) core.Action {
-			s.searchQuery = s.searchBefore
+			// Search is live while the field is open, so escape is another way to
+			// accept the current value rather than rolling the visible matches back.
 			s.searchEditing = false
 			return core.Pop()
 		})
 	edit.SetPrompt("find: ")
-	edit.SetValue(s.searchQuery)
+	edit.SetValue(initial)
 	edit.SetCursorBlink(false)
 	edit.Help = []key.Binding{} // keep the overlay to the shared component's slim shape
 	edit.OnChange = func(_ *core.Shared, query string) core.Action {
@@ -526,6 +534,18 @@ func (s *EditorScreen) searchEdit(sh *core.Shared) *LineEditScreen {
 		return core.Action{}
 	}
 	return edit
+}
+
+// searchBarHit reports whether an incoming pane-relative (embedded) or absolute
+// (standalone) mouse cell lies in the retained three-row search box.
+func (s *EditorScreen) searchBarHit(sh *core.Shared, x, y int) bool {
+	if !s.searchBarVisible() || s.searchEditing {
+		return false
+	}
+	ax, ay := s.absCell(sh, x, y)
+	px, py, w, h := s.paneGeometry(sh)
+	top := py + max(h-editorSearchBarH, 0)
+	return ax >= px && ax < px+w && ay >= top && ay < py+h
 }
 
 // Update handles the async load/save results, mouse presses, and keystrokes — in the
@@ -592,6 +612,11 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 		case tea.MouseActionPress:
 			switch m.Button {
 			case tea.MouseButtonLeft:
+				if s.searchBarHit(sh, m.X, m.Y) {
+					s.resetMouseGesture()
+					s.clickCount = 0
+					return s, core.Push(s.buildSearchEdit(sh, false))
+				}
 				if editorExtendClick(m) {
 					s.extendSelectionTo(sh, m.X, m.Y)
 				} else {
@@ -795,7 +820,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
 		// the whole payload) on the insertText path below.
 		if len(m.Runes) == 1 && !m.Alt {
-			if closer, ok := editorPairs[m.Runes[0]]; ok && (s.emphasisPairs || !emphasisPairRune(m.Runes[0])) {
+			if closer, ok := editorPairs[m.Runes[0]]; ok && !selectionOnlyPairRune(m.Runes[0]) {
 				s.insertRunes(m.Runes[0], closer)
 				s.curX--
 				s.wantX = s.curX

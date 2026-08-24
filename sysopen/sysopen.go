@@ -14,11 +14,11 @@ package sysopen
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
+	goutilsysopen "github.com/brohd11/goutil/sysopen"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -45,7 +45,10 @@ func Path(path string, reveal bool) core.Action {
 	return core.Seq(
 		core.SetStatus("opening "+path),
 		core.Async(func() tea.Msg {
-			return start(pathCmd(path, reveal), path)
+			if err := goutilsysopen.OpenPath(path, reveal); err != nil {
+				return core.SetStatusAndLog("could not " + err.Error()).Msg
+			}
+			return nil
 		}),
 	)
 }
@@ -249,26 +252,6 @@ func windowsTerminal(dir string, command []string) *exec.Cmd {
 		inner += " && " + strings.Join(command, " ")
 	}
 	return exec.Command("cmd", "/c", "start", "cmd", "/k", inner)
-}
-
-func pathCmd(path string, reveal bool) *exec.Cmd {
-	switch runtime.GOOS {
-	case "darwin":
-		if reveal {
-			return exec.Command("open", "-R", path)
-		}
-		return exec.Command("open", path)
-	case "windows":
-		if reveal {
-			return exec.Command("explorer", "/select,"+path)
-		}
-		return exec.Command("explorer", path)
-	default:
-		if reveal {
-			path = filepath.Dir(path)
-		}
-		return exec.Command("xdg-open", path)
-	}
 }
 
 func urlCmd(target string) *exec.Cmd {
