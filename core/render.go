@@ -24,6 +24,28 @@ func HeaderInnerWidth(width int) int {
 	return inner
 }
 
+// headerPadding is headerStyle's horizontal padding (Padding(0, 1) — one column each
+// side). lipgloss counts a style's padding inside the width it is given, so HeaderBox
+// hands headerStyle HeaderInnerWidth and the body actually gets that minus this.
+const headerPadding = 2
+
+// HeaderValueWidth is how much room a Header body has for the value on a line that
+// begins with label, for a terminal of the given width. Pass the label itself rather
+// than its length: it is measured with lipgloss so wide runes and any styling count
+// correctly.
+//
+// It exists because three apps hand-computed this as a literal (9, 10, 10) with a
+// comment explaining the arithmetic, and one of the three had already drifted — gdaddon
+// subtracted its label but not the padding, giving its values two columns more than fit.
+// The number encodes headerStyle's padding, which is bubblestack's to know, not an app's.
+func HeaderValueWidth(width int, label string) int {
+	v := HeaderInnerWidth(width) - headerPadding - lipgloss.Width(label)
+	if v < 4 {
+		v = 4 // TruncLeft's own floor; below this nothing legible survives anyway
+	}
+	return v
+}
+
 // HeaderBox renders body inside the persistent bordered context box, sized to the
 // terminal width. A consumer's Header closure builds body (e.g. with Label +
 // TruncLeft) and returns HeaderBox(sh.Width(), body).

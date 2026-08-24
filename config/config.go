@@ -12,9 +12,11 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
+	"github.com/brohd11/goutil/configdir"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,14 +26,10 @@ type Config struct {
 	Theme string `yaml:"theme,omitempty"` // last-selected TUI theme; loaded at startup, saved on change
 }
 
-// Dir is ~/.bubblestack, the home for config.yml (and future config files).
-func Dir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".bubblestack"), nil
-}
+// Dir is ~/.bubblestack, the home for config.yml (and future config files). The
+// ~/.<app> convention itself lives in goutil/configdir, so the framework follows the
+// same rule it hands the apps rather than restating it.
+func Dir() (string, error) { return configdir.Dir("bubblestack") }
 
 // Path is ~/.bubblestack/config.yml.
 func Path() (string, error) {
@@ -51,7 +49,7 @@ func Load() (*Config, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return &Config{}, nil
 		}
 		return nil, err
@@ -80,61 +78,16 @@ func Theme() string {
 // holds more than one setting.
 func SaveTheme(name string) error { return saveKey("theme", name) }
 
-// saveKey sets key=value on the top-level mapping of ~/.bubblestack/config.yml surgically,
-// preserving every other key and any comments. A missing file is created (with its parent
-// dir) as a fresh single-key document.
+// saveKey sets key=value on the top-level mapping of ~/.bubblestack/config.yml
+// surgically, preserving every other key and any comments. A missing file is created
+// (with its parent dir) as a fresh single-key document.
+//
+// The node-tree surgery itself is goutil/configdir.SaveKey -- gdaddon had grown a
+// verbatim copy of it, differing only in seeding a missing file from its defaults.
 func saveKey(key, value string) error {
-	dir, err := Dir()
+	path, err := Path()
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "config.yml")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		data = nil // start from an empty document; setMappingScalar seeds the mapping
-	}
-
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return err
-	}
-	setMappingScalar(&doc, key, value)
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0o644)
-}
-
-// setMappingScalar sets key=value on the top-level mapping of a parsed YAML document,
-// overwriting an existing key's value or appending the pair when absent. An empty document
-// is initialized to a mapping first.
-func setMappingScalar(doc *yaml.Node, key, value string) {
-	if len(doc.Content) == 0 {
-		doc.Kind = yaml.DocumentNode
-		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode}}
-	}
-	m := doc.Content[0]
-	if m.Kind != yaml.MappingNode {
-		return
-	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			m.Content[i+1].Kind = yaml.ScalarNode
-			m.Content[i+1].Tag = "!!str"
-			m.Content[i+1].Value = value
-			return
-		}
-	}
-	m.Content = append(m.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
-	)
+	return configdir.SaveKey(path, key, value, nil)
 }

@@ -25,10 +25,10 @@ import (
 // since they operate on the reusable list.Model / Item pieces.
 type KeyMap struct {
 	// navigation
-	Up     key.Binding
-	Down   key.Binding
-	Left   key.Binding
-	Right  key.Binding
+	Up    key.Binding
+	Down  key.Binding
+	Left  key.Binding
+	Right key.Binding
 	// Jump to either end of whatever is scrolling — the output pane, a ScrollContainer,
 	// a menu. Never on a help bar (a jump is a command): the (?) menu carries them.
 	Top    key.Binding // jump to the oldest content

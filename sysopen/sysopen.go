@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/goutil/shellquote"
 	goutilsysopen "github.com/brohd11/goutil/sysopen"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -254,34 +255,27 @@ func windowsTerminal(dir string, command []string) *exec.Cmd {
 	return exec.Command("cmd", "/c", "start", "cmd", "/k", inner)
 }
 
+// urlCmd is goutil/sysopen's builder; the switch lived here too until the darwin and
+// linux arms were found to be identical. It stays a named function because URL runs the
+// command through this package's own detached start helper rather than goutil's.
 func urlCmd(target string) *exec.Cmd {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", target)
-	case "windows":
-		return exec.Command("cmd", "/c", "start", "", target)
-	default:
-		return exec.Command("xdg-open", target)
-	}
+	return goutilsysopen.URLCommand(runtime.GOOS, target)
 }
 
 // ShellQuote wraps s in single quotes for a POSIX shell as a single-quoted literal, so
 // nothing inside is expanded or word-split; embedded single quotes are closed, escaped, and
 // reopened. Used to build the darwin `cd <dir>` fragment, and shared with consumers that
 // cross a shell boundary (e.g. go-ssh's remote command lines).
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+//
+// The implementation lives in goutil/shellquote: it is a pure strings function, and
+// keeping it here meant a CLI-only module (tmux_s) could not reach it without taking a
+// bubbletea dependency, so it grew a third copy instead. Kept as a re-export because
+// callers reach it through this package.
+func ShellQuote(s string) string { return shellquote.Quote(s) }
 
 // ShellJoin quotes each argument (ShellQuote) and joins them with spaces into one shell
 // command line, so the shell that parses it splits the words back exactly where they started.
-func ShellJoin(args []string) string {
-	quoted := make([]string, len(args))
-	for i, a := range args {
-		quoted[i] = ShellQuote(a)
-	}
-	return strings.Join(quoted, " ")
-}
+func ShellJoin(args []string) string { return shellquote.Join(args) }
 
 // appleScriptQuote wraps s as an AppleScript string literal (double quotes, with `"`
 // and `\` backslash-escaped).
