@@ -153,11 +153,11 @@ func (s *EditorScreen) textW() int {
 	return s.w
 }
 
-// contentW is what the buffer text itself gets: the text window net of the line-number
-// gutter. It is the horizontal window renderLine cuts and clampScroll scrolls, and the
-// width buildWrapRows breaks lines at.
+// contentW is what the buffer text itself gets: the text window net of the left gutter
+// (the sign column and the line numbers). It is the horizontal window renderLine cuts
+// and clampScroll scrolls, and the width buildWrapRows breaks lines at.
 func (s *EditorScreen) contentW() int {
-	return max(s.textW()-s.numGutterWidth(), 1)
+	return max(s.textW()-s.leftGutterWidth(), 1)
 }
 
 // scrollbarCell renders row i of the scrollbar: a thumb sized to the viewport's

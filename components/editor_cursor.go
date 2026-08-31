@@ -78,8 +78,8 @@ func (s *EditorScreen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPo
 		}
 		x = s.textW() - 1
 	}
-	if x -= s.numGutterWidth(); x < 0 {
-		x = 0 // a click on the line number reads as column 0, as one left of the body does
+	if x -= s.leftGutterWidth(); x < 0 {
+		x = 0 // a click on the gutter reads as column 0, as one left of the body does
 	}
 	if x >= s.contentW() {
 		x = s.contentW() - 1

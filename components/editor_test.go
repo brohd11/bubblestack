@@ -1855,7 +1855,7 @@ func TestEditorWrapClick(t *testing.T) {
 	}
 	s.Update(sh, tea.MouseMsg{
 		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-		X: s.numGutterWidth() + 4, Y: s.titleH() + 2,
+		X: s.leftGutterWidth() + 4, Y: s.titleH() + 2,
 	})
 	if s.curY != r.line || s.curX != r.start+4 {
 		t.Fatalf("click on a wrapped row = (%d,%d), want (%d,%d)", s.curY, s.curX, r.line, r.start+4)

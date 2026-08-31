@@ -205,7 +205,40 @@ func (s *EditorScreen) numGutterWidth() int {
 	return w
 }
 
-// lineNumText is the gutter cell for one display row: the 1-based line number on a
+// leftGutterWidth is everything drawn left of the text: the host's sign column
+// (editor_signs.go) plus the line-number column. It is the width the body is measured
+// against, and every consumer of a "how far in does text start" answer must use THIS,
+// not numGutterWidth — contentW, the wrap rebuild and the click-to-cursor math all
+// derive from it, and a site left on the narrower one would misplace clicks by exactly
+// the sign column.
+//
+// It carries numGutterWidth's constraint unchanged: nothing here may consult textW,
+// which reads barVisible, which under wrap reads the row cache, which is measured
+// against this width. Neither part does.
+//
+// The too-narrow guard applies to the total as well as to the numbers, so a viewport
+// that can hold one but not both keeps the sign — a marker is one cell and still says
+// something, where a truncated line number would say the wrong thing.
+func (s *EditorScreen) leftGutterWidth() int {
+	w := s.signGutterWidth() + s.numGutterWidth()
+	if w > s.w-2 {
+		return 0
+	}
+	return w
+}
+
+// gutterText is everything left of the text for one display row: the sign cell then the
+// line-number cell. Both are blank on a line's wrapped continuations, and the whole
+// gutter goes when it does not fit — checked here rather than in the two halves so the
+// string this returns always measures exactly leftGutterWidth cells.
+func (s *EditorScreen) gutterText(line int, first bool) string {
+	if s.leftGutterWidth() == 0 {
+		return ""
+	}
+	return s.signText(line, first) + s.lineNumText(line, first)
+}
+
+// lineNumText is the number cell for one display row: the 1-based line number on a
 // line's first row, blanks on its wrapped continuations.
 func (s *EditorScreen) lineNumText(line int, first bool) string {
 	w := s.numGutterWidth()
@@ -234,10 +267,10 @@ func (s *EditorScreen) rebuildWrapRows() {
 	}
 	s.wrapDirty = false // cleared first: nothing below may re-enter the rebuild
 	s.wrapBar = false
-	s.buildWrapRows(s.w - s.numGutterWidth())
+	s.buildWrapRows(s.w - s.leftGutterWidth())
 	if len(s.wrapRows) > s.h {
 		s.wrapBar = true
-		s.buildWrapRows(s.w - 1 - s.numGutterWidth())
+		s.buildWrapRows(s.w - 1 - s.leftGutterWidth())
 	}
 }
 
@@ -295,7 +328,7 @@ func (s *EditorScreen) renderWrappedRow(idx int) string {
 	line := s.lines[r.line]
 	disp := expandLine(line)
 	start, end := min(r.start, len(disp)), min(r.end, len(disp))
-	num := s.lineNumText(r.line, r.start == 0)
+	num := s.gutterText(r.line, r.start == 0)
 	// A caret one cell past this chunk is only THIS row's to draw when the line ends
 	// here. Mid-line it belongs to the next row, at its column 0.
 	eol := s.lastRowOfLine(idx)
@@ -348,7 +381,7 @@ func (s *EditorScreen) renderLine(row int) string {
 	if end > len(disp) {
 		end = len(disp)
 	}
-	num := s.lineNumText(row, true)
+	num := s.gutterText(row, true)
 	var body string
 	done := false
 	if s.focused && s.hl != nil {
