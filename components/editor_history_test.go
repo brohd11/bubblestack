@@ -60,29 +60,25 @@ func TestEditorUndoRestoresSelectionReplacement(t *testing.T) {
 }
 
 func TestEditorStructuredEnterIsOneUndoStep(t *testing.T) {
-	for _, tc := range []struct {
-		name, path, content, edited string
-	}{
-		{"markdown", "notes.md", "- item", "- item\n- "},
-		{"yaml", "config.yaml", "  key: value", "  key: value\n  "},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, _ := newEditor(EditorOpts{Path: tc.path})
-			s.setContent(tc.content)
-			s.curX, s.wantX = len(s.lines[0]), len(s.lines[0])
-			s.key(nil, keyMsg("enter"))
-			if got := buffer(s); got != tc.edited || len(s.undoStack) != 1 {
-				t.Fatalf("structured enter = %q history=%d, want %q/1", got, len(s.undoStack), tc.edited)
-			}
-			undoEditor(s)
-			if got := buffer(s); got != tc.content {
-				t.Fatalf("undo structured enter = %q, want %q", got, tc.content)
-			}
-			redoEditor(s)
-			if got := buffer(s); got != tc.edited {
-				t.Fatalf("redo structured enter = %q, want %q", got, tc.edited)
-			}
-		})
+	resolver := func(string) *EditorLanguageConfig {
+		return &EditorLanguageConfig{OnEnter: func(EditorEnterContext) (EditorEnterAction, bool) {
+			return EditorEnterAction{Prefix: "> "}, true
+		}}
+	}
+	s, _ := newEditor(EditorOpts{Path: "structured", ResolveLanguage: resolver})
+	s.setContent("item")
+	s.curX, s.wantX = len(s.lines[0]), len(s.lines[0])
+	s.key(nil, keyMsg("enter"))
+	if got := buffer(s); got != "item\n> " || len(s.undoStack) != 1 {
+		t.Fatalf("structured enter = %q history=%d, want %q/1", got, len(s.undoStack), "item\n> ")
+	}
+	undoEditor(s)
+	if got := buffer(s); got != "item" {
+		t.Fatalf("undo structured enter = %q, want item", got)
+	}
+	redoEditor(s)
+	if got := buffer(s); got != "item\n> " {
+		t.Fatalf("redo structured enter = %q, want %q", got, "item\n> ")
 	}
 }
 

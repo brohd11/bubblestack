@@ -120,9 +120,9 @@ func (s *EditorScreen) editAtomic(mutate func()) {
 	s.clampScroll()
 }
 
-// key routes one keystroke. After the exit prompt, a handler registered for the
-// buffer's file extension gets first refusal; returning false preserves every default
-// below. Editor-local keys are matched as raw strings: ctrl+x / tab / enter are this
+// key routes one keystroke. After the exit prompt, the active language profile's Enter
+// hook may handle that one gesture; returning false preserves the ordinary newline.
+// Editor-local keys are matched as raw strings: ctrl+x / tab / enter are this
 // screen's own keys with no core.Keys binding, and the arrows
 // match only the raw keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry
 // — those letters must stay typable). The word/line editing combos mirror

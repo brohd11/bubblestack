@@ -167,7 +167,13 @@ func TestEditorBlockIndentIsOneUndoStep(t *testing.T) {
 }
 
 func TestEditorAutoIndentFollowsExtension(t *testing.T) {
-	yaml, _ := newEditor(EditorOpts{Path: "conf.yaml"})
+	resolver := func(path string) *EditorLanguageConfig {
+		if strings.HasSuffix(path, ".soft") {
+			return &EditorLanguageConfig{IndentSpaces: 2}
+		}
+		return nil
+	}
+	yaml, _ := newEditor(EditorOpts{Path: "conf.soft", ResolveLanguage: resolver})
 	yaml.setContent("a\nb")
 	selectRange(yaml, 0, 0, 1, 1)
 	yaml.key(nil, tabKey)
@@ -184,11 +190,16 @@ func TestEditorAutoIndentFollowsExtension(t *testing.T) {
 	}
 }
 
-// A save-as re-picks the unit off the new name, the same way it re-picks the key handler
-// and the highlighter.
+// A save-as re-picks the unit from the new name's resolved language.
 func TestEditorSaveAsRepicksIndentUnit(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "notes.txt"})
-	s.applySaveName("conf.yml")
+	resolver := func(path string) *EditorLanguageConfig {
+		if strings.HasSuffix(path, ".soft") {
+			return &EditorLanguageConfig{IndentSpaces: 2}
+		}
+		return nil
+	}
+	s, _ := newEditor(EditorOpts{Path: "notes.txt", ResolveLanguage: resolver})
+	s.applySaveName("conf.soft")
 	s.setContent("a\nb")
 	selectRange(s, 0, 0, 1, 1)
 	s.key(nil, tabKey)
@@ -199,8 +210,9 @@ func TestEditorSaveAsRepicksIndentUnit(t *testing.T) {
 
 // An explicit width is an override and outlives the rename, as an explicit Highlighter does.
 func TestEditorExplicitIndentWidthSurvivesRename(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "notes.txt", Indent: IndentSpaces, IndentWidth: 3})
-	s.applySaveName("conf.yaml")
+	resolver := func(string) *EditorLanguageConfig { return &EditorLanguageConfig{IndentSpaces: 2} }
+	s, _ := newEditor(EditorOpts{Path: "notes.txt", ResolveLanguage: resolver, Indent: IndentSpaces, IndentWidth: 3})
+	s.applySaveName("conf.soft")
 	s.setContent("a\nb")
 	selectRange(s, 0, 0, 1, 1)
 	s.key(nil, tabKey)
@@ -210,7 +222,8 @@ func TestEditorExplicitIndentWidthSurvivesRename(t *testing.T) {
 }
 
 func TestEditorCycleIndentMode(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "conf.yaml"})
+	resolver := func(string) *EditorLanguageConfig { return &EditorLanguageConfig{IndentSpaces: 2} }
+	s, _ := newEditor(EditorOpts{Path: "conf.soft", ResolveLanguage: resolver})
 	s.setContent("a\nb")
 	if got, want := s.indentLabel(), "auto (2 spaces)"; got != want {
 		t.Fatalf("initial label = %q, want %q", got, want)
@@ -239,10 +252,10 @@ func TestEditorCycleIndentMode(t *testing.T) {
 	}
 }
 
-// Under IndentTab the gesture types a tab even in a file the extension table would have
-// given spaces.
-func TestEditorIndentTabModeOverridesExtension(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "conf.yaml", Indent: IndentTab})
+// Under IndentTab the gesture types a tab even when the resolved profile asks for spaces.
+func TestEditorIndentTabModeOverridesProfile(t *testing.T) {
+	resolver := func(string) *EditorLanguageConfig { return &EditorLanguageConfig{IndentSpaces: 2} }
+	s, _ := newEditor(EditorOpts{Path: "conf.soft", ResolveLanguage: resolver, Indent: IndentTab})
 	s.setContent("a\nb")
 	selectRange(s, 0, 0, 1, 1)
 	s.key(nil, tabKey)

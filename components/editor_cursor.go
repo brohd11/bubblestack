@@ -383,7 +383,7 @@ func (s *EditorScreen) selectMove(k string) func() {
 //
 // The drag is left running from the same anchor so shift+click-and-drag keeps extending.
 // Both its ends are the caret position rather than the inclusive cell startDragAt uses,
-// which is what stops a keyboard extension and a mouse one from disagreeing about whether
+// which is what stops keyboard selection and mouse selection from disagreeing about whether
 // the anchored character is itself selected.
 func (s *EditorScreen) extendSelectionTo(sh *core.Shared, x, y int) {
 	p, ok := s.positionAt(sh, x, y, false)

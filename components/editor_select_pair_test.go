@@ -7,6 +7,32 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+var editorTestAutoPairs = []EditorPair{
+	{Open: '(', Close: ')'},
+	{Open: '[', Close: ']'},
+	{Open: '{', Close: '}'},
+	{Open: '\'', Close: '\''},
+	{Open: '"', Close: '"'},
+	{Open: '`', Close: '`'},
+}
+
+func editorTestPairOpts(path string) EditorOpts {
+	surround := append([]EditorPair(nil), editorTestAutoPairs...)
+	surround = append(surround,
+		EditorPair{Open: '*', Close: '*'},
+		EditorPair{Open: '_', Close: '_'},
+	)
+	return EditorOpts{
+		Path: path,
+		ResolveLanguage: func(string) *EditorLanguageConfig {
+			return &EditorLanguageConfig{
+				AutoClosingPairs: editorTestAutoPairs,
+				SurroundingPairs: surround,
+			}
+		},
+	}
+}
+
 func TestEditorWordBoundsAt(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -188,7 +214,7 @@ func TestEditorTypingBreaksTheClickRun(t *testing.T) {
 }
 
 func TestEditorSurroundSelectionNests(t *testing.T) {
-	s, _ := newEditor(EditorOpts{})
+	s, _ := newEditor(editorTestPairOpts(""))
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
 
@@ -213,7 +239,7 @@ func TestEditorSurroundSelectionNests(t *testing.T) {
 }
 
 func TestEditorSurroundIsOneUndoStepEach(t *testing.T) {
-	s, _ := newEditor(EditorOpts{})
+	s, _ := newEditor(editorTestPairOpts(""))
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
 	typeRunes(s, '(')
@@ -231,7 +257,7 @@ func TestEditorSurroundIsOneUndoStepEach(t *testing.T) {
 }
 
 func TestEditorSurroundMultilineSelection(t *testing.T) {
-	s, _ := newEditor(EditorOpts{})
+	s, _ := newEditor(editorTestPairOpts(""))
 	s.setContent("abc\ndef")
 	selectRange(s, 0, 1, 1, 2)
 
@@ -247,7 +273,7 @@ func TestEditorSurroundMultilineSelection(t *testing.T) {
 func TestEditorSurroundWrapsTextNotTheLineBreak(t *testing.T) {
 	// A triple click selects the line's newline too; the closer belongs at the end of
 	// the text, not at the head of the following line.
-	s, _ := newEditor(EditorOpts{})
+	s, _ := newEditor(editorTestPairOpts(""))
 	s.setContent("abc\ndef")
 	selectRange(s, 0, 0, 1, 0)
 
@@ -267,7 +293,7 @@ func TestEditorSurroundWrapsTextNotTheLineBreak(t *testing.T) {
 func TestEditorSurroundWorksInEveryFileType(t *testing.T) {
 	// '*' does not auto-close in a .go buffer, but wrapping a selection in it is a
 	// deliberate gesture and stays available.
-	s, _ := newEditor(EditorOpts{Path: "x.go"})
+	s, _ := newEditor(editorTestPairOpts("x.go"))
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
 	typeRunes(s, '*')
@@ -301,7 +327,7 @@ func TestEditorAutoPair(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := newEditor(EditorOpts{Path: tc.path})
+			s, _ := newEditor(editorTestPairOpts(tc.path))
 			typeRunes(s, tc.r)
 			if got := buffer(s); got != tc.want {
 				t.Fatalf("typing %q into %s gave %q, want %q", tc.r, tc.path, got, tc.want)
@@ -317,7 +343,7 @@ func TestEditorAutoPair(t *testing.T) {
 }
 
 func TestEditorAutoPairLeavesPasteAlone(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "x.go"})
+	s, _ := newEditor(editorTestPairOpts("x.go"))
 	s.Update(nil, tea.PasteMsg{Content: "f(a, b)"})
 	if got := buffer(s); got != "f(a, b)" {
 		t.Fatalf("pasted %q, want it verbatim with no added closers", got)
@@ -325,7 +351,7 @@ func TestEditorAutoPairLeavesPasteAlone(t *testing.T) {
 }
 
 func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "x.go"})
+	s, _ := newEditor(editorTestPairOpts("x.go"))
 	typeRunes(s, '(')
 	if len(s.undoStack) != 1 {
 		t.Fatalf("undo stack has %d entries, want 1 for the pair", len(s.undoStack))
@@ -339,7 +365,7 @@ func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
 func TestEditorSelectionOnlyPairsWrapInEveryFileType(t *testing.T) {
 	for _, path := range []string{"notes.md", "main.go", "config.yaml"} {
 		for _, r := range []rune{'*', '_'} {
-			s, _ := newEditor(EditorOpts{Path: path})
+			s, _ := newEditor(editorTestPairOpts(path))
 			s.setContent("word")
 			selectRange(s, 0, 0, 0, 4)
 			typeRunes(s, r)
@@ -352,7 +378,7 @@ func TestEditorSelectionOnlyPairsWrapInEveryFileType(t *testing.T) {
 
 func TestEditorQuotePairsSurroundSelection(t *testing.T) {
 	for _, r := range []rune{'\'', '"', '`'} {
-		s, _ := newEditor(EditorOpts{Path: "main.go"})
+		s, _ := newEditor(editorTestPairOpts("main.go"))
 		s.setContent("word")
 		selectRange(s, 0, 0, 0, 4)
 		typeRunes(s, r)

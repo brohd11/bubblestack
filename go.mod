@@ -6,7 +6,6 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/brohd11/goutil v0.1.6
 	github.com/charmbracelet/x/ansi v0.11.8
-	github.com/yuin/goldmark v1.8.5
 	gopkg.in/yaml.v3 v3.0.1
 )
 

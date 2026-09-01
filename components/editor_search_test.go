@@ -184,7 +184,7 @@ func TestEditorSearchUnicodeTabsAndCacheRefresh(t *testing.T) {
 }
 
 func TestEditorSearchRenderingComposesWithEditorLayers(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Search: true, Highlighter: NewMarkdownHighlighter()})
+	s, _ := newEditor(EditorOpts{Search: true, Highlighter: &countingHL{}})
 	s.setContent("# Foo foo\n" + strings.Repeat("a", 120))
 	setSearchQuery(s, "foo")
 
@@ -200,7 +200,7 @@ func TestEditorSearchRenderingComposesWithEditorLayers(t *testing.T) {
 	// Selection wins over the search background, while the caret wins over both.
 	selectRange(s, 0, 2, 0, 5)
 	row = s.renderLine(0)
-	selected := mdHeadingStyle.Background(core.MutedColor).Foreground(core.OnFocusedColor).Render("Foo")
+	selected := testHighlightStyle.Background(core.MutedColor).Foreground(core.OnFocusedColor).Render("Foo")
 	if !strings.Contains(row, selected) {
 		t.Fatalf("selection should paint over a search result: %q", row)
 	}

@@ -122,21 +122,14 @@ func (s *EditorScreen) paneW() int {
 }
 
 // applySaveName points the buffer at name: a save-as renames it, so the title bar,
-// crumb, file-type key handler, block-indent unit and syntax coloring follow the new
-// extension. Only registry-chosen ones are re-picked: a highlighter or an indent width
-// passed through EditorOpts was a deliberate override and a rename must not undo it. hlSeq is reset
-// rather than bumped because the new highlighter has parsed nothing.
+// crumb and host-resolved editing behavior follow the new identity. An explicit
+// highlighter or indent width passed through EditorOpts is a deliberate override and a
+// rename must not undo it.
 func (s *EditorScreen) applySaveName(name string) {
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
-	ext := strings.ToLower(filepath.Ext(name))
-	s.keyHandler = lookupEditorKeyHandler(ext)
-	s.resolveIndent(ext)
-	if !s.hlExplicit {
-		s.hl = lookupHighlighter(ext)
-		s.hlSeq = -1
-	}
+	s.applyLanguage(name)
 }
 
 // SetPath points the buffer at path after the file moved underneath it — the host

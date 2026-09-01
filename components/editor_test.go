@@ -358,13 +358,17 @@ func TestEditorPasteKeepsGeometry(t *testing.T) {
 	}
 }
 
-// TestEditorPasteSkipsExtensionHandler: a paste's String() is the bracketed form, so the
-// markdown list-continuation handler (which gates on "enter") leaves it alone — pasted
-// list items must not sprout extra markers.
-func TestEditorPasteSkipsExtensionHandler(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Path: "notes.md"})
-	if s.keyHandler == nil {
-		t.Fatal("a .md buffer should carry the markdown key handler")
+// TestEditorPasteSkipsEnterHandler: bracketed paste bypasses structured Enter — pasted
+// newlines must not run a host's line-prefix behavior.
+func TestEditorPasteSkipsEnterHandler(t *testing.T) {
+	resolver := func(string) *EditorLanguageConfig {
+		return &EditorLanguageConfig{OnEnter: func(EditorEnterContext) (EditorEnterAction, bool) {
+			return EditorEnterAction{Prefix: "> "}, true
+		}}
+	}
+	s, _ := newEditor(EditorOpts{Path: "notes.md", ResolveLanguage: resolver})
+	if s.onEnter == nil {
+		t.Fatal("the configured editor should carry its Enter handler")
 	}
 	pasteText(s, "- a\n- b")
 	if got := buffer(s); got != "- a\n- b" {
@@ -1129,16 +1133,16 @@ func TestEditorSaveKey(t *testing.T) {
 	})
 
 	t.Run("renaming re-picks the highlighter", func(t *testing.T) {
-		s, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "plain.txt")})
+		s, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "plain.txt"), ResolveLanguage: highlighterLanguage})
 		if s.hl != nil {
-			t.Fatal(".txt has no registered highlighter")
+			t.Fatal(".txt has no resolved highlighter")
 		}
-		s.applySaveName(filepath.Join(dir, "now.md"))
+		s.applySaveName(filepath.Join(dir, "now.lit"))
 		if s.hl == nil {
-			t.Fatal("a rename to .md should pick the markdown highlighter up")
+			t.Fatal("a rename should apply the new path's language highlighter")
 		}
-		explicit := NewMarkdownHighlighter()
-		s2, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "a.md"), Highlighter: explicit})
+		explicit := &countingHL{}
+		s2, _ := newEditor(EditorOpts{Path: filepath.Join(dir, "a.lit"), ResolveLanguage: highlighterLanguage, Highlighter: explicit})
 		s2.applySaveName(filepath.Join(dir, "b.txt"))
 		if s2.hl != explicit {
 			t.Fatal("an explicitly configured highlighter must survive a rename")
@@ -1790,7 +1794,7 @@ func TestEditorWrapCaret(t *testing.T) {
 // origin, which wrapped is the CHUNK's start — reading scrX (which wrap never moves)
 // pinned the caret to the line's first row no matter which row it was really on.
 func TestEditorWrapCaretHighlighted(t *testing.T) {
-	s, _ := newEditor(EditorOpts{Highlighter: NewMarkdownHighlighter()})
+	s, _ := newEditor(EditorOpts{Highlighter: &countingHL{}})
 	s.setContent(strings.Repeat("a", 300))
 	s.ToggleWrap()
 	if s.hl == nil {

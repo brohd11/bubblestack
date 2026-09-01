@@ -32,7 +32,7 @@ import (
 // The right button is the context menu, when the host opts into it (EditorOpts.ContextMenu):
 // a press raises a MenuScreen at the pointer offering copy/cut/paste — pressing inside an
 // existing selection acts on it, pressing outside puts the caret there first, so a paste
-// lands where the pointer did. Typing one of the delimiters in editorPairs over a selection wraps the
+// lands where the pointer did. Typing a configured surrounding delimiter over a selection wraps the
 // selection in it and keeps it selected, so the key repeats to nest. The wheel scrolls
 // the view without moving the cursor (a cursor move then snaps the view back to it), and
 // when the buffer overflows the viewport a proportional scrollbar takes the rightmost
@@ -77,16 +77,20 @@ type EditorScreen struct {
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
 
-	hl         Highlighter      // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
-	hlExplicit bool             // hl came from EditorOpts, not the registry: a rename must not replace it
-	editSeq    int              // bumped at every buffer mutation; hl reparses when hlSeq lags
-	hlSeq      int              // the edit sequence hl last parsed (-1 ⇒ never)
-	keyHandler editorKeyHandler // file-type-specific key diversion; nil ⇒ ordinary editing
+	hl         Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
+	hlExplicit bool        // hl came from EditorOpts: a rename must not replace it
+	editSeq    int         // bumped at every buffer mutation; hl reparses when hlSeq lags
+	hlSeq      int         // the edit sequence hl last parsed (-1 ⇒ never)
+
+	resolveLanguage EditorLanguageResolver // host-owned path → behavior seam
+	autoPairs       map[rune]rune          // typed opener → closer; nil ⇒ literal typing
+	surroundPairs   map[rune]rune          // selected opener → closer; nil ⇒ replacement
+	onEnter         EditorEnterHandler     // structured newline; nil ⇒ plain split
 
 	indentMode          IndentMode // which unit the block gestures use (see editor_indent.go)
 	indentWidth         int        // spaces per level under IndentSpaces
 	indentWidthExplicit bool       // that width came from EditorOpts: a rename must not replace it
-	autoIndentSpaces    int        // what the extension asks for; 0 ⇒ a literal tab
+	autoIndentSpaces    int        // what the resolved profile asks for; 0 ⇒ a literal tab
 
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
@@ -190,12 +194,10 @@ type wrapRow struct{ line, start, end int }
 // embedder's, so the same screen can be framed in one layout and plain in another.
 // Default off — an editor denotes focus by muting its text either way.
 //
-// Highlighter adds syntax coloring. Left nil, the registry is consulted with
-// Path's lowercased extension (RegisterHighlighter), so an ".md" buffer picks
-// the markdown highlighter up on its own; an extension nobody registered (or an
-// empty Path) renders plain, exactly as if highlighting did not exist. Set
-// explicitly, it wins over the registry — pass a highlighter for a path-less
-// scratch buffer, or to override the file's own kind. Highlighting is
+// Highlighter adds syntax coloring. Set explicitly, it wins over any highlighter
+// returned by ResolveLanguage and survives save-as/SetPath; left nil, the active
+// language config may create one. With neither source the editor renders plain.
+// Highlighting is
 // render-only: styles never change cell widths, and a highlighter whose spans
 // don't reconstruct the line exactly is ignored (plain render), so the frame
 // contract — no raw tabs, rectangular body — can't be broken by one.
@@ -218,24 +220,30 @@ type wrapRow struct{ line, start, end int }
 //
 // Indent and IndentWidth pick the unit the BLOCK gestures use (see editor_indent.go); a
 // plain tab keypress always inserts a literal '\t' regardless. The zero Indent is
-// IndentAuto, which reads the unit off the file extension, so a host that says nothing
-// gets per-file-type indentation. IndentWidth is the spaces per level under
-// IndentSpaces; left at zero it follows the extension too, and set explicitly it
-// survives a save-as rename the way an explicit Highlighter does.
+// IndentAuto, which reads the unit from ResolveLanguage; without a profile it uses a
+// literal tab. IndentWidth is the spaces per level under IndentSpaces; left at zero it
+// follows the profile, and set explicitly it survives a save-as rename the way an
+// explicit Highlighter does.
+//
+// ResolveLanguage is the only path-derived behavior seam. It may provide pairs,
+// structured Enter, an automatic indent unit and a highlighter factory. A nil resolver
+// or nil result leaves the editor literal, and the resolver is consulted again after a
+// save-as or SetPath changes the path.
 type EditorOpts struct {
-	Path         string
-	Title        string
-	Crumb        string
-	Border       bool
-	OnExit       func(*core.Shared) core.Action
-	OnRelease    func(*core.Shared) core.Action
-	OnSaved      func(*core.Shared, string) core.Action
-	Highlighter  Highlighter
-	Search       bool
-	ContextMenu  bool
-	ContextItems func(*core.Shared) []MenuItem
-	Indent       IndentMode
-	IndentWidth  int
+	Path            string
+	Title           string
+	Crumb           string
+	Border          bool
+	OnExit          func(*core.Shared) core.Action
+	OnRelease       func(*core.Shared) core.Action
+	OnSaved         func(*core.Shared, string) core.Action
+	Highlighter     Highlighter
+	ResolveLanguage EditorLanguageResolver
+	Search          bool
+	ContextMenu     bool
+	ContextItems    func(*core.Shared) []MenuItem
+	Indent          IndentMode
+	IndentWidth     int
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -390,35 +398,32 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		crumb = title
 	}
 	hl, hlExplicit := opts.Highlighter, opts.Highlighter != nil
-	if hl == nil {
-		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
-	}
 	ed := &EditorScreen{
-		path:          opts.Path,
-		title:         title,
-		crumb:         crumb,
-		onExit:        opts.OnExit,
-		onRelease:     opts.OnRelease,
-		onSaved:       opts.OnSaved,
-		lines:         [][]rune{{}},
-		bordered:      opts.Border,
-		focused:       true, // standalone the editor is always focused; a panel blurs it
-		hl:            hl,
-		hlExplicit:    hlExplicit,
-		keyHandler:    lookupEditorKeyHandler(strings.ToLower(filepath.Ext(opts.Path))),
-		hlSeq:         -1,   // nothing parsed yet, even before the first edit
-		wrapDirty:     true, // no rows measured yet, even before the first edit
-		nextRevision:  1,
-		searchEnabled: opts.Search,
-		searchSeq:     -1,
-		contextMenu:   opts.ContextMenu,
-		contextItems:  opts.ContextItems,
+		path:            opts.Path,
+		title:           title,
+		crumb:           crumb,
+		onExit:          opts.OnExit,
+		onRelease:       opts.OnRelease,
+		onSaved:         opts.OnSaved,
+		lines:           [][]rune{{}},
+		bordered:        opts.Border,
+		focused:         true, // standalone the editor is always focused; a panel blurs it
+		hl:              hl,
+		hlExplicit:      hlExplicit,
+		resolveLanguage: opts.ResolveLanguage,
+		hlSeq:           -1,   // nothing parsed yet, even before the first edit
+		wrapDirty:       true, // no rows measured yet, even before the first edit
+		nextRevision:    1,
+		searchEnabled:   opts.Search,
+		searchSeq:       -1,
+		contextMenu:     opts.ContextMenu,
+		contextItems:    opts.ContextItems,
 
 		indentMode:          opts.Indent,
 		indentWidth:         opts.IndentWidth,
 		indentWidthExplicit: opts.IndentWidth > 0,
 	}
-	ed.resolveIndent(strings.ToLower(filepath.Ext(opts.Path)))
+	ed.applyLanguage(opts.Path)
 	return ed
 }
 
@@ -632,7 +637,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 	// set, so the whole key path had to keep guarding against reading a payload as
 	// typing; v2 gives it a message of its own, which lands here and shares the
 	// clipboard paste's insert — one undo step, selection replaced, no auto-pairing,
-	// and the extension key handler never sees it.
+	// and the structured Enter hook never sees it.
 	case tea.PasteMsg:
 		if s.confirmExit || m.Content == "" {
 			return s, core.Action{}
@@ -777,8 +782,8 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 	// The shifted motions are matched HERE, above the selection pre-pass below: that
 	// switch clears the selection for every UNSHIFTED move, so extending one has to be
 	// decided before the code that would throw it away. They are above the editorEditKey
-	// gate too — they touch no text, so they take no undo step — and above the keyHandler
-	// hook, because a selection gesture is not file-type business.
+	// gate too — they touch no text, so they take no undo step — and above language Enter
+	// hook, because a selection gesture is not language-profile business.
 	//
 	// The early return skips the tail's wrapDirty (nothing moved in the buffer), which is
 	// why selectFrom does its own clampScroll.
@@ -798,7 +803,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 	// the selection for every rune-bearing key. The undo gate above has already taken its
 	// snapshot (a rune key is always an edit key), so both insertions land in one step.
 	if r, typed := editorTypedRune(m); typed && s.selectionActive() {
-		if closer, ok := editorPairs[r]; ok {
+		if closer, ok := s.surroundPairs[r]; ok {
 			s.surroundSelection(r, closer)
 			s.wrapDirty = true
 			s.clampScroll()
@@ -836,7 +841,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 			}
 		}
 	}
-	if s.keyHandler != nil && s.keyHandler(s, m) {
+	if k == "enter" && s.languageEnter() {
 		s.wrapDirty = true
 		s.clampScroll()
 		return s, core.Action{}
@@ -906,7 +911,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
 		// the whole payload) on the insertText path below.
 		if r, typed := editorTypedRune(m); typed {
-			if closer, ok := editorPairs[r]; ok && !selectionOnlyPairRune(r) {
+			if closer, ok := s.autoPairs[r]; ok {
 				s.insertRunes(r, closer)
 				s.curX--
 				s.wantX = s.curX

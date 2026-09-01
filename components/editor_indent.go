@@ -14,8 +14,8 @@ import "fmt"
 // Shifted, the two that were left read as < and >.
 //
 // The unit governs ONLY these gestures. A plain tab keypress still inserts a literal
-// '\t' (editor.go's "tab" case), because a soft-tab file is exactly where a literal tab
-// is hardest to type any other way — inside a YAML string, say — and a key that silently
+// '\t' (editor.go's "tab" case), because a soft-tab profile is exactly where a literal
+// tab is hardest to type any other way, and a key that silently
 // refused to produce one would be the worse trade.
 
 // ---------- the indent unit ----------
@@ -24,32 +24,20 @@ import "fmt"
 type IndentMode int
 
 const (
-	// IndentAuto reads the unit off the file extension. It is the zero value, so a host
-	// that says nothing gets per-file-type indentation and existing callers are unchanged.
+	// IndentAuto reads the unit from the host's resolved language config. It is the zero
+	// value; without a config the generic fallback is a literal tab.
 	IndentAuto IndentMode = iota
 	IndentTab
 	IndentSpaces
 )
 
-// editorIndentByExt is spaces-per-indent for the file types that want soft tabs; an
-// extension absent from it indents with one literal tab. Unlike editorKeyHandlers this
-// needs no registration API or mutex — it is one static table, read-only after init,
-// and nothing outside the package has a reason to extend it yet.
-var editorIndentByExt = map[string]int{
-	".yaml": 2, ".yml": 2,
-	".md": 2, ".markdown": 2,
-	".json": 2,
-	".py":   4,
-}
-
-// resolveIndent re-reads the extension-derived unit. Called at construction and again
-// when a save-as renames the buffer, alongside the keyHandler/highlighter re-pick — a
-// scratch file saved as notes.yaml should start indenting the way YAML does.
+// resolveIndent applies the active language config's unit. Called at construction and
+// again when a save-as or SetPath resolves a new config.
 //
 // An explicit EditorOpts.IndentWidth is a deliberate override and survives the rename,
 // exactly as an explicit Highlighter does.
-func (s *EditorScreen) resolveIndent(ext string) {
-	s.autoIndentSpaces = editorIndentByExt[ext]
+func (s *EditorScreen) resolveIndent(spaces int) {
+	s.autoIndentSpaces = max(spaces, 0)
 	if s.indentWidthExplicit {
 		return
 	}
