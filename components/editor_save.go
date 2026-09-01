@@ -122,9 +122,9 @@ func (s *EditorScreen) paneW() int {
 }
 
 // applySaveName points the buffer at name: a save-as renames it, so the title bar,
-// crumb, file-type key handler and syntax coloring follow the new extension. Only a
-// registry-chosen highlighter is re-picked: one passed through
-// EditorOpts was a deliberate override and a rename must not undo it. hlSeq is reset
+// crumb, file-type key handler, block-indent unit and syntax coloring follow the new
+// extension. Only registry-chosen ones are re-picked: a highlighter or an indent width
+// passed through EditorOpts was a deliberate override and a rename must not undo it. hlSeq is reset
 // rather than bumped because the new highlighter has parsed nothing.
 func (s *EditorScreen) applySaveName(name string) {
 	s.path = name
@@ -132,6 +132,7 @@ func (s *EditorScreen) applySaveName(name string) {
 	s.crumb = s.title
 	ext := strings.ToLower(filepath.Ext(name))
 	s.keyHandler = lookupEditorKeyHandler(ext)
+	s.resolveIndent(ext)
 	if !s.hlExplicit {
 		s.hl = lookupHighlighter(ext)
 		s.hlSeq = -1

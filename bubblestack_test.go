@@ -62,3 +62,22 @@ func TestMouseSGRFragmentFilterPreservesOtherInput(t *testing.T) {
 		t.Fatalf("filter stayed armed after a non-match: %#v", got)
 	}
 }
+
+// The editor's block-indent chords have to survive this filter to reach any screen at
+// all — alt+[ was the obvious dedent key and does NOT, which is what put the gesture on
+// alt+, and alt+. instead. Pinned here rather than beside the editor because the filter
+// sits above every screen and nothing in components can see it.
+func TestMouseSGRFragmentFilterPassesEditorIndentChords(t *testing.T) {
+	filter := mouseSGRFragmentFilter()
+	for _, r := range []rune{',', '.', 'i'} {
+		chord := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true}
+		if got := filter(nil, chord); !reflect.DeepEqual(got, chord) {
+			t.Fatalf("alt+%c = %#v, want it delivered unchanged", r, got)
+		}
+	}
+	// The counter-case, and the reason for the two above: alt+[ is the fragment lead and
+	// is always swallowed, so no screen may bind it.
+	if got := filter(nil, sgrLead()); got != nil {
+		t.Fatalf("alt+[ = %#v; it is reserved and must never reach a screen", got)
+	}
+}

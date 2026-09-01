@@ -22,7 +22,10 @@ import (
 // y = a filename prompt seeded with the current name — nano's "File Name to Write",
 // so saving under a different name is a save-as). Enter splits lines (and may be
 // extended by a handler registered for the file type), tab (or shift+tab, on a
-// standalone screen — see key) inserts a tab, the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
+// standalone screen — see key) inserts a tab except over a selection spanning lines,
+// where it indents every one of them (alt+, and alt+. dedent and indent the same span,
+// alt+i cycles the unit — see editor_indent.go),
+// the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
 // alt+c/alt+x/alt+v copy, cut and paste through the system clipboard (with no selection
 // the line the cursor is on is the target), and the left mouse button places the cursor
 // and selects with drag/double/triple click.
@@ -79,6 +82,11 @@ type EditorScreen struct {
 	editSeq    int              // bumped at every buffer mutation; hl reparses when hlSeq lags
 	hlSeq      int              // the edit sequence hl last parsed (-1 ⇒ never)
 	keyHandler editorKeyHandler // file-type-specific key diversion; nil ⇒ ordinary editing
+
+	indentMode          IndentMode // which unit the block gestures use (see editor_indent.go)
+	indentWidth         int        // spaces per level under IndentSpaces
+	indentWidthExplicit bool       // that width came from EditorOpts: a rename must not replace it
+	autoIndentSpaces    int        // what the extension asks for; 0 ⇒ a literal tab
 
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
@@ -207,6 +215,13 @@ type wrapRow struct{ line, start, end int }
 // dangling separator. ContextItems does NOT imply ContextMenu: one flag gates the whole
 // gesture, so a host can mute it without nil-ing its items. Rows should leave MenuItem.Hint
 // empty — the menu dispatches no accelerators, and the editor binds no cut/paste chords.
+//
+// Indent and IndentWidth pick the unit the BLOCK gestures use (see editor_indent.go); a
+// plain tab keypress always inserts a literal '\t' regardless. The zero Indent is
+// IndentAuto, which reads the unit off the file extension, so a host that says nothing
+// gets per-file-type indentation. IndentWidth is the spaces per level under
+// IndentSpaces; left at zero it follows the extension too, and set explicitly it
+// survives a save-as rename the way an explicit Highlighter does.
 type EditorOpts struct {
 	Path         string
 	Title        string
@@ -219,6 +234,8 @@ type EditorOpts struct {
 	Search       bool
 	ContextMenu  bool
 	ContextItems func(*core.Shared) []MenuItem
+	Indent       IndentMode
+	IndentWidth  int
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -376,7 +393,7 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 	if hl == nil {
 		hl = lookupHighlighter(strings.ToLower(filepath.Ext(opts.Path)))
 	}
-	return &EditorScreen{
+	ed := &EditorScreen{
 		path:          opts.Path,
 		title:         title,
 		crumb:         crumb,
@@ -396,7 +413,13 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		searchSeq:     -1,
 		contextMenu:   opts.ContextMenu,
 		contextItems:  opts.ContextItems,
+
+		indentMode:          opts.Indent,
+		indentWidth:         opts.IndentWidth,
+		indentWidthExplicit: opts.IndentWidth > 0,
 	}
+	ed.resolveIndent(strings.ToLower(filepath.Ext(opts.Path)))
+	return ed
 }
 
 // exit produces the screen's exit navigation: the OnExit hook's Action when one is
@@ -748,7 +771,19 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			s.wrapDirty = true
 			s.clampScroll()
 			return s, core.Action{}
-		case "tab", "shift+tab", "enter":
+		case "tab":
+			// The one gesture that reads a selection as lines rather than as text to
+			// replace. shift+tab is deliberately NOT here: it is core.Keys.PaneNext and
+			// never reaches an embedded editor at all, so hanging an edit on it would be
+			// a chord that works in one host and silently navigates in the other.
+			if first, last := s.indentSpan(); last > first {
+				s.shiftSelectionIndent(1)
+				s.wrapDirty = true
+				s.clampScroll()
+				return s, core.Action{}
+			}
+			s.deleteSelection()
+		case "shift+tab", "enter":
 			s.deleteSelection()
 		case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
 			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
@@ -781,6 +816,12 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		if s.onRelease != nil {
 			return s, s.onRelease(sh)
 		}
+	case "alt+.":
+		s.shiftSelectionIndent(1)
+	case "alt+,":
+		s.shiftSelectionIndent(-1)
+	case "alt+i":
+		return s, core.SetStatus(s.cycleIndentMode())
 	case "tab", "shift+tab":
 		s.insertRunes('\t')
 	case "enter":
@@ -875,7 +916,8 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 	return append(hints,
 		key.NewBinding(key.WithKeys("ctrl+z"), key.WithHelp("ctrl+z", "undo")),
 		key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "redo")),
-		key.NewBinding(key.WithKeys("tab", "shift+tab"), key.WithHelp("tab", "indent")),
+		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "indent block")),
+		key.NewBinding(key.WithKeys("alt+,", "alt+."), key.WithHelp("alt+, .", "dedent/indent")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("shift+left", "shift+right", "shift+up", "shift+down",
