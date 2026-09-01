@@ -111,21 +111,51 @@ func itemKeys(item list.Item) func(*core.Shared, string) (core.Action, bool) {
 // here, so a dispatch-rule change (like the wheel-above-filter rule) is made once.
 //
 // A left click selects the row under the cursor and runs the select hook, exactly
-// as enter would (listItemAt does the row math). mouseYOff translates the msg's
-// absolute terminal row into the list view's: sh.BodyY() for a full-screen list,
-// 0 for a panel whose host already made the coordinates slot-relative.
+// as enter would (listItemAt does the row math) — unless the caller passed an
+// onPointer to say otherwise. mouseYOff translates the msg's absolute terminal row
+// into the list view's: sh.BodyY() for a full-screen list, 0 for a panel whose host
+// already made the coordinates slot-relative.
 func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
-	return listDispatchRows(sh, l, msg, mouseYOff, listItemRows, onSelect, onKey)
+	return listDispatchRows(sh, l, msg, mouseYOff, listItemRows, onSelect, onKey, nil)
 }
 
+// onPointer, when a caller supplies one, is the only way a list can tell a CLICK from an
+// enter: the two share onSelect otherwise, which is why a component whose click and key
+// must differ (FilePanel — a click walks into a folder, enter raises its menu) could not
+// express that before. It runs with the clicked row already selected, and right says which
+// button; handled=false falls back to the default for that button.
 func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, itemRows int,
-	onSelect func() core.Action, onKey func(k string) (core.Action, bool)) core.Action {
+	onSelect func() core.Action, onKey func(k string) (core.Action, bool),
+	onPointer func(right bool) (core.Action, bool)) core.Action {
 	if m, ok := msg.(tea.MouseMsg); ok {
-		if m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonLeft {
-			if idx, ok := listItemAtRows(l, m.Y-mouseYOff, itemRows); ok {
-				l.Select(idx)
-				return onSelect()
+		if m.Action == tea.MouseActionPress {
+			switch m.Button {
+			case tea.MouseButtonLeft:
+				if idx, ok := listItemAtRows(l, m.Y-mouseYOff, itemRows); ok {
+					l.Select(idx)
+					if onPointer != nil {
+						if act, handled := onPointer(false); handled {
+							return act
+						}
+					}
+					return onSelect()
+				}
+			case tea.MouseButtonRight:
+				// Only for a list that asked for it. A right press is inert everywhere
+				// else and must stay so: hit-testing it unconditionally would start
+				// moving the cursor in every picker in the framework, which is a
+				// behavior change nobody asked for.
+				if onPointer == nil {
+					break
+				}
+				if idx, ok := listItemAtRows(l, m.Y-mouseYOff, itemRows); ok {
+					l.Select(idx)
+					if act, handled := onPointer(true); handled {
+						return act
+					}
+					return core.Action{}
+				}
 			}
 		}
 		if WheelNav(l, m) {

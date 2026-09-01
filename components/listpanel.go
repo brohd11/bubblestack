@@ -23,11 +23,12 @@ import (
 // the screen, while a ListPanel shares its screen with sibling panels — so esc
 // returns handled=false and the host ModularScreen's pop fires instead.
 type ListPanel struct {
-	list     list.Model
-	focused  bool
-	onSelect func(*core.Shared, list.Item) core.Action
-	onKey    func(*core.Shared, string, list.Item) (core.Action, bool)
-	help     []key.Binding
+	list      list.Model
+	focused   bool
+	onSelect  func(*core.Shared, list.Item) core.Action
+	onKey     func(*core.Shared, string, list.Item) (core.Action, bool)
+	onPointer func(*core.Shared, list.Item, bool) (core.Action, bool)
+	help      []key.Binding
 
 	title    string // kept for the border legend (the list's own title bar is off when bordered)
 	bordered bool   // ListPanelOpts.Border: draw the shared frame
@@ -76,6 +77,17 @@ type ListPanelOpts struct {
 	OnKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	Help     []key.Binding
 	Border   bool
+
+	// OnPointer claims a click on a row before the default, with right saying which
+	// button. It is the only place a list can tell a CLICK from an enter — the two share
+	// OnSelect otherwise — so it exists for the component whose two must differ. The row
+	// is already selected when it runs, so a hook that raises a menu can anchor to the
+	// cursor exactly as the keyboard path does.
+	//
+	// handled=false falls back to the default for that button, and nil (the default) IS
+	// that fallback for both: a left click is enter, a right click is nothing. A list that
+	// does not set this behaves exactly as it always has.
+	OnPointer func(*core.Shared, list.Item, bool) (core.Action, bool)
 }
 
 // NewListPanel builds a sidebar list with the shared select-list styling.
@@ -118,13 +130,14 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 		listTitle = "" // the title moves to the border legend; an empty one hides the bar
 	}
 	p := &ListPanel{
-		list:     build(items, listTitle, opts.Help...),
-		onSelect: opts.OnSelect,
-		onKey:    opts.OnKey,
-		help:     opts.Help,
-		title:    title,
-		bordered: opts.Border,
-		itemRows: itemRows,
+		list:      build(items, listTitle, opts.Help...),
+		onSelect:  opts.OnSelect,
+		onKey:     opts.OnKey,
+		onPointer: opts.OnPointer,
+		help:      opts.Help,
+		title:     title,
+		bordered:  opts.Border,
+		itemRows:  itemRows,
 	}
 	// A bordered panel has no title bar — the legend took it — but bubbles still draws its
 	// header section, and an EMPTY section is still a row (listHeaderHeight's table). That
@@ -353,12 +366,21 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		}
 		return core.Action{}, false
 	}
+	// Built like the two above, and nil when the caller set no hook — listDispatchRows
+	// reads a nil onPointer as "the default for both buttons", so this must stay nil
+	// rather than become a closure that always answers unhandled.
+	var onPointer func(right bool) (core.Action, bool)
+	if p.onPointer != nil {
+		onPointer = func(right bool) (core.Action, bool) {
+			return p.onPointer(sh, p.list.SelectedItem(), right)
+		}
+	}
 	// ModularScreen has already translated a mouse event into panel-local
 	// coordinates. The panel's own chrome — the top frame row, and the filter line
 	// when one is live — still sits above the list, so remove it before
 	// listDispatchRows does its list-local math.
 	rows := p.filterRows()
-	act := p.marqueeArm(listDispatchRows(sh, &p.list, msg, p.chromeRows(), p.itemRows, onSelect, onKey))
+	act := p.marqueeArm(listDispatchRows(sh, &p.list, msg, p.chromeRows(), p.itemRows, onSelect, onKey, onPointer))
 	// The key just handled may have opened or closed the filter, which changes how much
 	// height the list has. Re-size on the transition only — every message would otherwise
 	// pay for a pagination recompute.

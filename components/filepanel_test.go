@@ -791,3 +791,138 @@ func TestFilePanelSymlinkedDirStaysSymlinkColored(t *testing.T) {
 		}
 	}
 }
+
+// ---------- mouse buttons ----------
+
+// rowPress is a mouse press on panel-relative row y with the given button.
+func rowPress(y int, button tea.MouseButton) tea.MouseMsg {
+	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: 5, Y: y}
+}
+
+// clickRow presses button over the row titled name, which must be on-page.
+func clickRow(t *testing.T, p *FilePanel, sh *core.Shared, name string, button tea.MouseButton) {
+	t.Helper()
+	for i, title := range titles(p) {
+		if title != name {
+			continue
+		}
+		y, ok := p.RowY(i)
+		if !ok {
+			t.Fatalf("row %q should be on-page", name)
+		}
+		p.UpdatePanel(sh, rowPress(y, button))
+		return
+	}
+	t.Fatalf("no row %q in %v", name, titles(p))
+}
+
+// mousePanel is a focused FilePanel over fileTree with recording hooks. openDir claims the
+// directory the way a host raising a menu does, so a test can see whether a gesture reached
+// it or walked past it.
+func mousePanel(t *testing.T, root string, opened, menued *string) (*FilePanel, *core.Shared) {
+	t.Helper()
+	p := NewFilePanel(FilePanelOpts{
+		Dir: root, Compact: true,
+		OnSelect: func(_ *core.Shared, e FileEntry) core.Action { *opened = e.Name; return core.Action{} },
+		OnOpenDir: func(_ *core.Shared, e FileEntry) (core.Action, bool) {
+			*menued = e.Name
+			return core.Action{}, true
+		},
+	})
+	p.SetSize(30, 12)
+	p.Focus()
+	return p, core.NewShared(nil)
+}
+
+// TestLeftClickWalksIntoDirectory is the fix: a left click is the mouse's "d", so it walks
+// past OnOpenDir rather than raising the host's menu on the commonest gesture there is.
+func TestLeftClickWalksIntoDirectory(t *testing.T) {
+	root := fileTree(t)
+	var opened, menued string
+	p, sh := mousePanel(t, root, &opened, &menued)
+
+	clickRow(t, p, sh, "sub/", tea.MouseButtonLeft)
+	if menued != "" {
+		t.Fatalf("a left click must not raise the host's folder menu (got %q)", menued)
+	}
+	if want := filepath.Join(root, "sub"); p.Dir() != want {
+		t.Fatalf("a left click should walk in; Dir() = %q, want %q", p.Dir(), want)
+	}
+}
+
+// TestRightClickIsEnter: the other button acts on the row instead — the same path enter
+// takes, so the host builds the same menu in the same place.
+func TestRightClickIsEnter(t *testing.T) {
+	root := fileTree(t)
+	var opened, menued string
+	p, sh := mousePanel(t, root, &opened, &menued)
+
+	clickRow(t, p, sh, "sub/", tea.MouseButtonRight)
+	if menued != "sub" {
+		t.Fatalf("a right click should reach OnOpenDir, got %q", menued)
+	}
+	if p.Dir() != root {
+		t.Fatalf("a claimed OnOpenDir must not walk; Dir() = %q", p.Dir())
+	}
+}
+
+// TestClickOnFileOpensEitherButton: a file has nowhere to walk, so opening it IS the host's
+// verb and both buttons go to OnSelect — which is what keeps a click on a document doing
+// what it always did.
+func TestClickOnFileOpensEitherButton(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		button tea.MouseButton
+	}{{"left", tea.MouseButtonLeft}, {"right", tea.MouseButtonRight}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := fileTree(t)
+			var opened, menued string
+			p, sh := mousePanel(t, root, &opened, &menued)
+
+			clickRow(t, p, sh, "alpha.txt", tc.button)
+			if opened != "alpha.txt" {
+				t.Fatalf("a %s click on a file should reach OnSelect, got %q", tc.name, opened)
+			}
+			if menued != "" {
+				t.Fatalf("a file must never reach OnOpenDir (got %q)", menued)
+			}
+		})
+	}
+}
+
+// TestRightClickSelectsTheRowItLandsOn: the hook runs with the clicked row already under the
+// cursor, which is what lets a host anchor its menu to the cursor exactly as the key path
+// does — gofer's rowAnchor reads List().Index().
+func TestRightClickSelectsTheRowItLandsOn(t *testing.T) {
+	root := fileTree(t)
+	var opened, menued string
+	p, sh := mousePanel(t, root, &opened, &menued)
+
+	p.List().Select(0)
+	clickRow(t, p, sh, "alpha.txt", tea.MouseButtonRight)
+	if sel, _ := p.Selected(); sel.Name != "alpha.txt" {
+		t.Fatalf("the cursor should be on the clicked row, got %q", sel.Name)
+	}
+}
+
+// TestClickOnUpRowWalksUp: ".." is the parent whichever button lands on it — the left click
+// walks it as a directory, and the right one reaches OnOpenDir, which a host declines on
+// that row (gofer's pickDir does) so the panel walks anyway.
+func TestClickOnUpRowWalksUp(t *testing.T) {
+	root := fileTree(t)
+	sh := core.NewShared(nil)
+	for _, button := range []tea.MouseButton{tea.MouseButtonLeft, tea.MouseButtonRight} {
+		p := NewFilePanel(FilePanelOpts{
+			Dir: filepath.Join(root, "sub"), Compact: true,
+			OnOpenDir: func(_ *core.Shared, e FileEntry) (core.Action, bool) {
+				return core.Action{}, !e.Up // the ".." row is declined, as a host's is
+			},
+		})
+		p.SetSize(30, 12)
+		p.Focus()
+		clickRow(t, p, sh, "..", button)
+		if p.Dir() != root {
+			t.Fatalf("button %v on \"..\" should walk up; Dir() = %q", button, p.Dir())
+		}
+	}
+}

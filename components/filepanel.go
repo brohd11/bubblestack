@@ -175,10 +175,11 @@ func absDir(dir string) string {
 // densities without a second code path.
 func (p *FilePanel) build() *ListPanel {
 	opts := ListPanelOpts{
-		OnSelect: p.pick,
-		OnKey:    p.key,
-		Help:     p.opts.Help,
-		Border:   p.opts.Border,
+		OnSelect:  p.pick,
+		OnKey:     p.key,
+		OnPointer: p.pointer,
+		Help:      p.opts.Help,
+		Border:    p.opts.Border,
 	}
 	if p.compact {
 		return NewCompactListPanel(p.rows(), p.title(), opts).ListPanel
@@ -427,9 +428,12 @@ func formatSize(n int64) string {
 
 // ---------- dispatch ----------
 
-// pick routes enter and a left click. A directory walks (unless OnOpenDir claims it), a
-// file goes to OnSelect, and a host row goes to OnRow — or dispatches itself, if it is one
-// of the framework's self-dispatching Items.
+// pick routes enter and a RIGHT click — the two "act on this row" gestures. A directory
+// walks (unless OnOpenDir claims it), a file goes to OnSelect, and a host row goes to OnRow
+// — or dispatches itself, if it is one of the framework's self-dispatching Items.
+//
+// A left click on a directory does not come here: see pointer, which walks instead so the
+// host's menu is not in the way of the commonest gesture there is.
 func (p *FilePanel) pick(sh *core.Shared, it list.Item) core.Action {
 	fi, ok := it.(fileItem)
 	if !ok {
@@ -453,6 +457,32 @@ func (p *FilePanel) pick(sh *core.Shared, it list.Item) core.Action {
 		return p.opts.OnSelect(sh, fi.entry)
 	}
 	return core.Action{}
+}
+
+// pointer splits the two mouse buttons, which enter cannot: LEFT is "open this row" — and a
+// folder opens by being walked into, never by raising the host's menu — while RIGHT is
+// exactly what enter does, so a host with an OnOpenDir menu gets it on the button that means
+// "menu" everywhere else. That is the whole difference between the mouse and the keyboard
+// here, and it mirrors the keys: d walks, enter acts.
+//
+// A file answers handled=false either way and falls back to OnSelect. It has nowhere to walk
+// to, so opening it IS whatever the host does with it, and a click on a document keeps doing
+// what it always did.
+//
+// The menu stays the HOST's to build, which is not incidental: by the time a press reaches a
+// panel ModularScreen has made the coordinates pane-local, and a panel does not know its own
+// origin — only the host does, which is why an anchor like gofer's rowAnchor lives there.
+// Routing the right button back through pick means the click path and the enter path raise
+// the same menu in the same place.
+func (p *FilePanel) pointer(sh *core.Shared, it list.Item, right bool) (core.Action, bool) {
+	if right {
+		return p.pick(sh, it), true
+	}
+	fi, ok := it.(fileItem)
+	if !ok || !fi.entry.IsDir {
+		return core.Action{}, false
+	}
+	return p.SetDir(sh, fi.entry.Path), true
 }
 
 // key is the inner panel's OnKey: the host's row keys, typed to the entry. The ".." row

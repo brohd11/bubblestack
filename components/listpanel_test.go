@@ -790,3 +790,41 @@ func TestUnborderedPanelKeepsItsTitleBar(t *testing.T) {
 		t.Fatal("an unbordered panel's title bar still occupies its rows")
 	}
 }
+
+// TestListPanelIgnoresRightClickWithoutHook is the no-regression guard for the OnPointer
+// hook: a right press is inert on every list that did not ask for it, and inert means the
+// cursor does not move either. Hit-testing the right button unconditionally would quietly
+// start selecting rows in every picker in the framework.
+func TestListPanelIgnoresRightClickWithoutHook(t *testing.T) {
+	sh := core.NewShared(nil)
+	var picked string
+	items := []list.Item{
+		CompactItem{Name: "one"}, CompactItem{Name: "two"}, CompactItem{Name: "three"},
+	}
+	p := NewCompactListPanel(items, "", ListPanelOpts{
+		OnSelect: func(_ *core.Shared, it list.Item) core.Action {
+			picked = it.(CompactItem).Name
+			return core.Action{}
+		},
+	})
+	p.SetSize(20, 10)
+	p.Focus()
+
+	y, ok := p.RowY(2)
+	if !ok {
+		t.Fatal("row 2 should be on-page")
+	}
+	p.UpdatePanel(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 5, Y: y})
+	if picked != "" {
+		t.Fatalf("a right click must not select on a list with no OnPointer (picked %q)", picked)
+	}
+	if idx := p.List().Index(); idx != 0 {
+		t.Fatalf("a right click must not move the cursor either; Index() = %d, want 0", idx)
+	}
+
+	// The left button is untouched by the same change.
+	p.UpdatePanel(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: y})
+	if picked != "three" {
+		t.Fatalf("a left click should still be enter, picked %q", picked)
+	}
+}
