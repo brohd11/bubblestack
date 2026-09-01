@@ -56,9 +56,13 @@ var _ FocusNotifier = (*FilePanel)(nil)
 // row was listed FROM, which is what a host needs to resolve a sibling ("create a file
 // here") without asking the panel where it currently is.
 type FileEntry struct {
-	Name  string // base name as listed
-	Path  string // absolute path
-	Dir   string // the directory it was listed from
+	Name string // base name as listed
+	Path string // absolute path
+	Dir  string // the directory it was listed from
+	// IsDir is "can this row be walked into": a directory, or a symlink to one. It follows
+	// the link because that is the question every host branching on it is really asking,
+	// and os.ReadDir's own answer (the link is not a directory) makes a linked folder
+	// unreachable — see read.
 	IsDir bool
 	Up    bool // the ".." row; Path is the parent directory
 }
@@ -70,6 +74,11 @@ type FilePanelOpts struct {
 	Root   string // navigation floor; "" leaves the panel free to walk to the filesystem root
 	Title  string // fixed border legend; "" tracks the current directory's base name
 	Border bool   // draw the shared frame (the instancer's call, never the embedder's)
+	// Colors tints each row by what the entry IS — directory, dotfile, symlink, program,
+	// source, archive (see filecolor.go). The instancer's call exactly as Border is: it is
+	// an appearance decision, and the zero value leaves a listing plain, so a consumer that
+	// has not thought about coloring does not silently get it.
+	Colors bool
 
 	// Compact picks the starting row density; DensityKey flips it live. An unbound
 	// DensityKey (the zero value) leaves the chord to the host, which calls ToggleDensity
@@ -203,6 +212,39 @@ func (p *FilePanel) setTitle() {
 
 // ---------- listing ----------
 
+// linkStat is what a symlink row points AT — the following stat os.ReadDir deliberately
+// does not do. Only symlinks pay for it, so this is one extra stat on a rare kind of row
+// rather than a second stat on every row (entryDesc has the budget).
+//
+// nil for anything that is not a symlink, and for a link that cannot be resolved: a dangling
+// one, or a cycle, which os.Stat reports as ELOOP rather than spinning. Both then list as
+// the plain file they look like from here, which is what every link did before this existed.
+func linkStat(path string, d fs.DirEntry) fs.FileInfo {
+	if d.Type()&fs.ModeSymlink == 0 {
+		return nil
+	}
+	info, err := os.Stat(path) // follows, where DirEntry.Info does not
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+// rowColor is the color a row of kind k gets, or nil when this panel was not built with
+// Colors. nil rather than some neutral color is what makes an uncolored panel PLAIN: it is
+// what core.ColorItem reads as "no opinion", so the delegate leaves the row to the
+// terminal's own foreground.
+//
+// Both color sites go through here so the flag cannot be honored in one and forgotten in
+// the other. ClassifyFile still runs when the flag is off — it is a d.Type() check and at
+// most a few map lookups, and one gate in one place is worth more than skipping it.
+func (p *FilePanel) rowColor(k FileKind) lipgloss.TerminalColor {
+	if !p.opts.Colors {
+		return nil
+	}
+	return FileKindColor(k)
+}
+
 // read lists dir through the Include filter and the sort. Errors are the caller's to
 // route: navigation surfaces them through OnError and leaves the panel where it was.
 func (p *FilePanel) read(dir string) ([]fileItem, error) {
@@ -218,15 +260,27 @@ func (p *FilePanel) read(dir string) ([]fileItem, error) {
 		}
 		// One stat per row, shared: the size line and the row's type color both want it,
 		// and asking twice would double the cost entryDesc's comment says this component
-		// can only just afford. A directory needs neither, so it is not stat'd at all.
+		// can only just afford. A plain directory needs neither, so it is not stat'd at all.
+		//
+		// A symlink is the exception and is FOLLOWED. os.ReadDir does not, so a link to a
+		// directory arrives with IsDir false: it would sort among the files, print no
+		// trailing slash, describe itself by the link's own byte length, and — the part
+		// that matters — refuse to be walked into, because pick sends anything that is not
+		// a directory to OnSelect. Resolving here makes all four answer for the target.
+		isDir := d.IsDir()
 		var info fs.FileInfo
-		if !d.IsDir() {
-			info, _ = d.Info()
+		if target := linkStat(path, d); target != nil {
+			isDir, info = target.IsDir(), target
+		} else if !isDir {
+			info, _ = d.Info() // an lstat: the entry itself
 		}
 		out = append(out, fileItem{
-			entry: FileEntry{Name: d.Name(), Path: path, Dir: dir, IsDir: d.IsDir()},
-			desc:  entryDesc(d, info),
-			color: FileKindColor(ClassifyFile(d, info)),
+			entry: FileEntry{Name: d.Name(), Path: path, Dir: dir, IsDir: isDir},
+			desc:  entryDesc(isDir, info),
+			// ClassifyFile still reads the LINK's own type, so a linked folder stays
+			// symlink-colored rather than becoming dir-colored — the ls convention, and the
+			// one thing on the row that still says an indirection is involved.
+			color: p.rowColor(ClassifyFile(d, info)),
 		})
 	}
 	less := p.opts.Less
@@ -263,7 +317,7 @@ func (p *FilePanel) rows() []list.Item {
 			desc:  "parent directory",
 			// The way out is a folder, and is colored as one: it is synthetic, so there is
 			// no fs.DirEntry for ClassifyFile to read.
-			color: FileKindColor(KindDir),
+			color: p.rowColor(KindDir),
 		})
 	}
 	for _, it := range p.items {
@@ -344,8 +398,11 @@ func (i fileItem) FilterValue() string {
 // walk could not — one more reason this component lists one folder at a time. It takes that
 // stat rather than making it, so the one read also feeds the row's type color; a nil info
 // is a stat that failed, and the row keeps its name and loses its size.
-func entryDesc(d fs.DirEntry, info fs.FileInfo) string {
-	if d.IsDir() {
+//
+// isDir is read's RESOLVED answer, not d.IsDir(): a symlink to a folder has to say "dir"
+// here rather than report the byte length of the link itself.
+func entryDesc(isDir bool, info fs.FileInfo) string {
+	if isDir {
 		return "dir"
 	}
 	if info == nil {

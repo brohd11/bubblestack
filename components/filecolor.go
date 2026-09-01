@@ -86,6 +86,10 @@ func FileKindColor(k FileKind) lipgloss.TerminalColor {
 // suffix because a runnable .sh is a program before it is a shell script; then the tables.
 func ClassifyFile(d fs.DirEntry, info fs.FileInfo) FileKind {
 	name := d.Name()
+	// The link's own type, before the directory test below — deliberately, so a symlink to
+	// a folder stays symlink-colored even though FilePanel.read has by now resolved its
+	// IsDir. That is the ls convention, and on a row that otherwise reads as an ordinary
+	// folder it is the only thing left saying an indirection is involved.
 	if d.Type()&fs.ModeSymlink != 0 {
 		return KindSymlink
 	}

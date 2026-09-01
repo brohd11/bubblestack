@@ -543,7 +543,7 @@ func TestClassifyFileNilInfo(t *testing.T) {
 // no fs.DirEntry behind it — is colored as the folder it is.
 func TestFilePanelRowColors(t *testing.T) {
 	root := colorTree(t)
-	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true})
+	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true, Colors: true})
 	p.SetSize(30, 12)
 
 	got := map[string]lipgloss.TerminalColor{}
@@ -558,7 +558,7 @@ func TestFilePanelRowColors(t *testing.T) {
 		t.Errorf("the parent row should be dir-colored, got %v", got[".."])
 	}
 
-	p = NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true})
+	p = NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: true})
 	p.SetSize(30, 12)
 	want := map[string]FileKind{
 		"sub/":     KindDir,
@@ -591,7 +591,7 @@ func TestFilePanelRowColors(t *testing.T) {
 func TestFilePanelColorIsStyleOnly(t *testing.T) {
 	root := colorTree(t)
 	build := func() string {
-		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true})
+		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true, Colors: true})
 		p.SetSize(24, 12) // narrow enough that names truncate
 		return p.View(false)
 	}
@@ -604,5 +604,190 @@ func TestFilePanelColorIsStyleOnly(t *testing.T) {
 	}
 	if ansi.Strip(colored) != plain {
 		t.Fatalf("color must not change what the panel draws:\n%q\n%q", ansi.Strip(colored), plain)
+	}
+}
+
+// TestFilePanelColorsAreOptIn is the flag's contract, and the mirror of
+// TestFilePanelColorIsStyleOnly: a panel built WITHOUT Colors has no opinion about any row
+// — nil from every TitleColor, the synthetic ".." row included — and prints the same bytes
+// whether or not the terminal can show color. It is what would catch an edit that went back
+// to coloring unconditionally, which no other test in this file would notice.
+func TestFilePanelColorsAreOptIn(t *testing.T) {
+	root := colorTree(t)
+	build := func() *FilePanel {
+		p := NewFilePanel(FilePanelOpts{Dir: root, Compact: true, Border: true})
+		p.SetSize(24, 12)
+		return p
+	}
+
+	for _, it := range build().List().VisibleItems() {
+		fi, ok := it.(fileItem)
+		if !ok {
+			continue
+		}
+		if c := fi.TitleColor(); c != nil {
+			t.Errorf("%s: color %v without Colors, want nil", fi.Title(), c)
+		}
+	}
+
+	// And the flag really does reach the render. The comparison is against an opted-IN
+	// panel over the same directory rather than against an uncolored render of this one:
+	// the frame, the cursor accent and the muted size column are color too, so "prints no
+	// escape codes" was never the claim — "prints no file-type color" is.
+	withColor(t)
+	off := build().View(false)
+	on := func() string {
+		p := NewFilePanel(FilePanelOpts{Dir: root, Compact: true, Border: true, Colors: true})
+		p.SetSize(24, 12)
+		return p.View(false)
+	}()
+	if off == on {
+		t.Fatal("Colors must change what the panel prints; the flag is not reaching the render")
+	}
+	if ansi.Strip(off) != ansi.Strip(on) {
+		t.Fatalf("the flag must change only color, never text:\n%q\n%q", ansi.Strip(off), ansi.Strip(on))
+	}
+}
+
+// ---------- symlinks ----------
+
+// linkTree builds root/{target/{inside.txt}, plain.txt, dirlink -> target,
+// filelink -> plain.txt, deadlink -> nowhere}. Skips on a platform that cannot symlink.
+func linkTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range map[string]string{
+		"plain.txt":         "hello\n",
+		"target/inside.txt": "in\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"dirlink":  filepath.Join(root, "target"),
+		"filelink": filepath.Join(root, "plain.txt"),
+		"deadlink": filepath.Join(root, "nowhere"),
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	return root
+}
+
+// rowDesc is the description of the row titled name, for the size-vs-"dir" assertions.
+func rowDesc(p *FilePanel, name string) (string, bool) {
+	for _, it := range p.List().VisibleItems() {
+		if fi, ok := it.(fileItem); ok && fi.Title() == name {
+			return fi.Description(), true
+		}
+	}
+	return "", false
+}
+
+// TestFilePanelSymlinkToDirIsADirectory: os.ReadDir does not follow links, so a symlink to a
+// folder used to arrive with IsDir false — no trailing slash, sorted among the files, and
+// described by the link's own byte length. read follows it now, so all three answer for the
+// target.
+func TestFilePanelSymlinkToDirIsADirectory(t *testing.T) {
+	root := linkTree(t)
+	p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true})
+	p.SetSize(30, 12)
+
+	got := titles(p)
+	// Directories first, each with a slash: the linked one sorts and prints as a folder.
+	want := []string{"dirlink/", "target/", "deadlink", "filelink", "plain.txt"}
+	if !equalStrings(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+	if desc, ok := rowDesc(p, "dirlink/"); !ok || desc != "dir" {
+		t.Fatalf("a linked folder should describe itself as a dir, got %q", desc)
+	}
+}
+
+// TestFilePanelWalksIntoSymlinkedDir is the assertion the bug report reduces to: enter on a
+// linked folder must reach SetDir, not OnSelect. Before the fix pick saw IsDir false and
+// handed the row to the host as a FILE, which is why ~/.gdaddon could not be opened.
+func TestFilePanelWalksIntoSymlinkedDir(t *testing.T) {
+	root := linkTree(t)
+	sh := core.NewShared(nil)
+	picked := ""
+	p := NewFilePanel(FilePanelOpts{
+		Dir: root, Compact: true,
+		OnSelect: func(_ *core.Shared, e FileEntry) core.Action { picked = e.Name; return core.Action{} },
+	})
+	p.SetSize(30, 12)
+
+	selectTitle(t, p, "dirlink/")
+	p.UpdatePanel(sh, keyMsg("enter"))
+	if picked != "" {
+		t.Fatalf("a linked folder must walk, not go to OnSelect (got %q)", picked)
+	}
+	if want := filepath.Join(root, "dirlink"); p.Dir() != want {
+		t.Fatalf("Dir() = %q, want the LINK's path %q — walking must not resolve to the target, or \"..\" would leave the folder you were looking at", p.Dir(), want)
+	}
+	if got := titles(p); !equalStrings(got, []string{"..", "inside.txt"}) {
+		t.Fatalf("the listing should be the target's contents, got %v", got)
+	}
+
+	// Out again: the parent of the link's path, which is where the link was seen.
+	p.UpdatePanel(sh, keyMsg("backspace"))
+	if p.Dir() != root {
+		t.Fatalf("walking out of a linked folder should land where the link was; Dir() = %q", p.Dir())
+	}
+}
+
+// TestFilePanelSymlinkToFileStaysAFile: only the DIRECTORY case changes. A link to a file,
+// and a dangling link, both stay files — they go to OnSelect and never walk.
+func TestFilePanelSymlinkToFileStaysAFile(t *testing.T) {
+	root := linkTree(t)
+	sh := core.NewShared(nil)
+	var picked []string
+	p := NewFilePanel(FilePanelOpts{
+		Dir: root, Compact: true,
+		OnSelect: func(_ *core.Shared, e FileEntry) core.Action { picked = append(picked, e.Name); return core.Action{} },
+	})
+	p.SetSize(30, 12)
+
+	for _, name := range []string{"filelink", "deadlink"} {
+		selectTitle(t, p, name)
+		p.UpdatePanel(sh, keyMsg("enter"))
+		if p.Dir() != root {
+			t.Fatalf("%s must not be walked into; Dir() = %q", name, p.Dir())
+		}
+	}
+	if !equalStrings(picked, []string{"filelink", "deadlink"}) {
+		t.Fatalf("both should have reached OnSelect, got %v", picked)
+	}
+}
+
+// TestFilePanelSymlinkedDirStaysSymlinkColored: resolving IsDir must not make a linked folder
+// look like an ordinary one. The color keys off the LINK's own type, which is the only thing
+// left on the row saying an indirection is involved.
+func TestFilePanelSymlinkedDirStaysSymlinkColored(t *testing.T) {
+	root := linkTree(t)
+	p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: true})
+	p.SetSize(30, 12)
+
+	for _, it := range p.List().VisibleItems() {
+		fi, ok := it.(fileItem)
+		if !ok {
+			continue
+		}
+		switch fi.Title() {
+		case "dirlink/":
+			if fi.TitleColor() != FileKindColor(KindSymlink) {
+				t.Errorf("a linked folder should stay symlink-colored, got %v", fi.TitleColor())
+			}
+		case "target/":
+			if fi.TitleColor() != FileKindColor(KindDir) {
+				t.Errorf("a real folder should stay dir-colored, got %v", fi.TitleColor())
+			}
+		}
 	}
 }
