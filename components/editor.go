@@ -874,7 +874,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 	case "enter":
 		s.newline()
 	case "backspace", "ctrl+h":
-		s.backspace()
+		if !s.deleteEmptyAutoPair() {
+			s.backspace()
+		}
 	case "delete", "ctrl+d":
 		s.forwardDelete()
 	case "alt+backspace", "ctrl+w":

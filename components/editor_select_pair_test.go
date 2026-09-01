@@ -362,6 +362,117 @@ func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
 	}
 }
 
+func TestEditorBackspaceDeletesEmptyAutoPairs(t *testing.T) {
+	for _, pair := range editorTestAutoPairs {
+		t.Run(string(pair.Open), func(t *testing.T) {
+			s, _ := newEditor(editorTestPairOpts("x.code"))
+			typeRunes(s, pair.Open)
+			s.key(nil, keyMsg("backspace"))
+			if got := buffer(s); got != "" {
+				t.Fatalf("Backspace between %q%q left %q, want empty", pair.Open, pair.Close, got)
+			}
+			if s.curX != 0 || s.wantX != 0 {
+				t.Fatalf("caret/wantX = %d/%d, want 0/0", s.curX, s.wantX)
+			}
+		})
+	}
+}
+
+func TestEditorBackspaceDeletesManuallyFormedAndNestedPairs(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.code"))
+	s.setContent("[]")
+	s.curX, s.wantX = 1, 1
+	s.key(nil, keyMsg("ctrl+h"))
+	if got := buffer(s); got != "" {
+		t.Fatalf("ctrl+h between a manually formed pair left %q, want empty", got)
+	}
+
+	s.setContent("")
+	typeRunes(s, '(')
+	typeRunes(s, '[')
+	if got := buffer(s); got != "([])" {
+		t.Fatalf("nested insertion = %q, want ([])", got)
+	}
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "()" || s.curX != 1 {
+		t.Fatalf("first nested Backspace = %q at %d, want () at 1", got, s.curX)
+	}
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "" || s.curX != 0 {
+		t.Fatalf("second nested Backspace = %q at %d, want empty at 0", got, s.curX)
+	}
+}
+
+func TestEditorBackspacePairLeavesOtherDeletionModesAlone(t *testing.T) {
+	t.Run("selection", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("[ab]")
+		selectRange(s, 0, 1, 0, 3)
+		s.key(nil, keyMsg("backspace"))
+		if got := buffer(s); got != "[]" || s.curX != 1 {
+			t.Fatalf("Backspace over selection = %q at %d, want [] at 1", got, s.curX)
+		}
+	})
+
+	t.Run("line join", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("left\nright")
+		s.curY, s.curX, s.wantX = 1, 0, 0
+		s.key(nil, keyMsg("backspace"))
+		if got := buffer(s); got != "leftright" || s.curY != 0 || s.curX != 4 {
+			t.Fatalf("Backspace at line start = %q at %d,%d, want leftright at 0,4", got, s.curY, s.curX)
+		}
+	})
+
+	t.Run("forward delete", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("[]")
+		s.key(nil, keyMsg("delete"))
+		if got := buffer(s); got != "]" || s.curX != 0 {
+			t.Fatalf("Delete before pair = %q at %d, want ] at 0", got, s.curX)
+		}
+	})
+}
+
+func TestEditorBackspacePairRequiresConfiguredExactMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, want string
+		opts                EditorOpts
+	}{
+		{"mismatched", "[)", ")", editorTestPairOpts("x.code")},
+		{"surrounding only", "**", "*", editorTestPairOpts("x.code")},
+		{"unconfigured editor", "[]", "]", EditorOpts{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(tc.opts)
+			s.setContent(tc.content)
+			s.curX, s.wantX = 1, 1
+			s.key(nil, keyMsg("backspace"))
+			if got := buffer(s); got != tc.want {
+				t.Fatalf("Backspace in %q = %q, want ordinary deletion %q", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEditorBackspacePairIsOneUndoStep(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.code"))
+	s.setContent("[]")
+	s.curX, s.wantX = 1, 1
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "" || len(s.undoStack) != 1 {
+		t.Fatalf("paired deletion = %q with %d undo entries, want empty/1", got, len(s.undoStack))
+	}
+	s.key(nil, keyMsg("ctrl+z"))
+	if got := buffer(s); got != "[]" || s.curX != 1 {
+		t.Fatalf("undo paired deletion = %q at %d, want [] at 1", got, s.curX)
+	}
+	s.key(nil, keyMsg("ctrl+y"))
+	if got := buffer(s); got != "" || s.curX != 0 {
+		t.Fatalf("redo paired deletion = %q at %d, want empty at 0", got, s.curX)
+	}
+}
+
 func TestEditorSelectionOnlyPairsWrapInEveryFileType(t *testing.T) {
 	for _, path := range []string{"notes.md", "main.go", "config.yaml"} {
 		for _, r := range []rune{'*', '_'} {
