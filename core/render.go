@@ -2,17 +2,23 @@ package core
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
 // ---------- header ----------
+
+// borderCells is the horizontal cells a left+right border costs. lipgloss v2 counts
+// them inside Style.Width (v1 did not), so every box sized from a content width adds
+// them back rather than restating the arithmetic.
+const borderCells = 2
 
 // HeaderInnerWidth is the content width inside the persistent context box for a
 // terminal of the given width, so a Header closure can size/truncate values to fit.
@@ -49,8 +55,12 @@ func HeaderValueWidth(width int, label string) int {
 // HeaderBox renders body inside the persistent bordered context box, sized to the
 // terminal width. A consumer's Header closure builds body (e.g. with Label +
 // TruncLeft) and returns HeaderBox(sh.Width(), body).
+//
+// The +2 is the border: lipgloss v2's Style.Width is the whole rendered width, border
+// included, where v1's counted only padding and content. HeaderInnerWidth keeps its own
+// meaning — the cells a Header closure may fill — so the border is added back here.
 func HeaderBox(width int, body string) string {
-	return headerStyle.Width(HeaderInnerWidth(width)).Render(body)
+	return headerStyle.Width(HeaderInnerWidth(width) + borderCells).Render(body)
 }
 
 // Label renders a context-box/field label in the muted label style.
@@ -132,7 +142,7 @@ func (s *Shared) ConfirmWidth() int {
 
 // box renders body inside the shared bordered confirm/summary box.
 func (s *Shared) Box(body string) string {
-	return boxStyle.Width(s.ConfirmWidth()).Render(body)
+	return boxStyle.Width(s.ConfirmWidth() + borderCells).Render(body)
 }
 
 // BoxFocused is Box with a focus-tinted border: FocusedColor when focused,
@@ -145,7 +155,7 @@ func (s *Shared) BoxFocused(body string, focused bool) string {
 	if focused {
 		color = FocusedColor
 	}
-	return boxStyle.BorderForeground(color).Width(s.ConfirmWidth()).Render(body)
+	return boxStyle.BorderForeground(color).Width(s.ConfirmWidth() + borderCells).Render(body)
 }
 
 // BoxInnerWidth is the widest a line of body text can be before Box word-wraps it:
@@ -209,11 +219,11 @@ type MarkItem interface{ Mark() string }
 // empty filter, keep the delegate's own styles, so a type color can never make the cursor
 // ambiguous. itemColor is where that precedence lives and both delegates read it, so the
 // two densities cannot disagree about which rows are colored.
-type ColorItem interface{ TitleColor() lipgloss.TerminalColor }
+type ColorItem interface{ TitleColor() color.Color }
 
 // itemColor is the foreground a delegate should apply to one row, and false when it should
 // apply none — the row is selected or dimmed, is not a ColorItem, or answers nil.
-func itemColor(item list.Item, isSelected, dimmed bool) (lipgloss.TerminalColor, bool) {
+func itemColor(item list.Item, isSelected, dimmed bool) (color.Color, bool) {
 	if isSelected || dimmed {
 		return nil, false
 	}
@@ -242,7 +252,9 @@ func RenderFilter(l *list.Model) string {
 		return l.FilterInput.View()
 	case list.FilterApplied:
 		in := l.FilterInput
-		return in.PromptStyle.Render(in.Prompt) + in.Value()
+		// The input is blurred once the filter is accepted, so the blurred prompt is
+		// the one bubbles would have drawn had it kept rendering the input itself.
+		return in.Styles().Blurred.Prompt.Render(in.Prompt) + in.Value()
 	default:
 		return ""
 	}
@@ -316,7 +328,7 @@ func (r CompactRow) Width() int {
 // given width — the delegate's padding taken off. Exported so the panel that drives a
 // marquee measures the row against the same number Render fits it into.
 func CompactTextWidth(listWidth int) int {
-	s := list.NewDefaultItemStyles().NormalTitle
+	s := list.NewDefaultItemStyles(isDark).NormalTitle
 	if w := listWidth - s.GetPaddingLeft() - s.GetPaddingRight(); w > 1 {
 		return w
 	}
@@ -346,7 +358,7 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 
-	styles := list.NewDefaultItemStyles()
+	styles := list.NewDefaultItemStyles(isDark)
 	styles.SelectedTitle = styles.SelectedTitle.Foreground(FocusedColor).BorderForeground(FocusedColor)
 	styles.NormalDesc = styles.NormalDesc.Foreground(MutedColor)
 	styles.DimmedDesc = styles.DimmedDesc.Foreground(MutedColor)
@@ -462,10 +474,10 @@ func StyleList(l *list.Model) {
 	// instead of bubbles' default purple.
 	l.Styles.Title = listStyles.Title
 	// Unlike the title bar, the filter prompt intentionally keeps bubbles' adaptive
-	// yellow. Re-apply it (and its cursor) from the live shared styles so a theme
-	// broadcast refreshes every style cached inside FilterInput too.
-	l.FilterInput.PromptStyle = listStyles.FilterPrompt
-	l.FilterInput.Cursor.Style = listStyles.FilterCursor
+	// yellow. Re-apply it (and its cursor, which v2 folds into the same struct) from
+	// the live shared styles so a theme broadcast refreshes every style cached inside
+	// FilterInput too.
+	l.FilterInput.SetStyles(listStyles.Filter)
 	// l.Styles.TitleBar = l.Styles.TitleBar.Margin(0) // how to set themes
 	// Drive list scrolling from the central keymap so an added scheme (e.g. wasd)
 	// reaches lists too; FullHint keeps the list's own full (?) help reading well.

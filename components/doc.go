@@ -3,10 +3,10 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // DocScreen is the reusable read-only text page: a scrollable viewport under an
@@ -50,7 +50,7 @@ func NewDocScreen(opts DocOpts) *DocScreen {
 		Render:     opts.Render,
 		Help:       opts.Help,
 		OnKey:      opts.OnKey,
-		vp:         viewport.New(0, 0),
+		vp:         viewport.New(),
 		width:      -1,
 	}
 }
@@ -78,8 +78,8 @@ func (s *DocScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	if h < 1 {
 		h = 1
 	}
-	s.vp.Width = width
-	s.vp.Height = h
+	s.vp.SetWidth(width)
+	s.vp.SetHeight(h)
 	if width == s.width {
 		return
 	}
@@ -99,7 +99,7 @@ func (s *DocScreen) textWidth() int {
 // Update pops on back and otherwise hands the message to the viewport, which owns
 // ↑/↓/pgup/pgdn scrolling itself.
 func (s *DocScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		k := msg.String()
 		if core.MatchKey(k, core.Keys.Back) {
 			return s, core.Pop()
@@ -115,10 +115,10 @@ func (s *DocScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Acti
 		// after OnKey so a caller can still claim one of these.
 		switch {
 		case core.MatchKey(k, core.Keys.Up):
-			s.vp.LineUp(1)
+			s.vp.ScrollUp(1)
 			return s, core.Action{}
 		case core.MatchKey(k, core.Keys.Down):
-			s.vp.LineDown(1)
+			s.vp.ScrollDown(1)
 			return s, core.Action{}
 		}
 	}

@@ -1,43 +1,30 @@
 package components
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
 )
-
-// withColor makes styling observable for the duration of one test. Under `go test`
-// stdout is not a TTY, so lipgloss resolves the Ascii profile and renders every
-// Foreground/Reverse as a no-op — which would make a focused render and a muted one
-// byte-identical. Tests that assert on a tint or on the reverse-video cursor force a
-// real profile and restore the ambient one after, so the rest of the suite keeps
-// comparing plain strings.
-func withColor(t *testing.T) {
-	t.Helper()
-	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
-}
 
 // TestFrameTopLegend: the hand-drawn top edge is exactly innerWidth wide between the
 // corners, with the legend interrupting the rule after the first dash.
 func TestFrameTopLegend(t *testing.T) {
 	top := frameTop("files", 20, false)
-	if !strings.HasPrefix(top, "┌─ files ") {
+	if !strings.HasPrefix(ansi.Strip(top), "┌─ files ") {
 		t.Fatalf("legend should interrupt the rule, got %q", top)
 	}
-	if !strings.HasSuffix(top, "┐") {
+	if !strings.HasSuffix(ansi.Strip(top), "┐") {
 		t.Fatalf("top edge should close with a corner, got %q", top)
 	}
 	if w := lipgloss.Width(top); w != 22 { // innerWidth + the two corners
 		t.Fatalf("top edge width = %d, want 22", w)
 	}
 	// The fill is whatever the legend leaves: "─ files " is 8 cells, so 12 remain.
-	if n := strings.Count(top, "─"); n != 1+12 {
+	if n := strings.Count(ansi.Strip(top), "─"); n != 1+12 {
 		t.Fatalf("fill dashes = %d, want %d", n, 1+12)
 	}
 }
@@ -46,7 +33,7 @@ func TestFrameTopLegend(t *testing.T) {
 // (the shape a framed element with no title draws).
 func TestFrameTopNoLegend(t *testing.T) {
 	top := frameTop("", 6, false)
-	if top != "┌"+strings.Repeat("─", 6)+"┐" {
+	if ansi.Strip(top) != "┌"+strings.Repeat("─", 6)+"┐" {
 		t.Fatalf("empty legend should give a plain rule, got %q", top)
 	}
 }
@@ -55,7 +42,7 @@ func TestFrameTopNoLegend(t *testing.T) {
 // rather than being truncated — the fill clamps at zero.
 func TestFrameTopOverlongLegend(t *testing.T) {
 	top := frameTop("a very long pane title", 4, false)
-	if !strings.HasPrefix(top, "┌─ a very long pane title ┐") {
+	if !strings.HasPrefix(ansi.Strip(top), "┌─ a very long pane title ┐") {
 		t.Fatalf("overlong legend should not be truncated, got %q", top)
 	}
 }
@@ -69,7 +56,6 @@ func TestFrameColorTracksFocus(t *testing.T) {
 	if frameColor(false) != core.BorderColor {
 		t.Error("an unfocused frame should wear the muted border color")
 	}
-	withColor(t)
 	if frameTop("files", 20, true) == frameTop("files", 20, false) {
 		t.Fatal("focused and unfocused frames must render differently")
 	}

@@ -7,27 +7,59 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
-// keyMsg builds a tea.KeyMsg whose String() matches the given key string.
-func keyMsg(s string) tea.KeyMsg {
-	switch s {
-	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
-	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
-	case "backspace":
-		return tea.KeyMsg{Type: tea.KeyBackspace}
-	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
-	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
-	default:
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+// keyMsg builds a tea.KeyPressMsg whose String() is the given keystroke, so tests can
+// drive screens from central-keymap key strings. It is KeyPressMsg and not the tea.KeyMsg
+// interface for the same reason every dispatch site is: that interface also covers key
+// releases. v2 ships no string→Key parser and the message is a Code/Text/Mod struct
+// rather than a named constant per key, so this is the one place a test's "ctrl+x"
+// becomes the shape Update sees.
+func keyMsg(s string) tea.KeyPressMsg {
+	var mod tea.KeyMod
+	for stripped := true; stripped; {
+		stripped = false
+		for _, p := range []struct {
+			prefix string
+			mod    tea.KeyMod
+		}{{"ctrl+", tea.ModCtrl}, {"alt+", tea.ModAlt}, {"shift+", tea.ModShift}} {
+			if rest, ok := strings.CutPrefix(s, p.prefix); ok {
+				mod, s, stripped = mod|p.mod, rest, true
+			}
+		}
 	}
+	if code, ok := namedKeyCodes[s]; ok {
+		k := tea.KeyPressMsg{Code: code, Mod: mod}
+		// Space is the one named key that also types a character, and the only Text a
+		// real terminal reports for it is the blank itself — which Key.String() then
+		// special-cases back to "space".
+		if code == tea.KeySpace && mod&^tea.ModShift == 0 {
+			k.Text = " "
+		}
+		return k
+	}
+	if s == "" {
+		// The empty keystroke: a key that types nothing, which is what an empty rune
+		// slice was in v1 and what callers use to drive "type an empty line".
+		return tea.KeyPressMsg{Mod: mod}
+	}
+	k := tea.KeyPressMsg{Code: []rune(s)[0], Mod: mod}
+	// Text is populated only for keys standing for printable characters; a ctrl/alt
+	// combo produces none. That is the distinction QueryUpdate and the editor read.
+	if mod&^tea.ModShift == 0 {
+		k.Text = s
+	}
+	return k
+}
+
+var namedKeyCodes = map[string]rune{
+	"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
+	"backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "space": tea.KeySpace,
+	"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
+	"home": tea.KeyHome, "end": tea.KeyEnd, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
 }
 
 func newList(items ...list.Item) list.Model {
@@ -102,25 +134,25 @@ func TestDocScreenWheelScrolls(t *testing.T) {
 	sh := core.NewShared(nil)
 	d.SetSize(sh, 40, 10)
 
-	if d.vp.YOffset != 0 {
-		t.Fatalf("a fresh doc should start at the top, got %d", d.vp.YOffset)
+	if d.vp.YOffset() != 0 {
+		t.Fatalf("a fresh doc should start at the top, got %d", d.vp.YOffset())
 	}
-	d.Update(sh, wheelMsg(tea.MouseButtonWheelDown))
-	if d.vp.YOffset == 0 {
+	d.Update(sh, wheelMsg(tea.MouseWheelDown))
+	if d.vp.YOffset() == 0 {
 		t.Fatal("a wheel-down over a doc page should scroll it")
 	}
 
-	at := d.vp.YOffset
-	d.Update(sh, wheelMsg(tea.MouseButtonWheelUp))
-	if d.vp.YOffset >= at {
-		t.Fatalf("a wheel-up should scroll back, offset stayed at %d", d.vp.YOffset)
+	at := d.vp.YOffset()
+	d.Update(sh, wheelMsg(tea.MouseWheelUp))
+	if d.vp.YOffset() >= at {
+		t.Fatalf("a wheel-up should scroll back, offset stayed at %d", d.vp.YOffset())
 	}
 }
 
 // ---------- WheelNav ----------
 
-func wheelMsg(b tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{Button: b, Action: tea.MouseActionPress}
+func wheelMsg(b tea.MouseButton) tea.MouseWheelMsg {
+	return tea.MouseWheelMsg{Button: b}
 }
 
 // TestWheelNavMovesCursor checks a notch moves the cursor exactly one row — not the
@@ -128,13 +160,13 @@ func wheelMsg(b tea.MouseButton) tea.MouseMsg {
 func TestWheelNavMovesCursor(t *testing.T) {
 	l := newList(Item{Name: "A"}, Item{Name: "B"}, Item{Name: "C"})
 
-	if !WheelNav(&l, wheelMsg(tea.MouseButtonWheelDown)) {
+	if !WheelNav(&l, wheelMsg(tea.MouseWheelDown).Mouse()) {
 		t.Fatal("a wheel-down notch should be handled")
 	}
 	if l.Index() != 1 {
 		t.Fatalf("a wheel-down notch should move the cursor one row, got %d", l.Index())
 	}
-	if !WheelNav(&l, wheelMsg(tea.MouseButtonWheelUp)) {
+	if !WheelNav(&l, wheelMsg(tea.MouseWheelUp).Mouse()) {
 		t.Fatal("a wheel-up notch should be handled")
 	}
 	if l.Index() != 0 {
@@ -148,13 +180,13 @@ func TestWheelNavMovesCursor(t *testing.T) {
 func TestWheelNavClamps(t *testing.T) {
 	l := newList(Item{Name: "A"}, Item{Name: "B"})
 
-	WheelNav(&l, wheelMsg(tea.MouseButtonWheelUp)) // already at the top
+	WheelNav(&l, wheelMsg(tea.MouseWheelUp).Mouse()) // already at the top
 	if l.Index() != 0 {
 		t.Fatalf("a wheel-up at the first row should clamp, not wrap to the last, got %d", l.Index())
 	}
 
 	l.Select(1)
-	WheelNav(&l, wheelMsg(tea.MouseButtonWheelDown)) // already at the bottom
+	WheelNav(&l, wheelMsg(tea.MouseWheelDown).Mouse()) // already at the bottom
 	if l.Index() != 1 {
 		t.Fatalf("a wheel-down at the last row should clamp, not wrap to the first, got %d", l.Index())
 	}
@@ -164,8 +196,8 @@ func TestWheelNavClamps(t *testing.T) {
 // wheel-only scope doesn't quietly turn clicks into cursor moves.
 func TestWheelNavIgnoresNonWheel(t *testing.T) {
 	l := newList(Item{Name: "A"}, Item{Name: "B"})
-	msg := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
-	if WheelNav(&l, msg) {
+	msg := tea.MouseClickMsg{Button: tea.MouseLeft}
+	if WheelNav(&l, msg.Mouse()) {
 		t.Fatal("a click is not a wheel event and must be left unhandled")
 	}
 	if l.Index() != 0 {
@@ -178,7 +210,7 @@ func TestWheelNavIgnoresNonWheel(t *testing.T) {
 // nothing on a tab root.
 func TestRootUpdateWheelMovesCursor(t *testing.T) {
 	l := newList(Item{Name: "A"}, Item{Name: "B"})
-	RootUpdate(core.NewShared(nil), &l, wheelMsg(tea.MouseButtonWheelDown))
+	RootUpdate(core.NewShared(nil), &l, wheelMsg(tea.MouseWheelDown))
 	if l.Index() != 1 {
 		t.Fatalf("a wheel through RootUpdate should move the list cursor, got %d", l.Index())
 	}
@@ -189,7 +221,7 @@ func TestRootUpdateWheelMovesCursor(t *testing.T) {
 // TestPickerWheelMovesCursor is the picker's half of the same wiring.
 func TestPickerWheelMovesCursor(t *testing.T) {
 	p := NewPicker([]list.Item{Item{Name: "A"}, Item{Name: "B"}}, PickerOpts{Title: "T"})
-	p.Update(core.NewShared(nil), wheelMsg(tea.MouseButtonWheelDown))
+	p.Update(core.NewShared(nil), wheelMsg(tea.MouseWheelDown))
 	if p.list.Index() != 1 {
 		t.Fatalf("a wheel should move the picker's cursor, got %d", p.list.Index())
 	}

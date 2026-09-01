@@ -5,9 +5,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // FormScreen is the reusable, item-driven form: a column of self-rendering fields
@@ -112,7 +112,7 @@ func (f *FormScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 	if cmd, ok := QueryUpdate(f, msg); ok {
 		return f, core.Async(cmd)
 	}
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return f, core.Action{}
 	}

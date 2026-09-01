@@ -7,7 +7,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -73,7 +73,7 @@ func (s *EditorScreen) searchBar() string {
 	w := s.paneW()
 	contentW := max(w-4, 1) // two border cells and one padding cell on each side
 	content := ansi.Truncate("find: "+s.searchQuery, contentW, "…")
-	return retainedSearchBox().Width(contentW + 2).Render(content)
+	return retainedSearchBox().Width(contentW + 4).Render(content)
 }
 
 // retainedSearchBox is the unfocused counterpart to lineEditBox: same geometry, but
@@ -528,7 +528,7 @@ var (
 	// Search yellow is semantic but not thematic: it stays recognizable while themes
 	// and pane focus change. The darker light-terminal shade keeps the block visible
 	// against white, while dark terminals get the bright form.
-	editorSearchYellow = lipgloss.AdaptiveColor{Light: "136", Dark: "226"}
+	editorSearchYellow = core.Color{Light: 136, Dark: 226}
 	editorSearchText   = lipgloss.Color("232")
 )
 
@@ -536,7 +536,7 @@ var (
 // of both the active theme and pane focus. Selection and the caret still win in the
 // render layer ordering above it.
 func (s *EditorScreen) editorSearchStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Background(editorSearchYellow).Foreground(editorSearchText)
+	return lipgloss.NewStyle().Background(core.Resolve(editorSearchYellow)).Foreground(editorSearchText)
 }
 
 // hlSpans answers the row's validated spans, reparsing the buffer first when it

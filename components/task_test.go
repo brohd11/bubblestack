@@ -7,7 +7,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // The task tests drive Update directly with TaskEvents and keys, skipping Init so no
@@ -88,7 +88,7 @@ func TestStayTaskClickDismisses(t *testing.T) {
 		func(*core.Shared, core.TaskEvent) core.Action { return core.Action{} },
 		func(*core.Shared) core.Action { dismissed = true; return core.Pop() })
 	sh := core.NewShared(nil)
-	click := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	click := tea.MouseClickMsg{Button: tea.MouseLeft}
 
 	// A click while the task runs must neither abort nor dismiss.
 	_, act := s.Update(sh, click)

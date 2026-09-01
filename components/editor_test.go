@@ -8,8 +8,8 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -23,7 +23,7 @@ func newEditor(opts EditorOpts) (*EditorScreen, *core.Shared) {
 }
 
 func typeRunes(s *EditorScreen, rs ...rune) {
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: rs})
+	s.key(nil, keyMsg(string(rs)))
 }
 
 func buffer(s *EditorScreen) string {
@@ -59,16 +59,16 @@ func TestEditorSelectedText(t *testing.T) {
 func TestEditorSelectionEditing(t *testing.T) {
 	tests := []struct {
 		name string
-		key  tea.KeyMsg
+		key  tea.KeyPressMsg
 		want string
 	}{
-		{"typing replaces", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")}, "aXef"},
-		{"enter replaces", tea.KeyMsg{Type: tea.KeyEnter}, "a\nef"},
-		{"tab replaces", tea.KeyMsg{Type: tea.KeyTab}, "a\tef"},
-		{"backspace deletes", tea.KeyMsg{Type: tea.KeyBackspace}, "aef"},
-		{"delete deletes", tea.KeyMsg{Type: tea.KeyDelete}, "aef"},
-		{"word delete deletes", tea.KeyMsg{Type: tea.KeyCtrlW}, "aef"},
-		{"line delete deletes", tea.KeyMsg{Type: tea.KeyCtrlK}, "aef"},
+		{"typing replaces", keyMsg("X"), "aXef"},
+		{"enter replaces", keyMsg("enter"), "a\nef"},
+		{"tab replaces", keyMsg("tab"), "a\tef"},
+		{"backspace deletes", keyMsg("backspace"), "aef"},
+		{"delete deletes", keyMsg("delete"), "aef"},
+		{"word delete deletes", keyMsg("ctrl+w"), "aef"},
+		{"line delete deletes", keyMsg("ctrl+k"), "aef"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,7 +90,7 @@ func TestEditorCaretMoveClearsSelection(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+	s.key(nil, keyMsg("right"))
 	if s.selectionActive() {
 		t.Fatal("caret movement should clear the selection")
 	}
@@ -104,9 +104,9 @@ func TestEditorLeftMouseDragSelectsWithoutCopy(t *testing.T) {
 	s.setContent("abcdef")
 	y := s.titleH()
 
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 3, Y: y})
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 3, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft})
+	s.Update(sh, tea.MouseMotionMsg{X: 3, Y: y, Button: tea.MouseLeft})
+	_, act := s.Update(sh, tea.MouseReleaseMsg{X: 3, Y: y, Button: tea.MouseNone})
 	if act.Cmd != nil {
 		t.Fatal("a left drag should select without issuing a clipboard command")
 	}
@@ -119,8 +119,8 @@ func TestEditorClickDoesNotCopyOrSelect(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent("abc")
 	y := s.titleH()
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft})
+	_, act := s.Update(sh, tea.MouseReleaseMsg{X: 1, Y: y, Button: tea.MouseNone})
 	if act.Cmd != nil || s.selectionActive() {
 		t.Fatal("a press/release in one cell should remain an ordinary caret click")
 	}
@@ -136,7 +136,7 @@ func TestEditorRightClickOutsideSelectionBecomesCaretClick(t *testing.T) {
 	selectRange(s, 0, 1, 0, 4)
 	y := s.titleH()
 
-	_, act := s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 5, Y: y})
+	_, act := s.Update(sh, tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseRight})
 	if act.Msg == nil {
 		t.Fatal("a right press should open the context menu")
 	}
@@ -144,7 +144,7 @@ func TestEditorRightClickOutsideSelectionBecomesCaretClick(t *testing.T) {
 		t.Fatalf("outside right click: selection=%v caret=%d, want no selection and caret 5", s.selectionActive(), s.curX)
 	}
 	// The release that follows must not disturb what the press set up.
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 5, Y: y})
+	s.Update(sh, tea.MouseReleaseMsg{X: 5, Y: y, Button: tea.MouseNone})
 	if s.selectionActive() || s.curX != 5 {
 		t.Fatalf("the release after a right press changed state: selection=%v caret=%d", s.selectionActive(), s.curX)
 	}
@@ -159,10 +159,10 @@ func TestEditorRightPressBreaksMultiClickChain(t *testing.T) {
 	s.setContent("foo bar")
 	y := s.titleH()
 
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 1, Y: y})
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft})
+	s.Update(sh, tea.MouseReleaseMsg{X: 1, Y: y, Button: tea.MouseNone})
+	s.Update(sh, tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseRight})
+	s.Update(sh, tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft})
 	if s.clickCount != 1 || s.selectionActive() {
 		t.Fatalf("a right press between two left clicks formed a multi-click: count=%d selection=%v",
 			s.clickCount, s.selectionActive())
@@ -184,7 +184,6 @@ func TestEditorReverseAndMultilineDrag(t *testing.T) {
 }
 
 func TestEditorSelectionRenderKeepsGeometry(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("a\tb\nnext")
 	selectRange(s, 0, 1, 1, 2)
@@ -222,17 +221,17 @@ func TestEditorTyping(t *testing.T) {
 func TestEditorEnterAndTab(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	typeRunes(s, 'a', 'b', 'c')
-	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
+	s.key(nil, keyMsg("enter"))
 	typeRunes(s, 'd')
 	if got := buffer(s); got != "abc\nd" {
 		t.Fatalf("buffer = %q, want %q", got, "abc\nd")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyShiftTab})
+	s.key(nil, keyMsg("shift+tab"))
 	if got := buffer(s); got != "abc\nd\t" {
 		t.Fatalf("buffer = %q, want tab inserted, got %q", "abc\nd\t", got)
 	}
 	// A bare tab types one too.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyTab})
+	s.key(nil, keyMsg("tab"))
 	if got := buffer(s); got != "abc\nd\t\t" {
 		t.Fatalf("bare tab must type, buffer = %q, want %q", got, "abc\nd\t\t")
 	}
@@ -249,15 +248,15 @@ func TestEditorTabsNeverRenderRaw(t *testing.T) {
 		t.Fatal("View must never emit a raw tab")
 	}
 	// The tab occupies editorTabWidth display cells in the render.
-	if !strings.Contains(s.renderLine(0), "a"+strings.Repeat(" ", editorTabWidth)+"b") {
+	if !strings.Contains(ansi.Strip(s.renderLine(0)), "a"+strings.Repeat(" ", editorTabWidth)+"b") {
 		t.Fatalf("renderLine should expand the tab to %d spaces, got %q", editorTabWidth, s.renderLine(0))
 	}
 }
 
-// pasteText delivers text the way a bracketed paste arrives: one KeyMsg carrying the
-// whole payload, newlines and all.
+// pasteText delivers text the way a bracketed paste arrives: one tea.PasteMsg carrying
+// the whole payload, newlines and all.
 func pasteText(s *EditorScreen, text string) {
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune(text)})
+	s.Update(nil, tea.PasteMsg{Content: text})
 }
 
 // TestSplitPastedLines pins the line-break normalization and the control-rune filter:
@@ -323,7 +322,7 @@ func TestEditorPasteSelectionAndUndo(t *testing.T) {
 	if got := buffer(s); got != "aX\nYf" {
 		t.Fatalf("buffer = %q, want %q", got, "aX\nYf")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlZ})
+	s.key(nil, keyMsg("ctrl+z"))
 	if got := buffer(s); got != "abc\ndef" {
 		t.Fatalf("one undo should take back the whole paste, buffer = %q", got)
 	}
@@ -411,7 +410,7 @@ func TestEditorCellMapping(t *testing.T) {
 		t.Fatalf("colAtCell(2) = %d, want 0", got)
 	}
 	// A click 4 cells in lands the cursor on 'a'.
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 4, Y: sh.BodyY() + s.titleH()})
+	s.Update(sh, tea.MouseClickMsg{X: 4, Y: sh.BodyY() + s.titleH(), Button: tea.MouseLeft})
 	if s.curX != 1 {
 		t.Fatalf("click past a tab: curX = %d, want 1", s.curX)
 	}
@@ -423,14 +422,14 @@ func TestEditorBackspace(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("ab\ncd")
 	s.curY, s.curX = 1, 0
-	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace}) // join
+	s.key(nil, keyMsg("backspace")) // join
 	if got := buffer(s); got != "abcd" {
 		t.Fatalf("join: buffer = %q, want %q", got, "abcd")
 	}
 	if s.curY != 0 || s.curX != 2 {
 		t.Fatalf("cursor after join = (%d,%d), want (0,2)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace}) // delete 'b'
+	s.key(nil, keyMsg("backspace")) // delete 'b'
 	if got := buffer(s); got != "acd" {
 		t.Fatalf("delete: buffer = %q, want %q", got, "acd")
 	}
@@ -443,21 +442,21 @@ func TestEditorArrows(t *testing.T) {
 	s.setContent("abcd\nx\nabc")
 	s.curY, s.curX, s.wantX = 0, 3, 3
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDown}) // onto "x": clamp 3 → 1
+	s.key(nil, keyMsg("down")) // onto "x": clamp 3 → 1
 	if s.curY != 1 || s.curX != 1 {
 		t.Fatalf("down onto short line = (%d,%d), want (1,1)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDown}) // onto "abc": back to target column 3
+	s.key(nil, keyMsg("down")) // onto "abc": back to target column 3
 	if s.curY != 2 || s.curX != 3 {
 		t.Fatalf("down restores target column = (%d,%d), want (2,3)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight}) // end of "abc": wraps to next line? no next — stays
+	s.key(nil, keyMsg("right")) // end of "abc": wraps to next line? no next — stays
 	if s.curY != 2 || s.curX != 3 {
 		t.Fatalf("right at buffer end = (%d,%d), want (2,3)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft}) // column 1 → 0 of "x"
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft}) // column 0: wraps to end of "abcd"
+	s.key(nil, keyMsg("up"))
+	s.key(nil, keyMsg("left")) // column 1 → 0 of "x"
+	s.key(nil, keyMsg("left")) // column 0: wraps to end of "abcd"
 	if s.curY != 0 || s.curX != 4 {
 		t.Fatalf("left wraps to previous line end = (%d,%d), want (0,4)", s.curY, s.curX)
 	}
@@ -472,18 +471,18 @@ func TestEditorArrowsAtBufferEnds(t *testing.T) {
 	s.setContent("abcd\nx\nabcdef")
 	s.curY, s.curX, s.wantX = 2, 2, 2
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	s.key(nil, keyMsg("down"))
 	if s.curY != 2 || s.curX != 6 || s.wantX != 6 {
 		t.Fatalf("down on the last line = (%d,%d) wantX %d, want (2,6) wantX 6", s.curY, s.curX, s.wantX)
 	}
 	// wantX moved with it: the next up aims at column 6, not the original 2.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	s.key(nil, keyMsg("up"))
 	if s.curY != 1 || s.curX != 1 {
 		t.Fatalf("up after the end move = (%d,%d), want (1,1)", s.curY, s.curX)
 	}
 
 	s.curY, s.curX, s.wantX = 0, 2, 2
-	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	s.key(nil, keyMsg("up"))
 	if s.curY != 0 || s.curX != 0 || s.wantX != 0 {
 		t.Fatalf("up on the first line = (%d,%d) wantX %d, want (0,0) wantX 0", s.curY, s.curX, s.wantX)
 	}
@@ -491,11 +490,11 @@ func TestEditorArrowsAtBufferEnds(t *testing.T) {
 	// A one-line buffer is both ends at once.
 	s.setContent("hello")
 	s.curX, s.wantX = 2, 2
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	s.key(nil, keyMsg("down"))
 	if s.curY != 0 || s.curX != 5 {
 		t.Fatalf("down in a one-line buffer = (%d,%d), want (0,5)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyUp})
+	s.key(nil, keyMsg("up"))
 	if s.curY != 0 || s.curX != 0 {
 		t.Fatalf("up in a one-line buffer = (%d,%d), want (0,0)", s.curY, s.curX)
 	}
@@ -509,7 +508,7 @@ func TestEditorClickSetsCursor(t *testing.T) {
 	s.dirty = false
 
 	click := func(x, y int) {
-		s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+		s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	}
 	click(2, sh.BodyY()+s.titleH()+1) // second visible row ("hi"), past its end → clamp
 	if s.curY != 1 || s.curX != 2 {
@@ -542,7 +541,7 @@ func newPaneEditor(opts EditorOpts) (*EditorScreen, *core.Shared) {
 func TestEditorBorderedView(t *testing.T) {
 	s, sh := newPaneEditor(EditorOpts{Title: "notes.md", Border: true})
 	v := s.View(sh)
-	if !strings.HasPrefix(v, "┌─ notes.md ") {
+	if !strings.HasPrefix(ansi.Strip(v), "┌─ notes.md ") {
 		t.Fatalf("bordered View should open with the title legend, got %q", strings.SplitN(v, "\n", 2)[0])
 	}
 	if strings.Contains(v, core.RenderTitleBar("notes.md")) {
@@ -553,7 +552,7 @@ func TestEditorBorderedView(t *testing.T) {
 	}
 
 	typeRunes(s, 'x') // dirty
-	if !strings.HasPrefix(s.View(sh), "┌─ notes.md (*) ") {
+	if !strings.HasPrefix(ansi.Strip(s.View(sh)), "┌─ notes.md (*) ") {
 		t.Fatal("the dirty marker should ride the legend")
 	}
 
@@ -660,7 +659,7 @@ func TestEditorInitLoadsOnce(t *testing.T) {
 // standalone TestEditorClickSetsCursor above); what this pins is the inset math.
 func TestEditorPaneClick(t *testing.T) {
 	press := func(s *EditorScreen, sh *core.Shared, x, y int) {
-		s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+		s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	}
 
 	t.Run("unbordered", func(t *testing.T) {
@@ -702,7 +701,6 @@ func TestEditorPaneClick(t *testing.T) {
 // a caret where the keys don't land reads as a lie — and mutes its title bar with it.
 // A standalone editor is focused from birth, so none of this shows.
 func TestEditorUnfocusedRender(t *testing.T) {
-	withColor(t) // the tint and the reverse-video caret are ANSI; force a profile
 
 	s, sh := newPaneEditor(EditorOpts{Title: "notes.md"})
 	s.setContent("hello\nworld")
@@ -746,7 +744,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// Mid-word: alt+backspace deletes back to the word start.
 	s.setContent("foo bar baz")
 	s.curY, s.curX = 0, 6 // inside "bar", after the 'a'
-	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	s.key(nil, keyMsg("alt+backspace"))
 	if got := buffer(s); got != "foo r baz" {
 		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foo r baz")
 	}
@@ -754,7 +752,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// At a word start (after spaces): deletes the PREVIOUS word and the spaces.
 	s.setContent("foo   bar")
 	s.curY, s.curX = 0, 6
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlW})
+	s.key(nil, keyMsg("ctrl+w"))
 	if got := buffer(s); got != "bar" {
 		t.Fatalf("ctrl+w past spaces: buffer = %q, want %q", got, "bar")
 	}
@@ -762,7 +760,7 @@ func TestEditorWordDelete(t *testing.T) {
 	// Column 0 joins the line, exactly like backspace (one press per segment).
 	s.setContent("one\ntwo")
 	s.curY, s.curX = 1, 0
-	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	s.key(nil, keyMsg("alt+backspace"))
 	if got := buffer(s); got != "onetwo" {
 		t.Fatalf("alt+backspace at col 0: buffer = %q, want %q", got, "onetwo")
 	}
@@ -770,14 +768,14 @@ func TestEditorWordDelete(t *testing.T) {
 	// alt+delete removes the word under/ahead of the cursor…
 	s.setContent("foo bar")
 	s.curY, s.curX = 0, 1
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
+	s.key(nil, keyMsg("alt+delete"))
 	if got := buffer(s); got != "fbar" {
 		t.Fatalf("alt+delete mid-word: buffer = %q, want %q", got, "fbar")
 	}
 	// …and at end of line pulls the next line up.
 	s.setContent("ab\ncd")
 	s.curY, s.curX = 0, 2
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDelete, Alt: true})
+	s.key(nil, keyMsg("alt+delete"))
 	if got := buffer(s); got != "abcd" {
 		t.Fatalf("alt+delete at EOL: buffer = %q, want %q", got, "abcd")
 	}
@@ -785,13 +783,13 @@ func TestEditorWordDelete(t *testing.T) {
 	// ctrl+u / ctrl+k delete to the line start / end.
 	s.setContent("hello world")
 	s.curY, s.curX = 0, 5
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlU})
+	s.key(nil, keyMsg("ctrl+u"))
 	if got := buffer(s); got != " world" {
 		t.Fatalf("ctrl+u: buffer = %q, want %q", got, " world")
 	}
 	s.setContent("hello world")
 	s.curY, s.curX = 0, 5
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlK})
+	s.key(nil, keyMsg("ctrl+k"))
 	if got := buffer(s); got != "hello" {
 		t.Fatalf("ctrl+k: buffer = %q, want %q", got, "hello")
 	}
@@ -799,7 +797,7 @@ func TestEditorWordDelete(t *testing.T) {
 
 func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
-	altBackspace := tea.KeyMsg{Type: tea.KeyBackspace, Alt: true}
+	altBackspace := keyMsg("alt+backspace")
 
 	// Ordinary text stops at the nearest configured symbol; a contiguous symbol run
 	// is its own token, so repeated presses peel an expression apart predictably.
@@ -843,38 +841,38 @@ func TestEditorWordNav(t *testing.T) {
 	s.setContent("foo bar\n  baz quux")
 
 	s.curY, s.curX = 0, 5 // inside "bar"
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true})
+	s.key(nil, keyMsg("alt+left"))
 	if s.curX != 4 {
 		t.Fatalf("alt+left to word start: curX = %d, want 4", s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // previous word
+	s.key(nil, keyMsg("alt+left")) // previous word
 	if s.curX != 0 {
 		t.Fatalf("alt+left again: curX = %d, want 0", s.curX)
 	}
 	s.curY, s.curX = 1, 0
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft, Alt: true}) // col 0 → prev line end
+	s.key(nil, keyMsg("alt+left")) // col 0 → prev line end
 	if s.curY != 0 || s.curX != 7 {
 		t.Fatalf("alt+left wraps to prev line end: (%d,%d), want (0,7)", s.curY, s.curX)
 	}
 
 	s.curY, s.curX = 0, 0
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "foo" and the space
+	s.key(nil, keyMsg("alt+right")) // past "foo" and the space
 	if s.curX != 4 {
 		t.Fatalf("alt+right to next word: curX = %d, want 4", s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlRight}) // no more words on line 1 → its end
+	s.key(nil, keyMsg("ctrl+right")) // no more words on line 1 → its end
 	if s.curY != 0 || s.curX != 7 {
 		t.Fatalf("ctrl+right to line end: (%d,%d), want (0,7)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlRight}) // EOL → next line start
+	s.key(nil, keyMsg("ctrl+right")) // EOL → next line start
 	if s.curY != 1 || s.curX != 0 {
 		t.Fatalf("ctrl+right wraps to next line: (%d,%d), want (1,0)", s.curY, s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // leading spaces → "baz"
+	s.key(nil, keyMsg("alt+right")) // leading spaces → "baz"
 	if s.curX != 2 {
 		t.Fatalf("alt+right over leading spaces: curX = %d, want 2", s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight, Alt: true}) // past "baz" and the space → "quux"
+	s.key(nil, keyMsg("alt+right")) // past "baz" and the space → "quux"
 	if s.curX != 6 {
 		t.Fatalf("alt+right to next word: curX = %d, want 6", s.curX)
 	}
@@ -888,19 +886,19 @@ func TestEditorCtrlAliases(t *testing.T) {
 	s.setContent("abc")
 	s.curY, s.curX = 0, 2
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlH})
+	s.key(nil, keyMsg("ctrl+h"))
 	if got := buffer(s); got != "ac" {
 		t.Fatalf("ctrl+h: buffer = %q, want %q", got, "ac")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlD})
+	s.key(nil, keyMsg("ctrl+d"))
 	if got := buffer(s); got != "a" {
 		t.Fatalf("ctrl+d: buffer = %q, want %q", got, "a")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if s.curX != 1 {
 		t.Fatalf("ctrl+e: curX = %d, want 1", s.curX)
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlA})
+	s.key(nil, keyMsg("ctrl+a"))
 	if s.curX != 0 {
 		t.Fatalf("ctrl+a: curX = %d, want 0", s.curX)
 	}
@@ -971,7 +969,7 @@ func TestEditorSetTextSuppressesTheInitRead(t *testing.T) {
 // TestEditorExitCleanPops: ctrl+x on an unmodified buffer pops without a prompt.
 func TestEditorExitCleanPops(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
-	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	_, act := s.key(nil, keyMsg("ctrl+x"))
 	if act.Msg == nil {
 		t.Fatal("ctrl+x on a clean buffer should pop (non-nil nav msg)")
 	}
@@ -986,10 +984,10 @@ func TestEditorExitPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "saved.txt")
 	s, sh := newEditor(EditorOpts{Path: path})
 	typeRunes(s, 'h', 'i')
-	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
+	s.key(nil, keyMsg("enter"))
 	typeRunes(s, 'y', 'o')
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	s.key(nil, keyMsg("ctrl+x"))
 	if !s.confirmExit {
 		t.Fatal("ctrl+x on a dirty buffer should show the save prompt")
 	}
@@ -1001,15 +999,15 @@ func TestEditorExitPrompt(t *testing.T) {
 	}
 
 	// c cancels back to editing.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	s.key(nil, keyMsg("c"))
 	if s.confirmExit {
 		t.Fatal("c should cancel the prompt")
 	}
 
 	// y pushes the filename prompt (nano's "File Name to Write"), seeded with the
 	// buffer's name; enter saves, and the async result pops the screen.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-	_, act := s.Update(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	s.key(nil, keyMsg("ctrl+x"))
+	_, act := s.Update(sh, keyMsg("y"))
 	if act.Msg == nil || act.Cmd != nil {
 		t.Fatal("y should push the filename prompt (nav msg, no cmd)")
 	}
@@ -1044,8 +1042,8 @@ func TestEditorDiscardExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discarded.txt")
 	s, _ := newEditor(EditorOpts{Path: path})
 	typeRunes(s, 'x')
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-	_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	s.key(nil, keyMsg("ctrl+x"))
+	_, act := s.key(nil, keyMsg("n"))
 	if act.Msg == nil {
 		t.Fatal("n should pop (non-nil nav msg)")
 	}
@@ -1072,7 +1070,7 @@ func TestEditorSaveKey(t *testing.T) {
 			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
 		})
 		typeRunes(s, 'h', 'i')
-		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		s.key(sh, keyMsg("ctrl+s"))
 		if s.confirmExit {
 			t.Fatal("ctrl+s must not raise the exit prompt")
 		}
@@ -1099,7 +1097,7 @@ func TestEditorSaveKey(t *testing.T) {
 			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
 		})
 		typeRunes(s, 'x')
-		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		s.key(sh, keyMsg("ctrl+s"))
 		after := filepath.Join(dir, "nested", "after.txt") // a dir that does not exist yet
 		s.saveAsEdit(sh).OnDone(sh, after)                 // raises the confirm; nothing has moved yet
 		if s.path == after {
@@ -1122,7 +1120,7 @@ func TestEditorSaveKey(t *testing.T) {
 		s, sh := newEditor(EditorOpts{Path: filepath.Join(dir, "caret.txt")})
 		s.setContent(longDoc())
 		s.curY, s.curX, s.scrY = 60, 1, 55
-		s.key(sh, tea.KeyMsg{Type: tea.KeyCtrlS})
+		s.key(sh, keyMsg("ctrl+s"))
 		s.saveAsEdit(sh).OnDone(sh, s.path)
 		s.Update(sh, s.saveCmd()())
 		if s.curY != 60 || s.curX != 1 || s.scrY != 55 {
@@ -1155,7 +1153,7 @@ func TestEditorOnExitHook(t *testing.T) {
 		fired := 0
 		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
 		s, _ := newEditor(EditorOpts{OnExit: hook})
-		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		_, act := s.key(nil, keyMsg("ctrl+x"))
 		if fired != 1 || act.Msg != nil {
 			t.Fatalf("clean ctrl+x should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
 		}
@@ -1167,8 +1165,8 @@ func TestEditorOnExitHook(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "discarded.txt")
 		s, _ := newEditor(EditorOpts{Path: path, OnExit: hook})
 		typeRunes(s, 'x')
-		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-		_, act := s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		s.key(nil, keyMsg("ctrl+x"))
+		_, act := s.key(nil, keyMsg("n"))
 		if fired != 1 || act.Msg != nil {
 			t.Fatalf("n should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
 		}
@@ -1183,11 +1181,11 @@ func TestEditorOnExitHook(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "saved.txt")
 		s, sh := newEditor(EditorOpts{Path: path, OnExit: hook})
 		typeRunes(s, 'h', 'i')
-		s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+		s.key(nil, keyMsg("ctrl+x"))
 		// Through the real "y": it is what marks this save as the exit path's, and
 		// so what makes the write end in the hook rather than in a plain save. It
 		// needs the real Shared — the prompt it pushes anchors off the body.
-		s.key(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		s.key(sh, keyMsg("y"))
 		if act := s.saveAsEdit(sh).OnDone(sh, path); act.Msg == nil {
 			t.Fatal("enter on the filename prompt should navigate (pop + save)")
 		}
@@ -1215,8 +1213,8 @@ func TestEditorSaveAs(t *testing.T) {
 	s.Update(sh, s.Init(sh)())
 	typeRunes(s, '!')
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-	s.key(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	s.key(nil, keyMsg("ctrl+x"))
+	s.key(sh, keyMsg("y"))
 	edit := s.saveAsEdit(sh)
 	if got := edit.input.Value(); got != old {
 		t.Fatalf("the prompt should seed the full path, got %q", got)
@@ -1241,8 +1239,8 @@ func TestEditorSaveAs(t *testing.T) {
 
 	scratch, sh2 := newEditor(EditorOpts{})
 	typeRunes(scratch, 'n', 'o')
-	scratch.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
-	scratch.key(sh2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	scratch.key(nil, keyMsg("ctrl+x"))
+	scratch.key(sh2, keyMsg("y"))
 	edit2 := scratch.saveAsEdit(sh2)
 	if got := edit2.input.Value(); got != "" {
 		t.Fatalf("a scratch buffer's prompt starts empty, got %q", got)
@@ -1303,7 +1301,7 @@ func TestEditorSaveAsConfirm(t *testing.T) {
 	}
 
 	// No: the dialog pops back to the still-filled box, leaving the buffer alone.
-	if _, act := dlg.Update(sh, tea.KeyMsg{Type: tea.KeyEsc}); act.Msg == nil {
+	if _, act := dlg.Update(sh, keyMsg("esc")); act.Msg == nil {
 		t.Error("esc should pop the confirm")
 	}
 	if s.path != old {
@@ -1377,7 +1375,7 @@ func longDoc() string {
 }
 
 func wheel(s *EditorScreen, sh *core.Shared, btn tea.MouseButton) {
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: btn, X: 5, Y: 5})
+	s.Update(sh, tea.MouseWheelMsg{X: 5, Y: 5, Button: btn})
 }
 
 // TestEditorWheelScroll: the wheel browses the buffer without moving the caret,
@@ -1387,20 +1385,20 @@ func TestEditorWheelScroll(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent(longDoc())
 
-	wheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != editorWheelStep {
 		t.Fatalf("wheel down → scrY %d, want %d", s.scrY, editorWheelStep)
 	}
 	if s.curY != 0 || s.curX != 0 {
 		t.Fatalf("the wheel must not move the caret, got (%d,%d)", s.curY, s.curX)
 	}
-	wheel(s, sh, tea.MouseButtonWheelUp)
-	wheel(s, sh, tea.MouseButtonWheelUp) // past the top: clamps
+	wheel(s, sh, tea.MouseWheelUp)
+	wheel(s, sh, tea.MouseWheelUp) // past the top: clamps
 	if s.scrY != 0 {
 		t.Fatalf("wheel up past the top → scrY %d, want 0", s.scrY)
 	}
 	for i := 0; i < 40; i++ {
-		wheel(s, sh, tea.MouseButtonWheelDown)
+		wheel(s, sh, tea.MouseWheelDown)
 	}
 	if want := len(s.lines) - s.h; s.scrY != want {
 		t.Fatalf("wheel at the bottom → scrY %d, want %d (len-h)", s.scrY, want)
@@ -1414,7 +1412,7 @@ func TestEditorWheelScroll(t *testing.T) {
 	}
 
 	// The caret sits far above the view now; one arrow snaps the view back to it.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyDown})
+	s.key(nil, keyMsg("down"))
 	if s.curY != 1 || s.scrY != 1 {
 		t.Fatalf("down with the caret off-screen → (%d, scrY %d), want (1, 1)", s.curY, s.scrY)
 	}
@@ -1427,30 +1425,30 @@ func TestEditorWheelFocus(t *testing.T) {
 	s.setContent(longDoc())
 
 	s.SetFocused(false)
-	wheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != 0 {
 		t.Fatalf("an unfocused pane must not scroll, scrY = %d", s.scrY)
 	}
 	s.SetFocused(true)
-	wheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != editorWheelStep {
 		t.Fatalf("focused wheel down → scrY %d, want %d", s.scrY, editorWheelStep)
 	}
 
 	s.dirty = true
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlX})
+	s.key(nil, keyMsg("ctrl+x"))
 	if !s.confirmExit {
 		t.Fatal("dirty ctrl+x should raise the exit prompt")
 	}
 	before := s.scrY // raising the prompt re-clamps the view to the caret
-	wheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != before {
 		t.Fatalf("the prompt suspends the wheel: scrY %d, want %d", s.scrY, before)
 	}
 }
 
 func altWheel(s *EditorScreen, sh *core.Shared, btn tea.MouseButton) {
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: btn, X: 5, Y: 5, Alt: true})
+	s.Update(sh, tea.MouseWheelMsg{X: 5, Y: 5, Button: btn, Mod: tea.ModAlt})
 }
 
 // wideDoc is one 200-cell line between two short ones: a buffer that overflows the
@@ -1465,7 +1463,7 @@ func TestEditorHorizontalWheel(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent(wideDoc())
 
-	wheel(s, sh, tea.MouseButtonWheelRight)
+	wheel(s, sh, tea.MouseWheelRight)
 	if s.scrX != editorHWheelStep {
 		t.Fatalf("wheel right → scrX %d, want %d", s.scrX, editorHWheelStep)
 	}
@@ -1476,8 +1474,8 @@ func TestEditorHorizontalWheel(t *testing.T) {
 		t.Fatalf("the horizontal wheel must not scroll vertically, scrY = %d", s.scrY)
 	}
 
-	wheel(s, sh, tea.MouseButtonWheelLeft)
-	wheel(s, sh, tea.MouseButtonWheelLeft) // past the left edge: clamps
+	wheel(s, sh, tea.MouseWheelLeft)
+	wheel(s, sh, tea.MouseWheelLeft) // past the left edge: clamps
 	if s.scrX != 0 {
 		t.Fatalf("wheel left past the edge → scrX %d, want 0", s.scrX)
 	}
@@ -1489,7 +1487,7 @@ func TestEditorHorizontalWheel(t *testing.T) {
 		t.Fatalf("maxScrollX = %d, want %d (widest - contentW + 1)", got, want)
 	}
 	for i := 0; i < 60; i++ {
-		wheel(s, sh, tea.MouseButtonWheelRight)
+		wheel(s, sh, tea.MouseWheelRight)
 	}
 	if s.scrX != want {
 		t.Fatalf("wheel right at the end → scrX %d, want %d", s.scrX, want)
@@ -1508,7 +1506,7 @@ func TestEditorHorizontalWheel(t *testing.T) {
 
 	// The caret sits far left of the view; one arrow snaps the view back to it. Landing
 	// ON the caret's cell rather than at column 0 is clampScroll's "just enough" rule.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+	s.key(nil, keyMsg("right"))
 	if s.curX != 1 || s.scrX != 1 {
 		t.Fatalf("right with the caret off-screen → (curX %d, scrX %d), want (1, 1)", s.curX, s.scrX)
 	}
@@ -1520,18 +1518,18 @@ func TestEditorAltWheelHorizontal(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent(wideDoc())
 
-	altWheel(s, sh, tea.MouseButtonWheelDown)
+	altWheel(s, sh, tea.MouseWheelDown)
 	if s.scrX != editorHWheelStep || s.scrY != 0 {
 		t.Fatalf("alt+wheel down → (scrX %d, scrY %d), want (%d, 0)", s.scrX, s.scrY, editorHWheelStep)
 	}
-	altWheel(s, sh, tea.MouseButtonWheelUp)
+	altWheel(s, sh, tea.MouseWheelUp)
 	if s.scrX != 0 {
 		t.Fatalf("alt+wheel up → scrX %d, want 0", s.scrX)
 	}
 
 	// The plain wheel is untouched: vertical only, scrX left alone.
 	s.setContent(longDoc())
-	wheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != editorWheelStep || s.scrX != 0 {
 		t.Fatalf("plain wheel down → (scrY %d, scrX %d), want (%d, 0)", s.scrY, s.scrX, editorWheelStep)
 	}
@@ -1544,14 +1542,14 @@ func TestEditorHorizontalWheelSuppressed(t *testing.T) {
 	s.setContent(wideDoc())
 
 	s.SetFocused(false)
-	wheel(s, sh, tea.MouseButtonWheelRight)
-	altWheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelRight)
+	altWheel(s, sh, tea.MouseWheelDown)
 	if s.scrX != 0 {
 		t.Fatalf("an unfocused pane must not scroll sideways, scrX = %d", s.scrX)
 	}
 
 	s.SetFocused(true)
-	wheel(s, sh, tea.MouseButtonWheelRight)
+	wheel(s, sh, tea.MouseWheelRight)
 	if s.scrX != editorHWheelStep {
 		t.Fatalf("focused wheel right → scrX %d, want %d", s.scrX, editorHWheelStep)
 	}
@@ -1561,8 +1559,8 @@ func TestEditorHorizontalWheelSuppressed(t *testing.T) {
 	// unwrapped is carried across untouched.
 	before := s.scrX
 	s.ToggleWrap()
-	wheel(s, sh, tea.MouseButtonWheelRight)
-	altWheel(s, sh, tea.MouseButtonWheelDown)
+	wheel(s, sh, tea.MouseWheelRight)
+	altWheel(s, sh, tea.MouseWheelDown)
 	if s.scrX != before {
 		t.Fatalf("wrapped, the horizontal wheel must be a no-op: scrX %d, want %d", s.scrX, before)
 	}
@@ -1584,7 +1582,6 @@ func TestEditorHorizontalWheelSuppressed(t *testing.T) {
 // full width and no bar.
 func TestEditorScrollbar(t *testing.T) {
 	// The thumb/track split is color-only now: the styling has to be observable.
-	withColor(t)
 	s, _ := newEditor(EditorOpts{}) // standalone: no gutter, the bar is the last cell
 	s.setContent("a\nb\nc")
 	if s.barVisible() || s.textW() != s.w {
@@ -1630,7 +1627,7 @@ func TestEditorScrollbar(t *testing.T) {
 
 	// The caret never hides under the bar: horizontal scrolling keeps it within textW.
 	s.setContent(strings.Repeat("y", 200) + "\n" + longDoc())
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if cell := cellOfCol(s.lines[0], s.curX); s.scrX+s.textW() != cell+1 {
 		t.Fatalf("caret at EOL should sit in the last text cell: scrX=%d textW=%d cell=%d", s.scrX, s.textW(), cell)
 	}
@@ -1642,7 +1639,7 @@ func TestEditorScrollbarClick(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent(longDoc())
 	click := func(x, y int) {
-		s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+		s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	}
 	click(s.w-1, s.titleH()+5) // the bar column
 	if s.curY != 0 || s.curX != 0 {
@@ -1715,7 +1712,7 @@ func assertRowGeometry(t *testing.T, s *EditorScreen, ctx string) {
 }
 
 // caretRow is the body row carrying the reverse-video caret (-1 for none). Only
-// meaningful under withColor — the Ascii profile renders every style as bare text.
+// meaningful because v2 renders styles verbatim: downsampling moved to the output layer.
 func caretRow(s *EditorScreen) int {
 	for i, row := range strings.Split(s.body(), "\n") {
 		if strings.Contains(row, "\x1b[7m") {
@@ -1732,7 +1729,6 @@ func caretRow(s *EditorScreen) int {
 // pad then double-counted the number gutter and the scrollbar cell was written whether
 // or not the bar was up.
 func TestEditorWrapGeometry(t *testing.T) {
-	withColor(t)
 	for _, tc := range []struct{ name, doc string }{
 		{"empty", ""},
 		{"one wrapped line", strings.Repeat("z", 300)},
@@ -1744,7 +1740,7 @@ func TestEditorWrapGeometry(t *testing.T) {
 			s.setContent(tc.doc)
 			s.ToggleWrap()
 			assertRowGeometry(t, s, "wrapped")
-			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE}) // caret to end of line
+			s.key(nil, keyMsg("ctrl+e")) // caret to end of line
 			assertRowGeometry(t, s, "wrapped, caret at EOL")
 			s.ToggleLineNums()
 			assertRowGeometry(t, s, "wrapped, preference flipped")
@@ -1759,16 +1755,15 @@ func TestEditorWrapGeometry(t *testing.T) {
 // last row exactly, where the row the caret needs has to be made or the caret cell
 // lands one column past the frame.
 func TestEditorWrapCaret(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{})
 	s.setContent(strings.Repeat("a", 500))
 	s.ToggleWrap()
 
 	for _, at := range []string{"home", "end"} {
 		if at == "home" {
-			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlA})
+			s.key(nil, keyMsg("ctrl+a"))
 		} else {
-			s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+			s.key(nil, keyMsg("ctrl+e"))
 		}
 		if got, want := caretRow(s), s.wrapRowForCursor()-s.scrY; got != want {
 			t.Fatalf("caret at %s drawn on row %d, want %d", at, got, want)
@@ -1781,7 +1776,7 @@ func TestEditorWrapCaret(t *testing.T) {
 	// A line filling its last row exactly: the trailing row is the caret's.
 	w := s.contentW()
 	s.setContent(strings.Repeat("b", w*2))
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if got := s.wrapTotalRows(); got != 3 {
 		t.Fatalf("a line of exactly %d cells = %d rows, want 3 (two full, one for the caret)", w*2, got)
 	}
@@ -1795,14 +1790,13 @@ func TestEditorWrapCaret(t *testing.T) {
 // origin, which wrapped is the CHUNK's start — reading scrX (which wrap never moves)
 // pinned the caret to the line's first row no matter which row it was really on.
 func TestEditorWrapCaretHighlighted(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{Highlighter: NewMarkdownHighlighter()})
 	s.setContent(strings.Repeat("a", 300))
 	s.ToggleWrap()
 	if s.hl == nil {
 		t.Fatal("the highlighter should be in place: this test is about the styled path")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if got, want := caretRow(s), s.wrapRowForCursor()-s.scrY; got != want {
 		t.Fatalf("highlighted caret drawn on row %d, want %d", got, want)
 	}
@@ -1814,7 +1808,7 @@ func TestEditorWrapCaretHighlighted(t *testing.T) {
 	// The same for a line ending exactly on the margin, where the row before the
 	// caret's also sees a caret one cell past its own chunk.
 	s.setContent(strings.Repeat("b", s.contentW()*2))
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if n := strings.Count(s.body(), "\x1b[7m"); n != 1 {
 		t.Fatalf("exactly-full line: %d caret cells drawn, want exactly 1", n)
 	}
@@ -1835,7 +1829,7 @@ func TestEditorWrapScroll(t *testing.T) {
 		t.Fatalf("this doc should wrap to more rows than lines: %d rows, %d lines", total, len(s.lines))
 	}
 	for i := 0; i < total; i++ {
-		wheel(s, sh, tea.MouseButtonWheelDown)
+		wheel(s, sh, tea.MouseWheelDown)
 	}
 	if want := total - s.h; s.scrY != want {
 		t.Fatalf("wheel to the bottom → scrY %d, want %d (the last full screen of rows)", s.scrY, want)
@@ -1853,10 +1847,7 @@ func TestEditorWrapClick(t *testing.T) {
 	if r.line != 1 || r.start == 0 {
 		t.Fatalf("row 2 = %+v, want a continuation of line 1", r)
 	}
-	s.Update(sh, tea.MouseMsg{
-		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-		X: s.leftGutterWidth() + 4, Y: s.titleH() + 2,
-	})
+	s.Update(sh, tea.MouseClickMsg{X: s.leftGutterWidth() + 4, Y: s.titleH() + 2, Button: tea.MouseLeft})
 	if s.curY != r.line || s.curX != r.start+4 {
 		t.Fatalf("click on a wrapped row = (%d,%d), want (%d,%d)", s.curY, s.curX, r.line, r.start+4)
 	}
@@ -1869,7 +1860,7 @@ func TestEditorWrapClick(t *testing.T) {
 func TestEditorLineNumbers(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("alpha\nbeta")
-	first := func() string { return strings.Split(s.body(), "\n")[0] }
+	first := func() string { return ansi.Strip(strings.Split(s.body(), "\n")[0]) }
 
 	if got := first(); !strings.HasPrefix(got, "alpha") {
 		t.Fatalf("no gutter by default, got %q", got)
@@ -1937,7 +1928,7 @@ func TestEditorScrollAnchors(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		wheel(s, sh, tea.MouseButtonWheelDown)
+		wheel(s, sh, tea.MouseWheelDown)
 	}
 	off, _, _ = s.ScrollSpan()
 	if off == 0 {
@@ -1949,7 +1940,7 @@ func TestEditorScrollAnchors(t *testing.T) {
 
 	// Bottomed out, both anchors clamp to the buffer rather than running past it.
 	for i := 0; i < 200; i++ {
-		wheel(s, sh, tea.MouseButtonWheelDown)
+		wheel(s, sh, tea.MouseWheelDown)
 	}
 	if off, maxOff, _ = s.ScrollSpan(); off != maxOff {
 		t.Fatalf("the wheel should bottom out at %d, got %d", maxOff, off)
@@ -1966,7 +1957,7 @@ func TestEditorScrollAnchors(t *testing.T) {
 		t.Fatalf("wrapped: max offset %d, want %d rows", maxOff, s.wrapTotalRows()-s.h)
 	}
 	for i := 0; i < 5; i++ {
-		wheel(s, sh, tea.MouseButtonWheelDown)
+		wheel(s, sh, tea.MouseWheelDown)
 	}
 	off, _, _ = s.ScrollSpan()
 	if got, want := s.TopLine(), s.wrapRows[off].line; got != want {
@@ -1986,7 +1977,7 @@ func TestEditorOverflowMark(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent(strings.Repeat("y", 200) + "\nshort")
 	rows := strings.Split(s.body(), "\n")
-	if !strings.HasSuffix(rows[0], string(editorOverflowMark)) {
+	if !strings.HasSuffix(ansi.Strip(rows[0]), string(editorOverflowMark)) {
 		t.Errorf("a clipped line should end in %q, got %q", editorOverflowMark, rows[0])
 	}
 	if lipgloss.Width(rows[0]) != s.contentW() {
@@ -1998,7 +1989,7 @@ func TestEditorOverflowMark(t *testing.T) {
 	assertRowGeometry(t, s, "overflow marker")
 
 	// Scrolled to the line's end there is nothing left to mark.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlE})
+	s.key(nil, keyMsg("ctrl+e"))
 	if row := strings.Split(s.body(), "\n")[0]; strings.HasSuffix(row, string(editorOverflowMark)) {
 		t.Errorf("the end of a line should carry no marker: %q", row)
 	}
@@ -2018,7 +2009,7 @@ func TestEditorOverflowMark(t *testing.T) {
 	if !s.barVisible() {
 		t.Fatal("40 lines over 20 rows should raise the scrollbar")
 	}
-	if cells := []rune(row); cells[len(cells)-2] != editorOverflowMark {
+	if cells := []rune(ansi.Strip(row)); cells[len(cells)-2] != editorOverflowMark {
 		t.Errorf("clipped row with a gutter and a bar = %q, want the marker in the cell before the bar", row)
 	}
 	assertRowGeometry(t, s, "overflow marker with gutter and bar")
@@ -2028,11 +2019,10 @@ func TestEditorOverflowMark(t *testing.T) {
 // caret in the column the marker claims — a caret painted over is a lie about where
 // typing lands.
 func TestEditorOverflowMarkKeepsCaret(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{})
 	s.setContent(strings.Repeat("y", 200))
 	for i := 0; i < 120; i++ {
-		s.key(nil, tea.KeyMsg{Type: tea.KeyRight})
+		s.key(nil, keyMsg("right"))
 		row := strings.Split(s.body(), "\n")[0]
 		if !strings.Contains(row, "\x1b[7m") {
 			t.Fatalf("step %d: the caret left the row: %q", i, row)

@@ -5,13 +5,13 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // altKey builds the alt-modified rune the clipboard chords arrive as: bubbletea reports
 // KeyRunes with Alt set, whose String() is "alt+<rune>".
 func altKey(r rune) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}, Alt: true}
+	return keyMsg("alt+" + string(r))
 }
 
 // chord presses one clipboard chord and runs the command it returns — the write travels
@@ -217,7 +217,7 @@ func TestEditorUnknownAltRunesDoNotType(t *testing.T) {
 	s.setContent("abcdef")
 	selectRange(s, 0, 1, 0, 4)
 
-	s.Update(sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}, Alt: true})
+	s.Update(sh, keyMsg("alt+["))
 	if got := buffer(s); got != "abcdef" {
 		t.Fatalf("unknown Alt rune changed the buffer to %q", got)
 	}

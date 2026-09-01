@@ -3,8 +3,8 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // Viewport scrolling for EditorScreen: the scroll offset, the clamps that keep it inside
@@ -20,23 +20,23 @@ func (s *EditorScreen) scrollLines(delta int) {
 // terminals that matter claim ctrl+wheel for their own font zoom and shift+wheel for
 // bypassing mouse reporting, so alt is the one modifier that reaches the app. A
 // trackpad's horizontal swipe arrives as its own button and needs no modifier at all.
-func (s *EditorScreen) wheel(m tea.MouseMsg) {
+func (s *EditorScreen) wheel(m tea.Mouse) {
 	switch m.Button {
-	case tea.MouseButtonWheelUp:
-		if m.Alt {
+	case tea.MouseWheelUp:
+		if m.Mod.Contains(tea.ModAlt) {
 			s.scrollCells(-editorHWheelStep)
 		} else {
 			s.scrollLines(-editorWheelStep)
 		}
-	case tea.MouseButtonWheelDown:
-		if m.Alt {
+	case tea.MouseWheelDown:
+		if m.Mod.Contains(tea.ModAlt) {
 			s.scrollCells(editorHWheelStep)
 		} else {
 			s.scrollLines(editorWheelStep)
 		}
-	case tea.MouseButtonWheelLeft:
+	case tea.MouseWheelLeft:
 		s.scrollCells(-editorHWheelStep)
-	case tea.MouseButtonWheelRight:
+	case tea.MouseWheelRight:
 		s.scrollCells(editorHWheelStep)
 	}
 }

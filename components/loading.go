@@ -6,9 +6,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // loadingScreen is the spinner shown while an upstream fetch is in flight. It is
@@ -49,7 +49,7 @@ func (s *LoadingScreen) Init(sh *core.Shared) tea.Cmd {
 }
 
 func (s *LoadingScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	if k, ok := msg.(tea.KeyMsg); ok {
+	if k, ok := msg.(tea.KeyPressMsg); ok {
 		// esc cancels the in-flight fetch (its ctx unwinds the request) and pops back.
 		// The cancelled fetch still returns a result to the screen we pop to, which
 		// doesn't recognize it and ignores it.

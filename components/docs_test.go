@@ -7,7 +7,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -24,7 +24,6 @@ func render(body string, width int) string {
 // TestRenderMarkdownHeadings: each level gets its own style and a blank line above,
 // and the marker itself never reaches the page.
 func TestRenderMarkdownHeadings(t *testing.T) {
-	withColor(t) // the styles are ANSI; Ascii would make every level identical
 
 	got := RenderMarkdown("intro\n\n# One\n\n## Two\n\n### Three\n", 40)
 	for _, want := range []string{
@@ -45,7 +44,6 @@ func TestRenderMarkdownHeadings(t *testing.T) {
 // the same dimmed-accent style. They used to match no case at all below three hashes and
 // fell through to the paragraph default, which printed the markers as prose.
 func TestRenderMarkdownDeepHeadings(t *testing.T) {
-	withColor(t)
 
 	for _, marker := range []string{"###", "####", "#####", "######"} {
 		got := RenderMarkdown("intro\n\n"+marker+" Deep\n", 40)
@@ -61,7 +59,6 @@ func TestRenderMarkdownDeepHeadings(t *testing.T) {
 // TestSubheadingRanksUnderHeading: a subheading is the SECTION's accent dimmed, not the
 // muted grey body-secondary text wears — the distinction the level is there to draw.
 func TestSubheadingRanksUnderHeading(t *testing.T) {
-	withColor(t)
 
 	sub := subheadingStyle().GetForeground()
 	if sub == headingStyle().GetForeground() {
@@ -82,7 +79,6 @@ func TestRenderMarkdownSevenHashesIsProse(t *testing.T) {
 // TestRenderMarkdownInline: the four inline constructs render styled with their
 // delimiters dropped.
 func TestRenderMarkdownInline(t *testing.T) {
-	withColor(t)
 
 	got := RenderMarkdown("a **b** and *c* and `d` and [e](http://f) end", 80)
 	for _, want := range []string{
@@ -108,7 +104,6 @@ func TestRenderMarkdownInline(t *testing.T) {
 //     swallows the whole line up to the next "](…)";
 //   - markup inside a code span must stay literal.
 func TestRenderMarkdownInlineIsolation(t *testing.T) {
-	withColor(t)
 
 	// Bold, em and code all preceding a link on one line: the link must come out as
 	// just its label, and everything before it must survive intact.
@@ -129,7 +124,6 @@ func TestRenderMarkdownInlineIsolation(t *testing.T) {
 // skipped the inline pass (table headers and quotes always had it), so "## the `--flag`
 // option" used to reach the page with its backticks on.
 func TestRenderMarkdownHeadingInline(t *testing.T) {
-	withColor(t)
 
 	got := RenderMarkdown("# one **b**\n\n## two `c`\n\n### three *e*\n", 60)
 	if plain := ansi.Strip(got); strings.ContainsAny(plain, "*`") {
@@ -153,7 +147,6 @@ func TestRenderMarkdownHeadingInline(t *testing.T) {
 // excluded the delimiter the same alternative would consume, so these all MATCHED
 // before — they just came out with the inner delimiters printed.
 func TestRenderMarkdownInlineNesting(t *testing.T) {
-	withColor(t)
 
 	got := RenderMarkdown("a **bold `--flag` opt** and [**b** l](http://x)\n", 80)
 	if plain := ansi.Strip(got); plain != "a bold  --flag  opt and b l" {
@@ -219,7 +212,6 @@ func TestRenderMarkdownPassthrough(t *testing.T) {
 // TestRenderMarkdownWidth: everything is folded to the width the caller gave, styling
 // included — the DocScreen and the preview pane both size their box from it.
 func TestRenderMarkdownWidth(t *testing.T) {
-	withColor(t)
 
 	body := strings.Join([]string{
 		"# A heading long enough that it would overflow a narrow pane on its own",
@@ -274,7 +266,6 @@ func TestParseDocPageUnchanged(t *testing.T) {
 // pattern matches its boundary characters instead of using a lookaround Go's regexp
 // does not have.
 func TestRenderMarkdownUnderscoreEm(t *testing.T) {
-	withColor(t)
 
 	for _, tc := range []struct{ src, want string }{
 		{"a _em_ b", "a " + italicStyle().Render("em") + " b"},
@@ -315,7 +306,6 @@ func TestRenderMarkdownUnderscoreEm(t *testing.T) {
 // TestRenderMarkdownCodeSpanBackground: an inline span is tinted, while a fenced block
 // keeps foreground-only styling because a background would break on literal tabs.
 func TestRenderMarkdownCodeSpanBackground(t *testing.T) {
-	withColor(t)
 
 	if codeSpanStyle().GetBackground() == codeStyle().GetBackground() {
 		t.Error("an inline code span should be distinguishable from a block by its background")
@@ -453,7 +443,6 @@ func TestRenderMarkdownCodeBlockRenderer(t *testing.T) {
 // links and code spans render in the borrowed accent, not in mono's own near-white
 // FocusedColor which is what body text already is.
 func TestRenderMarkdownBorrowedAccent(t *testing.T) {
-	withColor(t)
 	prev := core.CurrentTheme()
 	t.Cleanup(func() { core.SetTheme(prev) })
 
@@ -539,7 +528,6 @@ func TestRenderMarkdownBlockquote(t *testing.T) {
 // is muted from UNDERNEATH the inline spans — styling a finished row instead would
 // have each span's reset drop the tint for everything after it.
 func TestRenderMarkdownBlockquoteStyling(t *testing.T) {
-	withColor(t)
 
 	got := RenderMarkdown("> quoted `code` and **bold** and tail\n", 80)
 	if !strings.HasPrefix(got, ruleStyle().Render(quoteBar)) {
@@ -561,7 +549,6 @@ func TestRenderMarkdownBlockquoteStyling(t *testing.T) {
 // bar (which carries a reset) to a pre-styled row left every row after the first
 // untinted. Each row must now carry its own muted run.
 func TestRenderMarkdownBlockquoteWrappedRowsStayMuted(t *testing.T) {
-	withColor(t)
 
 	const width = 30
 	got := RenderMarkdown("> one two three four five six seven eight nine ten eleven twelve\n", width)
@@ -764,7 +751,6 @@ func TestRenderMarkdownTableAlignment(t *testing.T) {
 // width a three-cell column each would need, the rows fall back to the prose they read
 // as, which is guaranteed to fit.
 func TestRenderMarkdownTableWidth(t *testing.T) {
-	withColor(t)
 
 	body := "| Flag | What it does | Default |\n" +
 		"|------|--------------|---------|\n" +
@@ -827,7 +813,6 @@ func TestRenderMarkdownTableWraps(t *testing.T) {
 // not on the source: inline renders `q` as a chip two cells wider than the word, so a
 // naive len(cell) sizes the column short and the chip pushes the row past its width.
 func TestRenderMarkdownTableCodeSpanWidth(t *testing.T) {
-	withColor(t)
 
 	const width = 40
 	got := RenderMarkdown("| A | B |\n|---|---|\n| `q` | x |\n", width)
@@ -852,7 +837,6 @@ func TestRenderMarkdownTableCodeSpanWidth(t *testing.T) {
 // its background OPEN at end of row — tinting the padding, the separator and the whole of
 // the next column. Every cell must end its own color.
 func TestRenderMarkdownTableNoColorBleed(t *testing.T) {
-	withColor(t)
 
 	const width = 26
 	got := RenderMarkdown("| A | B |\n|---|---|\n| `a long tinted span` | plain |\n", width)
@@ -879,7 +863,6 @@ func TestRenderMarkdownTableNoColorBleed(t *testing.T) {
 // TestRenderMarkdownTableChrome: the separators and the rule are chrome in the border
 // color, the header carries the accent, and body cells carry neither.
 func TestRenderMarkdownTableChrome(t *testing.T) {
-	withColor(t)
 
 	got := RenderMarkdown("| Head |\n|------|\n| body |\n", 40)
 	if !strings.Contains(got, tableHeadStyle().Render("Head")) {
@@ -949,5 +932,30 @@ func TestRenderMarkdownTableMapped(t *testing.T) {
 		if _, m := RenderMarkdownMapped(src, 40); len(m) != len(strings.Split(src, "\n")) {
 			t.Errorf("%q: got %d marks for %d source lines", src, len(m), len(strings.Split(src, "\n")))
 		}
+	}
+}
+
+// TestRenderMarkdownWrapsStyledSpansToWidth is the bug lipgloss v1 hid: ansi.Wrap keeps
+// the space before a break when the next token opens with a style sequence, so a
+// paragraph whose wrap point lands just before an inline code span rendered one cell over
+// the width it was given — clipped at the pane edge with nowhere to scroll to it. Under
+// v1's TTY-less Ascii profile the spans carried no escapes, so the tests never saw it
+// while every real terminal did.
+func TestRenderMarkdownWrapsStyledSpansToWidth(t *testing.T) {
+	const width = 40
+	src := "Run `gdaddon` in your project (or `gdaddon /path/to/project`). It finds the " +
+		"project root from git, then looks for an `addon_manifest.yml` underneath it."
+
+	styled := false
+	for i, row := range strings.Split(RenderMarkdown(src, width), "\n") {
+		if w := ansi.StringWidth(row); w > width {
+			t.Errorf("row %d is %d cells wide, want at most %d: %q", i+1, w, width, row)
+		}
+		if strings.Contains(row, "\x1b") {
+			styled = true
+		}
+	}
+	if !styled {
+		t.Fatal("no row carried a style: the test cannot see the bug it exists for")
 	}
 }

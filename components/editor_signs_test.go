@@ -1,11 +1,12 @@
 package components
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // TestSignsColumnIndependentOfLineNums is the point of giving signs their own flag: a
@@ -14,7 +15,7 @@ import (
 func TestSignsColumn(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("alpha\nbeta")
-	first := func() string { return strings.Split(s.body(), "\n")[0] }
+	first := func() string { return ansi.Strip(strings.Split(s.body(), "\n")[0]) }
 
 	s.SetSigns(map[int]Sign{0: {Text: "+"}})
 	if got := first(); !strings.HasPrefix(got, "alpha") {
@@ -81,10 +82,7 @@ func TestSignsWidthAndClicks(t *testing.T) {
 		t.Fatalf("leftGutterWidth = %d, want %d with signs on and numbers off", got, want)
 	}
 
-	s.Update(sh, tea.MouseMsg{
-		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
-		X: s.leftGutterWidth() + 3, Y: s.titleH(),
-	})
+	s.Update(sh, tea.MouseClickMsg{X: s.leftGutterWidth() + 3, Y: s.titleH(), Button: tea.MouseLeft})
 	if s.curX != 3 {
 		t.Fatalf("a click three cells into the text should land on column 3, got %d", s.curX)
 	}
@@ -109,10 +107,8 @@ func TestSignsNarrowViewport(t *testing.T) {
 }
 
 // TestSignsStyleRepaints: a Sign carries a style rather than pre-rendered ANSI, so the
-// color is resolved at render time and a theme switch repaints it. Without withColor
-// lipgloss resolves the Ascii profile and every color renders as a no-op.
+// color is resolved at render time and a theme switch repaints it.
 func TestSignsStyle(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("alpha")
 	s.ShowSigns(true)

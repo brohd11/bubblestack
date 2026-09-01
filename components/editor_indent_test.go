@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Block indentation. The gesture that carries it is BARE tab: shift+tab is
@@ -13,11 +13,11 @@ import (
 // pins from this side.
 
 var (
-	tabKey        = tea.KeyMsg{Type: tea.KeyTab}
-	shiftTabKey   = tea.KeyMsg{Type: tea.KeyShiftTab}
-	dedentKey     = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{','}, Alt: true}
-	indentKey     = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}, Alt: true}
-	indentModeKey = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}, Alt: true}
+	tabKey        = keyMsg("tab")
+	shiftTabKey   = keyMsg("shift+tab")
+	dedentKey     = keyMsg("alt+,")
+	indentKey     = keyMsg("alt+.")
+	indentModeKey = keyMsg("alt+i")
 )
 
 func TestEditorTabIndentsSelectedLines(t *testing.T) {
@@ -272,7 +272,7 @@ func TestEditorHelpDropsShiftTabFromIndent(t *testing.T) {
 // mouseSGRFragmentFilter.
 func TestEditorIndentChordKeycodes(t *testing.T) {
 	for _, tc := range []struct {
-		msg  tea.KeyMsg
+		msg  tea.KeyPressMsg
 		want string
 	}{
 		{tabKey, "tab"},

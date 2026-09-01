@@ -5,10 +5,10 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -147,7 +147,7 @@ func (t *TextField) SetValue(v string) { t.input.SetValue(v) }
 // narrower leaves the same staleness. SetCursor is the exported door to that recompute,
 // and re-seating the cursor where it already is moves nothing.
 func (t *TextField) SetInnerWidth(inner int) {
-	t.input.Width = t.contentWidth(inner)
+	t.input.SetWidth(t.contentWidth(inner))
 	t.input.SetCursor(t.input.Position())
 }
 
@@ -190,8 +190,10 @@ func NewTextAreaField(key, label, placeholder string) *TextAreaField {
 	// textarea's defaults dress the widget up: a background-highlighted cursor line when
 	// focused, greyed text when blurred. TextField has neither, so strip both style sets
 	// back to plain and keep only the placeholder grey (textinput's own default).
-	plain := textarea.Style{Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("240"))}
-	ta.FocusedStyle, ta.BlurredStyle = plain, plain
+	plain := textarea.StyleState{Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("240"))}
+	st := ta.Styles()
+	st.Focused, st.Blurred = plain, plain
+	ta.SetStyles(st)
 	// New aims the live style pointer at a *local* copy of the default blurred style
 	// rather than at the BlurredStyle field, so the two assignments above stay invisible
 	// until a Focus/Blur repoints it. Blur now so the first frame is already plain.
@@ -234,15 +236,12 @@ func (t *TextAreaField) SetMaxHeight(rows int) {
 // space. textarea's sanitizer keeps newlines where textinput's replaces them, and its
 // sanitizer is unexported, so the message is the only place to do this. A second logical
 // line would break View's height math and smuggle a multi-line message past a form whose
-// Enter submits. A bracketed paste is the only way one can arrive: the form intercepts
-// Keys.Select before the fall-through, so KeyEnter never reaches the textarea, and
-// QueryUpdate never diverts it.
+// Enter submits. A bracketed paste is the only way one can arrive — the form intercepts
+// Keys.Select before the fall-through, so an enter key never reaches the textarea — and
+// v2 delivers a paste as its own tea.PasteMsg, so that is the only case to guard.
 func (t *TextAreaField) UpdateInput(msg tea.Msg) tea.Cmd {
-	if km, ok := msg.(tea.KeyMsg); ok && km.Type == tea.KeyRunes {
-		if s := string(km.Runes); strings.ContainsAny(s, "\r\n") {
-			km.Runes = []rune(oneLine(s)) // a fresh slice; km.Runes is shared with the sender
-			msg = km
-		}
+	if pm, ok := msg.(tea.PasteMsg); ok && strings.ContainsAny(pm.Content, "\r\n") {
+		msg = tea.PasteMsg{Content: oneLine(pm.Content)}
 	}
 	var cmd tea.Cmd
 	t.input, cmd = t.input.Update(msg)

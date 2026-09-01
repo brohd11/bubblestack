@@ -8,7 +8,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // The self-update tests drive the loading screen's Update directly with fake check

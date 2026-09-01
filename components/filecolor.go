@@ -1,11 +1,12 @@
 package components
 
 import (
+	"image/color"
 	"io/fs"
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // File-type coloring for a listing's rows: what an entry IS, and the color that says so.
@@ -50,7 +51,7 @@ const (
 // normal half is content you read. The yellow family carries the text axis, brightness
 // separating source from prose and data. Nothing is final — this one function is the whole
 // knob.
-func FileKindColor(k FileKind) lipgloss.TerminalColor {
+func FileKindColor(k FileKind) color.Color {
 	switch k {
 	case KindDir:
 		return lipgloss.Color("12") // bright blue

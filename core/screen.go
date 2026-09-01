@@ -1,6 +1,6 @@
 package core
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 // Action is the dual-lane result a screen's Update (and the Pick/handler closures it
 // drives) hands back, bundling the two return values that used to travel as a bare

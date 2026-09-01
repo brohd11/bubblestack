@@ -3,7 +3,8 @@ package core
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // maskOf is the chrome suppression requested by screen s, or the zero mask (hide
@@ -242,7 +243,7 @@ func (r Router) frame(s Screen) string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-func (r Router) View() string {
+func (r Router) View() tea.View {
 	// Overlays (popups, floating line edits) STACK: the base is the deepest screen
 	// below the top that isn't an overlay, framed whole, and each overlay above it
 	// is composited on bottom-first — so a popup pushed over a floating line edit
@@ -267,7 +268,18 @@ func (r Router) View() string {
 		y = max(0, min(y, r.sh.height-bh))
 		out = Composite(out, box, x, y)
 	}
-	return out
+
+	// Alt screen and mouse reporting are view state in v2, not program options: what
+	// the last View asked for is what the terminal is put into. mouseOn is the ctrl+g
+	// toggle (see globalKey) — cell motion reports the wheel and clicks but only
+	// streams motion while a button is held, so there is no hover traffic through
+	// Update. It costs the terminal's own drag-select, which is why the key exists.
+	v := tea.NewView(out)
+	v.AltScreen = true
+	if r.mouseOn {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
 }
 
 // overlayBase returns the deepest screen below the top that is NOT an overlay —

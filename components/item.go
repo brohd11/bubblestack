@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
+	"charm.land/bubbles/v2/list"
 )
 
 // Item is a self-dispatching list row: instead of a domain-specific item type +

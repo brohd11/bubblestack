@@ -1,21 +1,28 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 )
 
 // The palette and its derived styles are owned by the theme (see theme.go). The
 // four colors are the secondary/muted gray (borders, labels, help, list
 // descriptions), the brighter near-white log text, the border gray, and the
-// selection accent. applyTheme reassigns the colors and rebuildStyles rebuilds
-// everything below from them; init applies the default theme at startup.
+// selection accent. applyTheme resolves the active theme's Color pairs against the
+// detected background into these vars and rebuildStyles rebuilds everything below from
+// them; init applies the default theme at startup.
+//
+// They are resolved colors rather than pairs so they stay valid arguments to
+// lipgloss's Foreground/Background — which is how consumers outside this package use
+// them. The unresolved pairs live on the Theme.
 var (
-	MutedColor     lipgloss.TerminalColor
-	logColor       lipgloss.TerminalColor
-	BorderColor    lipgloss.TerminalColor
-	FocusedColor   lipgloss.TerminalColor
-	OnFocusedColor lipgloss.TerminalColor // text drawn on the accent (title bar)
+	MutedColor     color.Color
+	logColor       color.Color
+	BorderColor    color.Color
+	FocusedColor   color.Color
+	OnFocusedColor color.Color // text drawn on the accent (title bar)
 
 	statusStyle lipgloss.Style
 	logStyle    lipgloss.Style
@@ -74,7 +81,7 @@ func rebuildStyles() {
 	// breadcrumbs (RenderTitleBar) and list titles (StyleList) follow the accent
 	// instead of bubbles' built-in purple. OnFocusedColor is the theme's text-on-
 	// accent color, so a dark accent can still read.
-	listStyles = list.DefaultStyles()
+	listStyles = list.DefaultStyles(isDark)
 	listStyles.Title = listStyles.Title.Background(FocusedColor).Foreground(OnFocusedColor)
 }
 

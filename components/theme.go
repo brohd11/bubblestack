@@ -4,7 +4,7 @@ import (
 	"github.com/brohd11/bubblestack/config"
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
+	"charm.land/bubbles/v2/list"
 )
 
 // ThemePicker lists the registered themes; selecting one applies it live via

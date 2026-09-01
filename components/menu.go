@@ -5,9 +5,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -439,26 +439,27 @@ func (s *MenuScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 // covering is the failure this ordering guards against.
 func (s *MenuScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	switch m := msg.(type) {
-	case tea.MouseMsg:
-		return s, s.mouse(sh, m)
-	case tea.KeyMsg:
+	// Only presses and wheel notches act on a menu; motion and release pass through
+	// untouched, as they do everywhere else in v2.
+	case tea.MouseClickMsg:
+		return s, s.mouse(sh, m.Mouse())
+	case tea.MouseWheelMsg:
+		return s, s.mouse(sh, m.Mouse())
+	case tea.KeyPressMsg:
 		return s, s.key(sh, m.String())
 	}
 	return s, core.Action{}
 }
 
-func (s *MenuScreen) mouse(sh *core.Shared, m tea.MouseMsg) core.Action {
-	if m.Action != tea.MouseActionPress {
-		return core.Action{}
-	}
+func (s *MenuScreen) mouse(sh *core.Shared, m tea.Mouse) core.Action {
 	switch m.Button {
-	case tea.MouseButtonWheelUp:
+	case tea.MouseWheelUp:
 		s.move(-1, false)
 		return core.Action{}
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		s.move(1, false)
 		return core.Action{}
-	case tea.MouseButtonLeft:
+	case tea.MouseLeft:
 	default:
 		// Any other button — a right-click especially — dismisses, so the gesture that
 		// raised a context menu also closes it.
@@ -564,9 +565,9 @@ func (s *MenuScreen) View(*core.Shared) string {
 		}
 		rows = append(rows, body)
 	}
-	// lipgloss's Width counts padding but not the border, so contentW+2 renders a box
-	// exactly contentW+menuChromeW cells wide — the width place() reports.
-	return menuBox().Width(contentW + 2).Render(strings.Join(rows, "\n"))
+	// lipgloss v2's Width is the whole rendered width, border included, so the box is
+	// asked for exactly contentW+menuChromeW cells — the width place() reports.
+	return menuBox().Width(contentW + menuChromeW).Render(strings.Join(rows, "\n"))
 }
 
 // row renders one item into exactly field cells: label left, hint right. A hint is

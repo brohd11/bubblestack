@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // stubScreen is a minimal Screen for exercising the router's stack/chrome plumbing
@@ -537,8 +537,8 @@ func (s *wheelScreen) View(*Shared) string       { return "wheel" }
 func (s *wheelScreen) HelpView(*Shared) string   { return "" }
 func (s *wheelScreen) SetSize(*Shared, int, int) {}
 
-func wheelAt(y int, b tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{Y: y, Button: b, Action: tea.MouseActionPress}
+func wheelAt(y int, b tea.MouseButton) tea.MouseWheelMsg {
+	return tea.MouseWheelMsg{Y: y, Button: b}
 }
 
 // newWheelRouter is a router whose root records dispatched messages, with a 6-row
@@ -566,7 +566,7 @@ func TestWheelOverOutputFocusesAndScrolls(t *testing.T) {
 	// rather than from zero.
 	pinned := out.bottoms
 
-	tm = pump(tm, wheelAt(20, tea.MouseButtonWheelUp))
+	tm = pump(tm, wheelAt(20, tea.MouseWheelUp))
 	if !sh.Chrome.outputFocused {
 		t.Fatal("a wheel over the output pane should focus it, or resize re-pins it to the bottom")
 	}
@@ -586,7 +586,7 @@ func TestWheelOverBodyReachesScreen(t *testing.T) {
 	tm := sized(r)
 	sh := tm.(Router).sh
 
-	pump(tm, wheelAt(5, tea.MouseButtonWheelDown))
+	pump(tm, wheelAt(5, tea.MouseWheelDown))
 	if sh.Chrome.outputFocused {
 		t.Fatal("a wheel over the body must not focus the output pane")
 	}
@@ -627,7 +627,7 @@ func TestWheelIgnoredWhenOutputHidden(t *testing.T) {
 	tm := sized(r)
 	sh := tm.(Router).sh
 
-	pump(tm, wheelAt(20, tea.MouseButtonWheelUp))
+	pump(tm, wheelAt(20, tea.MouseWheelUp))
 	if sh.Chrome.outputFocused {
 		t.Fatal("a wheel must not focus a hidden output pane")
 	}
@@ -676,23 +676,54 @@ func TestMouseKeyFiresWhileFiltering(t *testing.T) {
 	}
 }
 
-// keyMsg builds a tea.KeyMsg whose String() matches the given key string, so tests
-// can drive the router from central-keymap key strings.
-func keyMsg(s string) tea.KeyMsg {
-	switch s {
-	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
-	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
-	case "esc":
-		return tea.KeyMsg{Type: tea.KeyEsc}
-	case "home":
-		return tea.KeyMsg{Type: tea.KeyHome}
-	case "end":
-		return tea.KeyMsg{Type: tea.KeyEnd}
-	default:
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+// keyMsg builds a tea.KeyPressMsg whose String() is the given keystroke, so tests can
+// drive screens from central-keymap key strings. It is KeyPressMsg and not the tea.KeyMsg
+// interface for the same reason every dispatch site is: that interface also covers key
+// releases. v2 ships no string→Key parser and the message is a Code/Text/Mod struct
+// rather than a named constant per key, so this is the one place a test's "ctrl+x"
+// becomes the shape Update sees.
+func keyMsg(s string) tea.KeyPressMsg {
+	var mod tea.KeyMod
+	for stripped := true; stripped; {
+		stripped = false
+		for _, p := range []struct {
+			prefix string
+			mod    tea.KeyMod
+		}{{"ctrl+", tea.ModCtrl}, {"alt+", tea.ModAlt}, {"shift+", tea.ModShift}} {
+			if rest, ok := strings.CutPrefix(s, p.prefix); ok {
+				mod, s, stripped = mod|p.mod, rest, true
+			}
+		}
 	}
+	if code, ok := namedKeyCodes[s]; ok {
+		k := tea.KeyPressMsg{Code: code, Mod: mod}
+		// Space is the one named key that also types a character, and the only Text a
+		// real terminal reports for it is the blank itself — which Key.String() then
+		// special-cases back to "space".
+		if code == tea.KeySpace && mod&^tea.ModShift == 0 {
+			k.Text = " "
+		}
+		return k
+	}
+	if s == "" {
+		// The empty keystroke: a key that types nothing, which is what an empty rune
+		// slice was in v1 and what callers use to drive "type an empty line".
+		return tea.KeyPressMsg{Mod: mod}
+	}
+	k := tea.KeyPressMsg{Code: []rune(s)[0], Mod: mod}
+	// Text is populated only for keys standing for printable characters; a ctrl/alt
+	// combo produces none. That is the distinction QueryUpdate and the editor read.
+	if mod&^tea.ModShift == 0 {
+		k.Text = s
+	}
+	return k
+}
+
+var namedKeyCodes = map[string]rune{
+	"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
+	"backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "space": tea.KeySpace,
+	"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
+	"home": tea.KeyHome, "end": tea.KeyEnd, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
 }
 
 // TestUnwindKey pins the Unwind binding after it moved off the backtick: alt+u resets a
@@ -714,7 +745,7 @@ func TestUnwindKey(t *testing.T) {
 		t.Fatalf("the backtick is bound nowhere and must not unwind; stack = %d", got)
 	}
 
-	tm = pump(tm, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u"), Alt: true})
+	tm = pump(tm, keyMsg("alt+u"))
 	if got := len(tm.(Router).stack); got != 1 {
 		t.Fatalf("alt+u should unwind to the root; stack = %d", got)
 	}

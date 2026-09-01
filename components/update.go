@@ -3,9 +3,9 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // This file collects the shared Update helpers: the small pieces of key-handling
@@ -39,13 +39,18 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 	if !s.Typing() {
 		return nil, false
 	}
-	km, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return nil, false
-	}
-	switch km.Type {
-	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace:
+	switch km := msg.(type) {
+	case tea.PasteMsg:
+		// v2 delivers a bracketed paste as its own message rather than a rune-bearing
+		// key, so it is diverted explicitly instead of falling out of the rune case.
 		return s.UpdateInput(msg), true
+	case tea.KeyPressMsg:
+		// Text is non-empty only for keys standing for printable characters — never a
+		// special key or a modifier combo — which is what the old KeyRunes/KeySpace
+		// pair meant. Backspace carries no text and still has to reach the input.
+		if km.Text != "" || km.Code == tea.KeyBackspace {
+			return s.UpdateInput(msg), true
+		}
 	}
 	return nil, false
 }
@@ -128,10 +133,11 @@ func listDispatch(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff int,
 func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, itemRows int,
 	onSelect func() core.Action, onKey func(k string) (core.Action, bool),
 	onPointer func(right bool) (core.Action, bool)) core.Action {
-	if m, ok := msg.(tea.MouseMsg); ok {
-		if m.Action == tea.MouseActionPress {
+	if mm, ok := msg.(tea.MouseMsg); ok {
+		m := mm.Mouse()
+		if _, isClick := mm.(tea.MouseClickMsg); isClick {
 			switch m.Button {
-			case tea.MouseButtonLeft:
+			case tea.MouseLeft:
 				if idx, ok := listItemAtRows(l, m.Y-mouseYOff, itemRows); ok {
 					l.Select(idx)
 					if onPointer != nil {
@@ -141,7 +147,7 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 					}
 					return onSelect()
 				}
-			case tea.MouseButtonRight:
+			case tea.MouseRight:
 				// Only for a list that asked for it. A right press is inert everywhere
 				// else and must stay so: hit-testing it unconditionally would start
 				// moving the cursor in every picker in the framework, which is a
@@ -158,7 +164,7 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 				}
 			}
 		}
-		if WheelNav(l, m) {
+		if _, isWheel := mm.(tea.MouseWheelMsg); isWheel && WheelNav(l, m) {
 			return core.Action{}
 		}
 	}
@@ -168,14 +174,15 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 		// cancel/accept and feeds the text input, so without this the cursor is stuck on
 		// the first match until the filter is accepted.
 		//
-		// Matched on the key TYPE, not the usual core.Keys strings: Keys.Up/Down carry
-		// typable letters (k/j) that must stay text in a filter, and even the arrows'
-		// string form is ambiguous here — a bracketed paste of "up" is one KeyRunes msg
-		// whose String() is "up". The type is what a real arrow key alone produces.
+		// Matched as raw keycodes, not the usual core.Keys strings: Keys.Up/Down carry
+		// typable letters (k/j) that must stay text in a filter. v1 had to match the key
+		// TYPE here because a bracketed paste of "up" arrived as one rune-bearing key
+		// whose String() was also "up"; v2 delivers a paste as tea.PasteMsg, so the
+		// string is unambiguous and only the typable-letter rule is left.
 		// (LineEditScreen.Update states the same rule for its enter/esc.)
-		if km, ok := msg.(tea.KeyMsg); ok && (km.Type == tea.KeyUp || km.Type == tea.KeyDown) {
+		if km, ok := msg.(tea.KeyPressMsg); ok && (km.String() == "up" || km.String() == "down") {
 			if !WrapNav(l, km.String()) {
-				if km.Type == tea.KeyUp {
+				if km.String() == "up" {
 					l.CursorUp()
 				} else {
 					l.CursorDown()
@@ -187,7 +194,7 @@ func listDispatchRows(sh *core.Shared, l *list.Model, msg tea.Msg, mouseYOff, it
 		*l, cmd = l.Update(msg)
 		return core.Async(cmd)
 	}
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		k := key.String()
 		switch {
 		case core.MatchKey(k, core.Keys.Select):
@@ -401,15 +408,12 @@ func WrapNav(l *list.Model, k string) bool {
 // on a list it skips items. Unlike WrapNav this clamps at the boundaries (CursorUp /
 // CursorDown do so unless InfiniteScrolling is set) — a wheel that teleported from the
 // last row back to the first would be a scroll that overshoots by the whole list.
-func WheelNav(l *list.Model, msg tea.MouseMsg) bool {
-	if msg.Action != tea.MouseActionPress {
-		return false
-	}
+func WheelNav(l *list.Model, msg tea.Mouse) bool {
 	switch msg.Button {
-	case tea.MouseButtonWheelUp:
+	case tea.MouseWheelUp:
 		l.CursorUp()
 		return true
-	case tea.MouseButtonWheelDown:
+	case tea.MouseWheelDown:
 		l.CursorDown()
 		return true
 	}

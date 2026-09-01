@@ -6,7 +6,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // ---------- helpers ----------
@@ -23,8 +23,8 @@ func mdRow(doc string, row int) []Span {
 // styleEq compares two styles by what they actually paint. lipgloss.Style holds a
 // func field (transform), so == does not compile and DeepEqual would compare
 // renderer pointers; rendering the same probe through both is the honest witness.
-// It only means anything under withColor — with the Ascii profile every style
-// renders to bare text.
+// It only means anything because lipgloss v2 renders styles verbatim: downsampling
+// moved to the output layer, so a TTY-less `go test` no longer flattens them.
 func styleEq(a, b lipgloss.Style) bool {
 	return a.Render("Xy") == b.Render("Xy")
 }
@@ -70,7 +70,6 @@ var mdNone = mdStyles[mdStyleNone]
 // span, delimiters excluded (they stay in the surrounding unstyled run) — that is
 // what childRange's "first to last descendant Text segment" buys.
 func TestMarkdownInlineConstructs(t *testing.T) {
-	withColor(t) // styleEq compares rendered output; Ascii would flatten every style
 
 	// A heading is a BLOCK: the style paints the whole row, "# " marker included.
 	assertSpans(t, "# Heading\n", 0, wantSpan{"# Heading", mdHeadingStyle})
@@ -98,7 +97,6 @@ func TestMarkdownInlineConstructs(t *testing.T) {
 // the block style on the cells it covers, so `code` inside a heading is code-colored
 // while the rest of the row stays heading-styled.
 func TestMarkdownInlineBeatsBlock(t *testing.T) {
-	withColor(t)
 
 	assertSpans(t, "# A `b` c\n", 0,
 		wantSpan{"# A `", mdHeadingStyle}, wantSpan{"b", mdCodeStyle}, wantSpan{"` c", mdHeadingStyle})
@@ -109,7 +107,6 @@ func TestMarkdownInlineBeatsBlock(t *testing.T) {
 // an unclosed fence runs to EOF, and an indented block styles its rows — none of it
 // tracked by hand across lines.
 func TestMarkdownCodeBlocks(t *testing.T) {
-	withColor(t)
 
 	closed := "before\n```go\nfmt.Println()\nx\n```\nafter\n"
 	for _, row := range []int{1, 2, 3, 4} { // fence, body, body, closing fence
@@ -137,7 +134,6 @@ func TestMarkdownCodeBlocks(t *testing.T) {
 // walk — ast.BaseInline panics on Lines() instead of answering empty — which is why
 // this covers a quote carrying inline markup and a nested quote.
 func TestMarkdownBlockquote(t *testing.T) {
-	withColor(t)
 
 	doc := "> quote *em*\n> second\n>\n> > nested\n\nafter\n"
 	for _, row := range []int{0, 1, 2, 3} {
@@ -163,7 +159,6 @@ func TestMarkdownBlockquote(t *testing.T) {
 // shape goldmark produces, so nesting, indentation and a quote wrapper all work
 // off the same forward scan (listMarkerEnd).
 func TestMarkdownListMarkers(t *testing.T) {
-	withColor(t)
 
 	for _, bullet := range []string{"-", "*", "+"} {
 		doc := bullet + " item\n"
@@ -194,7 +189,6 @@ func TestMarkdownListMarkers(t *testing.T) {
 // TestMarkdownSetextUnderline documents a known gap rather than an intent: a setext
 // heading's Lines() cover the text row only, so the "=====" underline renders plain.
 func TestMarkdownSetextUnderline(t *testing.T) {
-	withColor(t)
 
 	assertSpans(t, "Title\n=====\n\nbody\n", 0, wantSpan{"Title", mdHeadingStyle})
 	if got := mdRow("Title\n=====\n\nbody\n", 1); got != nil {
@@ -309,7 +303,6 @@ func TestEditorHighlighterAutoPick(t *testing.T) {
 // plain one does not, but measures exactly the same and still expands tabs — the two
 // invariants body()'s padding and the frame depend on.
 func TestEditorStyledRender(t *testing.T) {
-	withColor(t)
 
 	const doc = "# Title\n\nbody `code` here\n\na\tb `c\td` e\n"
 	lit, _ := newEditor(EditorOpts{Path: "x.md"})
@@ -348,7 +341,6 @@ func TestEditorStyledRender(t *testing.T) {
 // over plain text — mid-line, at end of line (the appended blank) and sitting on a
 // tab inside a styled run.
 func TestEditorStyledCursor(t *testing.T) {
-	withColor(t)
 
 	s, _ := newEditor(EditorOpts{Path: "x.md"})
 	s.setContent("# Title\na\tb `c\td` e")
@@ -382,7 +374,6 @@ func TestEditorStyledCursor(t *testing.T) {
 // the line is ignored outright. The validation is what lets the editor accept an
 // arbitrary third-party Highlighter without letting a buggy one corrupt the frame.
 func TestEditorHighlighterMismatchFallback(t *testing.T) {
-	withColor(t)
 
 	s, _ := newEditor(EditorOpts{Path: "x.md", Highlighter: brokenHL{}})
 	s.setContent("hello world")
@@ -401,7 +392,6 @@ func TestEditorHighlighterMismatchFallback(t *testing.T) {
 // frame and not per rendered row — and every buffer mutation invalidates it, so what
 // the screen shows can never lag the buffer.
 func TestEditorHighlightReparse(t *testing.T) {
-	withColor(t)
 
 	c := &countingHL{}
 	s, sh := newEditor(EditorOpts{Path: "x.md", Highlighter: c})
@@ -446,7 +436,6 @@ func TestEditorHighlightReparse(t *testing.T) {
 // !focused branch returns before the highlighter, so no syntax color leaks into a
 // pane the keys don't reach.
 func TestEditorUnfocusedNoHighlight(t *testing.T) {
-	withColor(t)
 
 	s, sh := newPaneEditor(EditorOpts{Path: "notes.md"})
 	s.setContent("# Title\nbody")

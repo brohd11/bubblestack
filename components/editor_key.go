@@ -4,14 +4,14 @@ import (
 	"strings"
 	"sync"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // editorKeyHandler gets first refusal on a key for buffers carrying one of its
 // registered extensions. Handlers are internal editor behaviors: they may mutate the
 // buffer directly and report true, or leave it untouched and report false so the
 // editor's ordinary key handling runs.
-type editorKeyHandler func(*EditorScreen, tea.KeyMsg) bool
+type editorKeyHandler func(*EditorScreen, tea.KeyPressMsg) bool
 
 var (
 	editorKeyMu       sync.RWMutex

@@ -7,14 +7,14 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
-// navKey builds a real (non-rune) key message, so navigation keys reach the form's
-// keybind switch instead of being diverted into a focused text field by QueryUpdate
-// (which only swallows rune/space/backspace).
-func navKey(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+// navKey builds a key message for a key that types no text, so navigation keys reach
+// the form's keybind switch instead of being diverted into a focused text field by
+// QueryUpdate (which only swallows printable keys, space and backspace).
+func navKey(k string) tea.KeyPressMsg { return keyMsg(k) }
 
 // sampleForm builds a form whose focusable rows (name, scope, url) are separated by a
 // non-focusable heading, so navigation has something to skip. It returns the form plus
@@ -41,32 +41,32 @@ func TestFormFocusCyclingSkipsAndWraps(t *testing.T) {
 	}
 
 	// down skips the heading and lands on the toggle, then the last text field.
-	f.Update(sh, navKey(tea.KeyDown))
+	f.Update(sh, navKey("down"))
 	if got := f.FocusedKey(); got != "scope" {
 		t.Fatalf("NextField should skip the heading to scope, got %q", got)
 	}
-	f.Update(sh, navKey(tea.KeyDown))
+	f.Update(sh, navKey("down"))
 	if got := f.FocusedKey(); got != "url" {
 		t.Fatalf("NextField should advance to url, got %q", got)
 	}
 	// wrap forward back to the first focusable.
-	f.Update(sh, navKey(tea.KeyDown))
+	f.Update(sh, navKey("down"))
 	if got := f.FocusedKey(); got != "name" {
 		t.Fatalf("NextField should wrap to name, got %q", got)
 	}
 	// up wraps backward to the last focusable, skipping the heading.
-	f.Update(sh, navKey(tea.KeyUp))
+	f.Update(sh, navKey("up"))
 	if got := f.FocusedKey(); got != "url" {
 		t.Fatalf("PrevField should wrap backward to url, got %q", got)
 	}
 	// tab/shift+tab are the other half of PrevField/NextField and still reach a
 	// pushed form: only a ModularScreen host takes shift+tab (it is a PaneNext
 	// keycode there), and a form on the stack has no such host above it.
-	f.Update(sh, navKey(tea.KeyShiftTab))
+	f.Update(sh, navKey("shift+tab"))
 	if got := f.FocusedKey(); got != "scope" {
 		t.Fatalf("shift+tab should step back to scope on a pushed form, got %q", got)
 	}
-	f.Update(sh, navKey(tea.KeyTab))
+	f.Update(sh, navKey("tab"))
 	if got := f.FocusedKey(); got != "url" {
 		t.Fatalf("tab should step forward to url, got %q", got)
 	}
@@ -89,11 +89,11 @@ func TestFormToggleLeftRight(t *testing.T) {
 	f, scope := sampleForm(func(o *FormOpts) { o.Focus = "scope" })
 	sh := core.NewShared(nil)
 
-	f.Update(sh, navKey(tea.KeyRight))
+	f.Update(sh, navKey("right"))
 	if scope.Index() != 1 {
 		t.Fatalf("Right on the focused toggle should advance the index, got %d", scope.Index())
 	}
-	f.Update(sh, navKey(tea.KeyLeft))
+	f.Update(sh, navKey("left"))
 	if scope.Index() != 0 {
 		t.Fatalf("Left on the focused toggle should retreat the index, got %d", scope.Index())
 	}
@@ -145,7 +145,7 @@ func TestFormSelectRunsOnSubmit(t *testing.T) {
 	f, _ := sampleForm(func(o *FormOpts) {
 		o.OnSubmit = func(*core.Shared, *FormScreen) core.Action { submitted = true; return core.Action{} }
 	})
-	f.Update(core.NewShared(nil), navKey(tea.KeyEnter))
+	f.Update(core.NewShared(nil), navKey("enter"))
 	if !submitted {
 		t.Error("Select on a plain field should run OnSubmit")
 	}
@@ -159,7 +159,7 @@ func TestFormActivatorConsumesEnter(t *testing.T) {
 		Fields:   []FormField{pick},
 		OnSubmit: func(*core.Shared, *FormScreen) core.Action { submitted = true; return core.Action{} },
 	})
-	_, act := f.Update(core.NewShared(nil), navKey(tea.KeyEnter))
+	_, act := f.Update(core.NewShared(nil), navKey("enter"))
 	if !reflect.DeepEqual(act, core.Pop()) {
 		t.Errorf("an Activator consuming Enter should return its own Action, got %+v", act)
 	}
@@ -258,7 +258,7 @@ func TestFormEnterSubmitsOverATextArea(t *testing.T) {
 	sh := core.NewShared(nil)
 	f.Init(sh)
 	f.Update(sh, keyMsg("h"))
-	f.Update(sh, navKey(tea.KeyEnter))
+	f.Update(sh, navKey("enter"))
 
 	if !submitted {
 		t.Error("Enter on a TextAreaField should submit the form")

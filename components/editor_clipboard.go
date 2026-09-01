@@ -5,7 +5,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Clipboard verbs for EditorScreen: the alt+c/alt+x/alt+v chords and the optional

@@ -9,7 +9,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 	"github.com/brohd11/goutil/strutil"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Saving for EditorScreen: the ctrl+x prompt's save path and the save-as line edit that

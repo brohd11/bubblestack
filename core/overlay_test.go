@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -105,7 +105,7 @@ func TestOverlayStackCompositesOverBase(t *testing.T) {
 	tm = pump(tm, Push(posOverlay{x: 4, y: 2}))
 	tm = pump(tm, Push(labelOverlay{posOverlay{x: 10, y: 6}, "CD"}))
 
-	lines := strings.Split(tm.(Router).View(), "\n")
+	lines := strings.Split(tm.(Router).View().Content, "\n")
 	if len(lines) != 24 {
 		t.Fatalf("row count = %d, want 24 (frame height)", len(lines))
 	}
@@ -127,14 +127,14 @@ func TestOverlayPositioned(t *testing.T) {
 	tm := sized(newCoreTestRouter()) // 80x24
 
 	tm = pump(tm, Push(posOverlay{x: 4, y: 2}))
-	lines := strings.Split(tm.(Router).View(), "\n")
+	lines := strings.Split(tm.(Router).View().Content, "\n")
 	if got := ansi.Strip(lines[2]); got[4:6] != "AB" {
 		t.Errorf("row 2 = %q, want the box anchored at (4,2)", got)
 	}
 
 	tm = pump(tm, Pop(1))
 	tm = pump(tm, Push(posOverlay{x: 100, y: 100}))
-	lines = strings.Split(tm.(Router).View(), "\n")
+	lines = strings.Split(tm.(Router).View().Content, "\n")
 	if len(lines) != 24 {
 		t.Fatalf("row count = %d, want 24 (frame height)", len(lines))
 	}

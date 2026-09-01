@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
+	"charm.land/bubbles/v2/list"
 )
 
 // This file holds the standard Actions menu: the small picker an app opens with "a"

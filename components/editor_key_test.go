@@ -2,12 +2,10 @@ package components
 
 import (
 	"testing"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func pressEnter(s *EditorScreen) {
-	s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
+	s.key(nil, keyMsg("enter"))
 }
 
 func TestMarkdownEditorKeyContinuesDashLists(t *testing.T) {

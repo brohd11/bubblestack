@@ -1,11 +1,12 @@
 package components
 
 import (
+	"image/color"
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // The framework's one framed-element look, shared by every element that draws a
@@ -18,7 +19,7 @@ import (
 // frameColor is the border tint: the theme accent while focused, the muted border
 // color otherwise. Read from the live palette per call (not cached) so a SetTheme
 // switch repaints the next render.
-func frameColor(focused bool) lipgloss.TerminalColor {
+func frameColor(focused bool) color.Color {
 	if focused {
 		return core.FocusedColor
 	}
@@ -48,12 +49,16 @@ func frameTop(legend string, innerWidth int, focused bool) string {
 // NormalBorder (the top is frameTop's job), tinted to match, sized to innerWidth.
 // Returned as a Style so a caller can add padding — Width counts the padding, as
 // lipgloss does, so a padded box passes innerWidth including it.
+//
+// The +2 is the two border cells: lipgloss v2's Style.Width is the whole rendered
+// width where v1's excluded the border. innerWidth stays "the run between the
+// corners", which is what frameTop draws to, so the two edges still line up.
 func frameBox(innerWidth int, focused bool) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder()).
 		BorderTop(false).
 		BorderForeground(frameColor(focused)).
-		Width(innerWidth)
+		Width(innerWidth + 2)
 }
 
 // frame is the whole element: the legend top edge over body in the box. The

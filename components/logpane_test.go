@@ -7,8 +7,8 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -136,14 +136,14 @@ func TestLogPaneWheelScrolls(t *testing.T) {
 	p := paneAt(lines...)
 	p.GotoBottom()
 
-	bottom := p.vp.YOffset
+	bottom := p.vp.YOffset()
 	if bottom == 0 {
 		t.Fatal("100 lines in a 24-row pane should scroll; the fixture is wrong")
 	}
 
-	p.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	if p.vp.YOffset >= bottom {
-		t.Fatalf("a wheel-up should scroll the pane back from the bottom, offset stayed at %d", p.vp.YOffset)
+	p.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if p.vp.YOffset() >= bottom {
+		t.Fatalf("a wheel-up should scroll the pane back from the bottom, offset stayed at %d", p.vp.YOffset())
 	}
 }
 
@@ -187,7 +187,7 @@ func TestRouterWheelScrollsRealLogPane(t *testing.T) {
 
 	var tm tea.Model = r
 	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24}) // pins the pane to the bottom
-	bottom := pane.vp.YOffset
+	bottom := pane.vp.YOffset()
 	if bottom == 0 {
 		t.Fatal("100 lines should leave the pane scrolled to a non-zero offset; fixture is wrong")
 	}
@@ -196,8 +196,8 @@ func TestRouterWheelScrollsRealLogPane(t *testing.T) {
 	if got := pane.Height(); got != 8 {
 		t.Fatalf("fixture assumes an 8-row pane at height 24, got %d", got)
 	}
-	tm.Update(tea.MouseMsg{Y: 20, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	if pane.vp.YOffset >= bottom {
-		t.Fatalf("a wheel over the pane should scroll it through the router, offset stayed at %d", pane.vp.YOffset)
+	tm.Update(tea.MouseWheelMsg{Y: 20, Button: tea.MouseWheelUp})
+	if pane.vp.YOffset() >= bottom {
+		t.Fatalf("a wheel over the pane should scroll it through the router, offset stayed at %d", pane.vp.YOffset())
 	}
 }

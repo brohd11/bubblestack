@@ -8,9 +8,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // newMenu builds a menu already sized to an 80x20 body. Shared.bodyY is router-owned
@@ -35,8 +35,16 @@ func menuItems() []MenuItem {
 	}
 }
 
+// press builds the mouse message for one button at one cell. v2 splits clicks and
+// wheel notches into separate types, so the button picks which — keeping the single
+// call shape these tests already read as "press this button there".
 func press(x, y int, b tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Button: b, Action: tea.MouseActionPress}
+	m := tea.Mouse{X: x, Y: y, Button: b}
+	switch b {
+	case tea.MouseWheelUp, tea.MouseWheelDown, tea.MouseWheelLeft, tea.MouseWheelRight:
+		return tea.MouseWheelMsg(m)
+	}
+	return tea.MouseClickMsg(m)
 }
 
 // TestMenuBoxDims pins the invariant every other behavior rests on: what place() reports
@@ -278,7 +286,7 @@ func TestMenuClickRows(t *testing.T) {
 
 	for i, want := range []string{"Open", "Rename", "", "Delete"} {
 		picked = nil
-		m.Update(sh, press(x+2, top+i, tea.MouseButtonLeft))
+		m.Update(sh, press(x+2, top+i, tea.MouseLeft))
 		got := strings.Join(picked, ",")
 		if got != want {
 			t.Errorf("click on row %d picked %q, want %q", i, got, want)
@@ -290,7 +298,7 @@ func TestMenuClickRows(t *testing.T) {
 
 	// The chrome rows are part of the menu: they consume the click without acting.
 	picked = nil
-	m.Update(sh, press(x+2, y, tea.MouseButtonLeft))
+	m.Update(sh, press(x+2, y, tea.MouseLeft))
 	if len(picked) != 0 || cancelled {
 		t.Errorf("a click on the top border should be swallowed, picked = %v cancelled = %v", picked, cancelled)
 	}
@@ -305,7 +313,7 @@ func TestMenuClickRows(t *testing.T) {
 		{"below", x + 2, y + h},
 	} {
 		cancelled = false
-		m.Update(sh, press(c.x, c.y, tea.MouseButtonLeft))
+		m.Update(sh, press(c.x, c.y, tea.MouseLeft))
 		if !cancelled {
 			t.Errorf("a click %s the box should dismiss it", c.name)
 		}
@@ -323,12 +331,12 @@ func TestMenuDismissGestures(t *testing.T) {
 	// A right press inside the box dismisses: the gesture that raises a context menu is
 	// also the one that closes it.
 	x, _, _, _ := m.place()
-	if _, act := m.Update(sh, press(x+2, m.contentTop(), tea.MouseButtonRight)); !reflect.DeepEqual(act.Msg, core.Pop().Msg) {
+	if _, act := m.Update(sh, press(x+2, m.contentTop(), tea.MouseRight)); !reflect.DeepEqual(act.Msg, core.Pop().Msg) {
 		t.Errorf("a right click should dismiss, got %#v", act.Msg)
 	}
 
 	// Motion and release are not gestures the menu acts on.
-	moved := tea.MouseMsg{X: 0, Y: 0, Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion}
+	moved := tea.MouseMotionMsg{X: 0, Y: 0, Button: tea.MouseLeft}
 	if _, act := m.Update(sh, moved); act.Msg != nil || act.Cmd != nil {
 		t.Errorf("a non-press mouse action should be ignored, got %#v", act)
 	}
@@ -365,19 +373,19 @@ func TestMenuWheel(t *testing.T) {
 	m.SetSize(sh, 80, 4+menuChromeH)
 
 	for i := 0; i < 4; i++ {
-		m.Update(sh, press(0, 0, tea.MouseButtonWheelDown))
+		m.Update(sh, press(0, 0, tea.MouseWheelDown))
 	}
 	if m.Selected() != 4 || m.top != 1 {
 		t.Fatalf("wheel down: sel = %d top = %d, want 4 and 1", m.Selected(), m.top)
 	}
 	for i := 0; i < 20; i++ {
-		m.Update(sh, press(0, 0, tea.MouseButtonWheelDown))
+		m.Update(sh, press(0, 0, tea.MouseWheelDown))
 	}
 	if m.Selected() != 9 {
 		t.Errorf("the wheel should clamp at the last row, got %d", m.Selected())
 	}
 	for i := 0; i < 20; i++ {
-		m.Update(sh, press(0, 0, tea.MouseButtonWheelUp))
+		m.Update(sh, press(0, 0, tea.MouseWheelUp))
 	}
 	if m.Selected() != 0 || m.top != 0 {
 		t.Errorf("the wheel should clamp at the first row, got sel = %d top = %d", m.Selected(), m.top)
@@ -470,7 +478,6 @@ func TestMenuNoCrumb(t *testing.T) {
 // Ascii profile and renders every Foreground as a no-op, which would make a selected row
 // byte-identical to an unselected one.
 func TestMenuRowStyling(t *testing.T) {
-	withColor(t)
 	m, sh := newMenu(t, MenuOpts{
 		Items: []MenuItem{
 			{Label: "Same", Hint: "x"},
@@ -567,7 +574,7 @@ func TestMenuQuitGateClosesTheMenu(t *testing.T) {
 	tm, _ = tm.Update(core.Push(parent))
 	tm, _ = tm.Update(core.Push(child))
 
-	ctrlC := tea.KeyMsg{Type: tea.KeyCtrlC}
+	ctrlC := keyMsg("ctrl+c")
 
 	// A nil cmd is the half that proves nothing quit: an ungated quit comes back with
 	// tea.Quit in the cmd lane.

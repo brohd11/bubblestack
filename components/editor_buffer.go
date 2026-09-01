@@ -3,7 +3,7 @@ package components
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Buffer mutation for EditorScreen — inserting, deleting, splitting lines — and the undo
@@ -34,8 +34,8 @@ func (s *EditorScreen) setContent(content string) {
 
 // editorEditKey identifies keys worth snapshotting before dispatch. A no-op still
 // allocates a temporary snapshot, but recordEdit only retains it when editSeq changed.
-func editorEditKey(k string, m tea.KeyMsg) bool {
-	if len(m.Runes) > 0 {
+func editorEditKey(k string, m tea.KeyPressMsg) bool {
+	if m.Text != "" {
 		return true
 	}
 	switch k {

@@ -5,9 +5,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -33,7 +33,7 @@ type LogPane struct {
 var _ core.Wrapper = (*LogPane)(nil)
 
 // NewLogPane builds the default log output pane.
-func NewLogPane() *LogPane { return &LogPane{vp: viewport.New(0, 0)} }
+func NewLogPane() *LogPane { return &LogPane{vp: viewport.New()} }
 
 // Log appends a line and reveals the pane. This is the logging capability beyond
 // core.Output that Shared.Log reaches by type assertion; the router never calls it.
@@ -71,8 +71,8 @@ func (p *LogPane) Clear() {
 // freshly appended lines appear without LogPane tracking the router.
 func (p *LogPane) SetSize(termWidth, termHeight int) {
 	p.width, p.height = termWidth, termHeight
-	p.vp.Width = p.innerWidth()
-	p.vp.Height = p.contentHeight()
+	p.vp.SetWidth(p.innerWidth())
+	p.vp.SetHeight(p.contentHeight())
 	p.vp.SetContent(p.content())
 }
 

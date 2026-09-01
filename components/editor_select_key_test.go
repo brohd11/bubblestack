@@ -4,25 +4,25 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Keyboard selection: the shifted motions and the shift+click extend. What every test
 // here really exercises is selectionAnchor, which DERIVES the fixed end from the
 // selection rather than storing it — see editor_cursor.go.
 
-func shiftKey(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+func shiftKey(k string) tea.KeyPressMsg { return keyMsg(k) }
 
 var (
-	shiftLeftKey  = shiftKey(tea.KeyShiftLeft)
-	shiftRightKey = shiftKey(tea.KeyShiftRight)
-	shiftDownKey  = shiftKey(tea.KeyShiftDown)
-	shiftHomeKey  = shiftKey(tea.KeyShiftHome)
-	shiftEndKey   = shiftKey(tea.KeyShiftEnd)
+	shiftLeftKey  = shiftKey("shift+left")
+	shiftRightKey = shiftKey("shift+right")
+	shiftDownKey  = shiftKey("shift+down")
+	shiftHomeKey  = shiftKey("shift+home")
+	shiftEndKey   = shiftKey("shift+end")
 )
 
 // pressKeyN sends the same key n times.
-func pressKeyN(s *EditorScreen, m tea.KeyMsg, n int) {
+func pressKeyN(s *EditorScreen, m tea.KeyPressMsg, n int) {
 	for range n {
 		s.key(nil, m)
 	}
@@ -136,7 +136,7 @@ func TestEditorUnshiftedMoveClearsSelection(t *testing.T) {
 	s.setContent("abcdef")
 
 	pressKeyN(s, shiftRightKey, 3)
-	s.key(nil, tea.KeyMsg{Type: tea.KeyLeft})
+	s.key(nil, keyMsg("left"))
 	if s.selectionActive() {
 		t.Fatalf("a bare arrow must clear the selection, still holding %q", s.selectedText())
 	}
@@ -163,7 +163,7 @@ func TestEditorShiftSelectionFeedsTheEditVerbs(t *testing.T) {
 	pressKeyN(s, shiftRightKey, 3)
 	// alt+x's clipboard write travels in the cmd lane; not running the returned Action
 	// keeps the test off pbcopy while still exercising the buffer half of the cut.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}, Alt: true})
+	s.key(nil, keyMsg("alt+x"))
 	if got := buffer(s); got != "def" {
 		t.Fatalf("alt+x over a shift-selection gave %q, want %q — the LINE was cut", got, "def")
 	}
@@ -194,21 +194,21 @@ func TestEditorShiftWordSelection(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("foo bar baz")
 
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlShiftRight})
+	s.key(nil, keyMsg("ctrl+shift+right"))
 	if got := s.selectedText(); got != "foo " {
 		t.Fatalf("ctrl+shift+→ selected %q, want %q", got, "foo ")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlShiftRight})
+	s.key(nil, keyMsg("ctrl+shift+right"))
 	if got := s.selectedText(); got != "foo bar " {
 		t.Fatalf("a second ctrl+shift+→ selected %q, want %q", got, "foo bar ")
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlShiftLeft})
+	s.key(nil, keyMsg("ctrl+shift+left"))
 	if got := s.selectedText(); got != "foo " {
 		t.Fatalf("ctrl+shift+← pulled back to %q, want %q", got, "foo ")
 	}
 	// All the way back onto the anchor at column 0 — the word chords share the one
 	// anchor with the arrows, so this collapses rather than selecting backwards.
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlShiftLeft})
+	s.key(nil, keyMsg("ctrl+shift+left"))
 	if s.selectionActive() {
 		t.Fatalf("back on the anchor should select nothing, got %q", s.selectedText())
 	}
@@ -222,18 +222,18 @@ func TestEditorShiftClickExtends(t *testing.T) {
 	s.setContent("abcdefgh")
 	y := s.titleH()
 
-	shiftPress := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Shift: true, X: 5, Y: y}
+	shiftPress := tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseLeft, Mod: tea.ModShift}
 	s.Update(sh, shiftPress)
 	if got := s.selectedText(); got != "abcde" {
 		t.Fatalf("shift+click from column 0 selected %q, want %q", got, "abcde")
 	}
 	// A second one re-aims the same anchor rather than starting over.
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Shift: true, X: 2, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 2, Y: y, Button: tea.MouseLeft, Mod: tea.ModShift})
 	if got := s.selectedText(); got != "ab" {
 		t.Fatalf("the second shift+click selected %q, want %q", got, "ab")
 	}
 
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 4, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft})
 	if s.selectionActive() {
 		t.Fatalf("an unmodified press is still a bare caret, got %q", s.selectedText())
 	}
@@ -250,14 +250,14 @@ func TestEditorShiftClickThenDrag(t *testing.T) {
 	y := s.titleH()
 	s.curX, s.wantX = 2, 2
 
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Shift: true, X: 4, Y: y})
+	s.Update(sh, tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft, Mod: tea.ModShift})
 	if got := s.selectedText(); got != "cd" {
 		t.Fatalf("shift+click selected %q, want %q", got, "cd")
 	}
 	if !s.dragging {
 		t.Fatal("the extend should leave a drag running so the pointer can keep widening it")
 	}
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 6, Y: y})
+	s.Update(sh, tea.MouseMotionMsg{X: 6, Y: y, Button: tea.MouseLeft})
 	if got := s.selectedText(); got != "cdefg" {
 		t.Fatalf("dragging on from the extend gave %q, want %q", got, "cdefg")
 	}

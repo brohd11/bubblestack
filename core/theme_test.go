@@ -4,8 +4,6 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-
-	"github.com/charmbracelet/lipgloss"
 )
 
 // restoreTheme snaps the active theme back after a test mutates the global palette.
@@ -32,7 +30,8 @@ func TestSetThemeKnownUnknown(t *testing.T) {
 
 func TestRegisterThemeAndNames(t *testing.T) {
 	restoreTheme(t)
-	RegisterTheme(Theme{Name: "zz-test", Muted: lipgloss.Color("1"), Log: lipgloss.Color("2"), Border: lipgloss.Color("3"), Focused: lipgloss.Color("4"), OnFocused: lipgloss.Color("5")})
+	onFocused := Color{Light: 5, Dark: 5}
+	RegisterTheme(Theme{Name: "zz-test", Muted: Color{Light: 1, Dark: 1}, Log: Color{Light: 2, Dark: 2}, Border: Color{Light: 3, Dark: 3}, Focused: Color{Light: 4, Dark: 4}, OnFocused: &onFocused})
 	if !SetTheme("zz-test") {
 		t.Fatal("a registered theme should be resolvable by SetTheme")
 	}
@@ -65,10 +64,10 @@ func TestApplyThemeBroadcasts(t *testing.T) {
 func TestApplyThemeOnFocusedFallback(t *testing.T) {
 	restoreTheme(t)
 	// A theme leaving OnFocused empty falls back to defaultOnFocused.
-	RegisterTheme(Theme{Name: "no-onfocused", Muted: lipgloss.Color("1"), Log: lipgloss.Color("2"), Border: lipgloss.Color("3"), Focused: lipgloss.Color("4")})
+	RegisterTheme(Theme{Name: "no-onfocused", Muted: Color{Light: 1, Dark: 1}, Log: Color{Light: 2, Dark: 2}, Border: Color{Light: 3, Dark: 3}, Focused: Color{Light: 4, Dark: 4}})
 	SetTheme("no-onfocused")
-	if OnFocusedColor != defaultOnFocused {
-		t.Errorf("empty OnFocused should fall back to defaultOnFocused, got %q", OnFocusedColor)
+	if OnFocusedColor != Resolve(defaultOnFocused) {
+		t.Errorf("empty OnFocused should fall back to defaultOnFocused, got %v", OnFocusedColor)
 	}
 }
 
@@ -80,7 +79,7 @@ func TestMarkdownAccent(t *testing.T) {
 
 	// A theme without MarkdownFrom uses its own accent.
 	SetTheme("godot")
-	if got := MarkdownAccent(); !reflect.DeepEqual(got, FocusedColor) {
+	if got := Resolve(MarkdownAccent()); !reflect.DeepEqual(got, FocusedColor) {
 		t.Errorf("godot should use its own accent, got %v want %v", got, FocusedColor)
 	}
 
@@ -90,7 +89,7 @@ func TestMarkdownAccent(t *testing.T) {
 	if got := MarkdownAccent(); !reflect.DeepEqual(got, themes["lipgloss"].Focused) {
 		t.Errorf("mono should borrow lipgloss's accent, got %v", got)
 	}
-	if reflect.DeepEqual(FocusedColor, MarkdownAccent()) {
+	if reflect.DeepEqual(FocusedColor, Resolve(MarkdownAccent())) {
 		t.Error("borrowing a markdown accent must not move the theme's own FocusedColor")
 	}
 
@@ -98,10 +97,10 @@ func TestMarkdownAccent(t *testing.T) {
 	// a typo should dim a page, not blank it.
 	RegisterTheme(Theme{
 		Name: "zz-badref", Muted: neutralMuted, Log: neutralLog, Border: neutralBorder,
-		Focused: lipgloss.Color("9"), MarkdownFrom: "no-such-theme",
+		Focused: Color{Light: 9, Dark: 9}, MarkdownFrom: "no-such-theme",
 	})
 	SetTheme("zz-badref")
-	if got := MarkdownAccent(); !reflect.DeepEqual(got, FocusedColor) {
+	if got := Resolve(MarkdownAccent()); !reflect.DeepEqual(got, FocusedColor) {
 		t.Errorf("an unresolvable MarkdownFrom should fall back to the active accent, got %v", got)
 	}
 }

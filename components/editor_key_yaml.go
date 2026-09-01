@@ -1,6 +1,6 @@
 package components
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 func init() {
 	registerEditorKeyHandler(yamlEditorKey, ".yaml", ".yml")
@@ -8,7 +8,7 @@ func init() {
 
 // yamlEditorKey carries the current line's indentation onto the next line without
 // attempting to infer nesting from YAML syntax.
-func yamlEditorKey(s *EditorScreen, msg tea.KeyMsg) bool {
+func yamlEditorKey(s *EditorScreen, msg tea.KeyPressMsg) bool {
 	if msg.String() != "enter" {
 		return false
 	}

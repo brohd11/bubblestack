@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
-func undoEditor(s *EditorScreen) { s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlZ}) }
-func redoEditor(s *EditorScreen) { s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlY}) }
+func undoEditor(s *EditorScreen) { s.key(nil, keyMsg("ctrl+z")) }
+func redoEditor(s *EditorScreen) { s.key(nil, keyMsg("ctrl+y")) }
 
 func TestEditorUndoRedoPerKeyEvent(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
@@ -70,7 +70,7 @@ func TestEditorStructuredEnterIsOneUndoStep(t *testing.T) {
 			s, _ := newEditor(EditorOpts{Path: tc.path})
 			s.setContent(tc.content)
 			s.curX, s.wantX = len(s.lines[0]), len(s.lines[0])
-			s.key(nil, tea.KeyMsg{Type: tea.KeyEnter})
+			s.key(nil, keyMsg("enter"))
 			if got := buffer(s); got != tc.edited || len(s.undoStack) != 1 {
 				t.Fatalf("structured enter = %q history=%d, want %q/1", got, len(s.undoStack), tc.edited)
 			}
@@ -87,11 +87,11 @@ func TestEditorStructuredEnterIsOneUndoStep(t *testing.T) {
 }
 
 func TestEditorUndoCoversDeletionFamilies(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyBackspace},
-		{Type: tea.KeyDelete},
-		{Type: tea.KeyCtrlW},
-		{Type: tea.KeyCtrlK},
+	for _, key := range []tea.KeyPressMsg{
+		keyMsg("backspace"),
+		keyMsg("delete"),
+		keyMsg("ctrl+w"),
+		keyMsg("ctrl+k"),
 	} {
 		s, _ := newEditor(EditorOpts{})
 		s.setContent("alpha beta")
@@ -183,7 +183,7 @@ func TestEditorLoadAndNoOpsManageHistory(t *testing.T) {
 		t.Fatal("loading content should reset both history stacks")
 	}
 	s.curX = 0
-	s.key(nil, tea.KeyMsg{Type: tea.KeyBackspace})
+	s.key(nil, keyMsg("backspace"))
 	if len(s.undoStack) != 0 {
 		t.Fatal("a no-op editing key should not create history")
 	}

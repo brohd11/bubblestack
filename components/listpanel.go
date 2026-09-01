@@ -7,10 +7,10 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -333,7 +333,7 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 	if _, ok := msg.(tea.MouseMsg); ok && !p.focused {
 		return core.Action{}, false
 	}
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		if k := km.String(); core.MatchKey(k, core.Keys.Back) && !p.Capturing() {
 			// An APPLIED filter is the one thing back must clear before it pops: the
 			// carve-out below hands esc to the host, so bubbles' own ClearFilter binding

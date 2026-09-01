@@ -5,11 +5,10 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -79,7 +78,7 @@ func NewLineEdit(placeholder string, x, y, width int, onDone func(*core.Shared, 
 }
 
 func (s *LineEditScreen) Init(*core.Shared) tea.Cmd {
-	if s.input.Cursor.Mode() == cursor.CursorBlink {
+	if s.input.Styles().Cursor.Blink {
 		return textinput.Blink
 	}
 	return nil
@@ -99,11 +98,9 @@ func (s *LineEditScreen) SetPrompt(prompt string) { s.input.Prompt = prompt }
 // visible caret without scheduling blink messages, which is useful for small
 // transient overlays where motion reads as noise.
 func (s *LineEditScreen) SetCursorBlink(blink bool) {
-	mode := cursor.CursorStatic
-	if blink {
-		mode = cursor.CursorBlink
-	}
-	s.input.Cursor.SetMode(mode)
+	st := s.input.Styles()
+	st.Cursor.Blink = blink
+	s.input.SetStyles(st)
 }
 
 // IsOverlay marks the screen for compositing over the screen below it.
@@ -117,7 +114,7 @@ func (s *LineEditScreen) OverlayPos(int, int) (int, int) { return s.x, s.y }
 func (s *LineEditScreen) Filtering() bool { return true }
 
 func (s *LineEditScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		// enter/esc match as raw keycodes on purpose: the central Yes/No
 		// bindings carry typable letters, which must stay text here.
 		switch km.String() {
@@ -154,9 +151,8 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 	}
 	// Border and padding take 4 cells off the covered width; the rest splits
 	// between the prompt, the text window and one cell held back for the caret.
-	// lipgloss's Width counts padding but not the border, so the style width is
-	// the covered width minus the border — the rendered box comes out exactly w
-	// cells wide.
+	// lipgloss v2's Width is the whole rendered width, border included, so the
+	// style width is simply w — contentW with its four chrome cells added back.
 	//
 	// The held-back cell is not cosmetic: textinput renders promptW + Width + 1
 	// cells whenever the caret sits past the last character, the trailing cell
@@ -171,8 +167,8 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 	if inner < 1 {
 		inner = 1
 	}
-	if s.input.Width != inner {
-		s.input.Width = inner
+	if s.input.Width() != inner {
+		s.input.SetWidth(inner)
 		// textinput only reflows its scroll window on value/cursor movement, so
 		// re-seat the cursor to force the recompute (see TextField.SetInnerWidth).
 		s.input.SetCursor(s.input.Position())
@@ -192,7 +188,7 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 			body = body + "\n" + hint
 		}
 	}
-	return lineEditBox().Width(contentW + 2).Render(body)
+	return lineEditBox().Width(contentW + 4).Render(body)
 }
 
 // HelpView is empty: the hints render inside the box (the popup precedent — the

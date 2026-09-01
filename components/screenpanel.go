@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // FocusableScreen is implemented by a full screen that can render a focused and

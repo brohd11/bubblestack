@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestBodyMouseReleasesOutputFocus: the wheel focuses the output pane when it
@@ -15,13 +15,13 @@ func TestBodyMouseReleasesOutputFocus(t *testing.T) {
 	sh := r.sh
 	tm := sized(r) // pane rows 18..23, body above (see newWheelRouter)
 
-	tm = pump(tm, wheelAt(20, tea.MouseButtonWheelDown))
+	tm = pump(tm, wheelAt(20, tea.MouseWheelDown))
 	if !sh.Chrome.outputFocused {
 		t.Fatal("a wheel over the pane should focus it")
 	}
 
 	before := len(scr.seen)
-	tm = pump(tm, wheelAt(5, tea.MouseButtonWheelDown))
+	tm = pump(tm, wheelAt(5, tea.MouseWheelDown))
 	if sh.Chrome.outputFocused {
 		t.Fatal("a wheel over the body should release output focus")
 	}
@@ -42,7 +42,7 @@ func TestClickFocusesOutputPane(t *testing.T) {
 		t.Fatal("a click over the pane should focus it")
 	}
 	for _, m := range scr.seen {
-		if mm, ok := m.(tea.MouseMsg); ok && mm.Button == tea.MouseButtonLeft {
+		if mm, ok := m.(tea.MouseMsg); ok && mm.Mouse().Button == tea.MouseLeft {
 			t.Fatal("the click was aimed at the pane; the body screen must not see it")
 		}
 	}

@@ -3,8 +3,8 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 // DialogScreen is the shared y/n confirm/summary box. It serves two shapes behind the
@@ -86,7 +86,7 @@ func (s *DialogScreen) CrumbLabel(short bool) string {
 }
 
 func (s *DialogScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	key, ok := msg.(tea.KeyMsg)
+	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return s, core.Action{}
 	}

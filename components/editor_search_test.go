@@ -7,18 +7,17 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func editorSearchKey(s *EditorScreen, sh *core.Shared, typ tea.KeyType) core.Action {
-	_, act := s.key(sh, tea.KeyMsg{Type: typ})
+func editorSearchKey(s *EditorScreen, sh *core.Shared, k string) core.Action {
+	_, act := s.key(sh, keyMsg(k))
 	return act
 }
 
-func lineEditKey(s *LineEditScreen, sh *core.Shared, msg tea.KeyMsg) core.Action {
+func lineEditKey(s *LineEditScreen, sh *core.Shared, msg tea.KeyPressMsg) core.Action {
 	_, act := s.Update(sh, msg)
 	return act
 }
@@ -33,7 +32,7 @@ func TestEditorSearchInteraction(t *testing.T) {
 	s.setContent("Alpha alpha ALPHA\nalphabet\nbeta")
 	fullH := s.h
 
-	if act := editorSearchKey(s, sh, tea.KeyCtrlF); act.Msg == nil {
+	if act := editorSearchKey(s, sh, "ctrl+f"); act.Msg == nil {
 		t.Fatal("ctrl+f should push a floating line edit")
 	}
 	edit := s.searchEdit(sh)
@@ -41,10 +40,10 @@ func TestEditorSearchInteraction(t *testing.T) {
 	if !s.searchEditing || s.h != fullH-editorSearchBarH {
 		t.Fatalf("open search should reserve %d bottom rows: editing=%v viewport=%d, want %d", editorSearchBarH, s.searchEditing, s.h, fullH-editorSearchBarH)
 	}
-	if cmd := edit.Init(sh); cmd != nil || edit.input.Cursor.Mode() != cursor.CursorStatic {
+	if cmd := edit.Init(sh); cmd != nil || edit.input.Styles().Cursor.Blink {
 		t.Fatal("search line edit should use a visible, non-blinking cursor")
 	}
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("alpha")})
+	lineEditKey(edit, sh, keyMsg("alpha"))
 	if got := s.searchQuery; got != "alpha" {
 		t.Fatalf("live query = %q, want alpha", got)
 	}
@@ -62,7 +61,7 @@ func TestEditorSearchInteraction(t *testing.T) {
 		t.Fatalf("editing bottom bar = %q, want live query", got)
 	}
 
-	if act := lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEnter}); act.Msg == nil || s.searchQuery != "alpha" {
+	if act := lineEditKey(edit, sh, keyMsg("enter")); act.Msg == nil || s.searchQuery != "alpha" {
 		t.Fatalf("enter should pop the overlay and retain alpha, query=%q", s.searchQuery)
 	}
 	s.SetSize(sh, 80, 20)
@@ -74,16 +73,16 @@ func TestEditorSearchInteraction(t *testing.T) {
 	}
 
 	edit = s.searchEdit(sh)
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyCtrlU})
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beta")})
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
+	lineEditKey(edit, sh, keyMsg("ctrl+u"))
+	lineEditKey(edit, sh, keyMsg("beta"))
+	lineEditKey(edit, sh, keyMsg("esc"))
 	if s.searchQuery != "beta" || s.searchEditing {
 		t.Fatalf("escape should retain beta and unfocus the bar, query=%q editing=%v", s.searchQuery, s.searchEditing)
 	}
 
 	edit = s.searchEdit(sh)
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyCtrlU})
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
+	lineEditKey(edit, sh, keyMsg("ctrl+u"))
+	lineEditKey(edit, sh, keyMsg("esc"))
 	if s.searchQuery != "" {
 		t.Fatalf("escaping an empty search should stop it, query=%q", s.searchQuery)
 	}
@@ -110,13 +109,13 @@ func TestEditorSearchSeedsSingleLineSelection(t *testing.T) {
 	if got := len(s.searchMatches[0]); got != 1 {
 		t.Fatalf("seeded selection found %d matches, want 1", got)
 	}
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEsc})
+	lineEditKey(edit, sh, keyMsg("esc"))
 	if s.searchQuery != "beta" {
 		t.Fatalf("escape retained %q, want seeded query beta", s.searchQuery)
 	}
 
 	edit = s.searchEdit(sh)
-	lineEditKey(edit, sh, tea.KeyMsg{Type: tea.KeyEnter})
+	lineEditKey(edit, sh, keyMsg("enter"))
 	if s.searchQuery != "beta" {
 		t.Fatalf("enter retained %q, want seeded query beta", s.searchQuery)
 	}
@@ -139,7 +138,7 @@ func TestEditorSearchDoesNotSeedMultilineSelection(t *testing.T) {
 
 func TestEditorSearchIsOptIn(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
-	if act := editorSearchKey(s, sh, tea.KeyCtrlF); act.Msg != nil || act.Cmd != nil {
+	if act := editorSearchKey(s, sh, "ctrl+f"); act.Msg != nil || act.Cmd != nil {
 		t.Fatal("ctrl+f must remain inert when search is disabled")
 	}
 	for _, binding := range s.HelpBindings() {
@@ -185,7 +184,6 @@ func TestEditorSearchUnicodeTabsAndCacheRefresh(t *testing.T) {
 }
 
 func TestEditorSearchRenderingComposesWithEditorLayers(t *testing.T) {
-	withColor(t)
 	s, _ := newEditor(EditorOpts{Search: true, Highlighter: NewMarkdownHighlighter()})
 	s.setContent("# Foo foo\n" + strings.Repeat("a", 120))
 	setSearchQuery(s, "foo")
@@ -236,7 +234,7 @@ func TestEditorSearchUsesThemeIndependentYellow(t *testing.T) {
 			s, _ := newEditor(EditorOpts{Search: true})
 			s.SetFocused(focused)
 			style := s.editorSearchStyle()
-			if got := style.GetBackground(); !reflect.DeepEqual(got, editorSearchYellow) {
+			if got := style.GetBackground(); !reflect.DeepEqual(got, core.Resolve(editorSearchYellow)) {
 				t.Errorf("theme=%s focused=%v background=%v, want adaptive yellow %v", theme, focused, got, editorSearchYellow)
 			}
 			if got := style.GetForeground(); !reflect.DeepEqual(got, editorSearchText) {
@@ -344,12 +342,7 @@ func TestEditorRetainedSearchBarLeftClickRefocuses(t *testing.T) {
 				x += 7
 				y += 4
 			}
-			_, act := s.Update(sh, tea.MouseMsg{
-				Action: tea.MouseActionPress,
-				Button: tea.MouseButtonLeft,
-				X:      x,
-				Y:      y,
-			})
+			_, act := s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 			if act.Msg == nil || !s.searchEditing {
 				t.Fatal("left click on retained search should push the focused line edit")
 			}
@@ -365,9 +358,9 @@ func TestEditorRetainedSearchBarLeftClickRefocuses(t *testing.T) {
 
 func TestEditorRetainedSearchBarNonLeftEventsDoNotFocus(t *testing.T) {
 	for _, msg := range []tea.MouseMsg{
-		{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 2, Y: 18},
-		{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 2, Y: 18},
-		{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 2, Y: 18},
+		tea.MouseClickMsg{X: 2, Y: 18, Button: tea.MouseRight},
+		tea.MouseWheelMsg{X: 2, Y: 18, Button: tea.MouseWheelDown},
+		tea.MouseMotionMsg{X: 2, Y: 18, Button: tea.MouseLeft},
 	} {
 		s, sh := newEditor(EditorOpts{Search: true})
 		setSearchQuery(s, "needle")

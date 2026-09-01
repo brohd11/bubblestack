@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"image/color"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,10 +11,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 )
 
 // FilePanel is a directory listing packaged as a ModularScreen panel: the folders and
@@ -239,7 +239,7 @@ func linkStat(path string, d fs.DirEntry) fs.FileInfo {
 // Both color sites go through here so the flag cannot be honored in one and forgotten in
 // the other. ClassifyFile still runs when the flag is off — it is a d.Type() check and at
 // most a few map lookups, and one gate in one place is worth more than skipping it.
-func (p *FilePanel) rowColor(k FileKind) lipgloss.TerminalColor {
+func (p *FilePanel) rowColor(k FileKind) color.Color {
 	if !p.opts.Colors {
 		return nil
 	}
@@ -358,7 +358,7 @@ func (p *FilePanel) clamp(dir string) string {
 type fileItem struct {
 	entry FileEntry
 	desc  string
-	color lipgloss.TerminalColor // the type color, nil for an ordinary file
+	color color.Color // the type color, nil for an ordinary file
 }
 
 var _ core.ColorItem = fileItem{}
@@ -381,7 +381,7 @@ func (i fileItem) SuffixText() string  { return "" }
 // rather than per frame — a delegate's Render must stay cheap, and the entry it would have
 // to re-examine is gone by then. nil (an ordinary file) leaves the row unstyled, and the
 // selection accent outranks this on the cursor row.
-func (i fileItem) TitleColor() lipgloss.TerminalColor { return i.color }
+func (i fileItem) TitleColor() color.Color { return i.color }
 
 // FilterValue keeps ".." out of every search: a filter is a question about which entries
 // you want, and the way out of the folder is not one of the answers (the same rule an
@@ -506,7 +506,7 @@ func (p *FilePanel) key(sh *core.Shared, k string, it list.Item) (core.Action, b
 // list. Both are gated on Capturing: a live /-filter owns every keystroke, and a component
 // that stole one back would eat a character out of the query.
 func (p *FilePanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
-	if km, ok := msg.(tea.KeyMsg); ok && !p.panel.Capturing() {
+	if km, ok := msg.(tea.KeyPressMsg); ok && !p.panel.Capturing() {
 		k := km.String()
 		// canUp first: at the floor backspace is not ours, so it reaches the host as Back.
 		if p.canUp() && core.MatchKey(k, p.upKey) {

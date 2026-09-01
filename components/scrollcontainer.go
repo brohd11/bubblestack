@@ -5,9 +5,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // ScrollContainer is a read-only content panel in the LogPane visual idiom: a
@@ -36,7 +36,7 @@ var _ PanelHelper = (*ScrollContainer)(nil)
 
 // NewScrollContainer builds a panel titled title (drawn as the top-border legend).
 func NewScrollContainer(title string) *ScrollContainer {
-	return &ScrollContainer{vp: viewport.New(0, 0), title: title}
+	return &ScrollContainer{vp: viewport.New(), title: title}
 }
 
 // SetKeyHints turns the key legend the focused border carries on or off; on is the
@@ -87,25 +87,25 @@ func (p *ScrollContainer) UpdatePanel(_ *core.Shared, msg tea.Msg) (core.Action,
 		if !p.focused {
 			return core.Action{}, false
 		}
-		if m.Action == tea.MouseActionPress &&
-			(m.Button == tea.MouseButtonWheelUp || m.Button == tea.MouseButtonWheelDown) {
+		if w, isWheel := m.(tea.MouseWheelMsg); isWheel &&
+			(w.Button == tea.MouseWheelUp || w.Button == tea.MouseWheelDown) {
 			var cmd tea.Cmd
-			p.vp, cmd = p.vp.Update(m)
+			p.vp, cmd = p.vp.Update(w)
 			return core.Async(cmd), true
 		}
 		return core.Action{}, false
 	}
-	km, ok := msg.(tea.KeyMsg)
+	km, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return core.Action{}, false
 	}
 	k := km.String()
 	switch {
 	case core.MatchKey(k, core.Keys.Up):
-		p.vp.LineUp(1)
+		p.vp.ScrollUp(1)
 		return core.Action{}, true
 	case core.MatchKey(k, core.Keys.Down):
-		p.vp.LineDown(1)
+		p.vp.ScrollDown(1)
 		return core.Action{}, true
 	case core.MatchKey(k, core.Keys.Top):
 		p.vp.GotoTop()
@@ -139,8 +139,8 @@ func (p *ScrollContainer) PanelHelp() []key.Binding {
 // top/bottom border rows, and the 1-col padding on each side.
 func (p *ScrollContainer) SetSize(width, height int) {
 	p.width, p.height = width, height
-	p.vp.Width = p.innerWidth()
-	p.vp.Height = p.contentHeight()
+	p.vp.SetWidth(p.innerWidth())
+	p.vp.SetHeight(p.contentHeight())
 }
 
 // TextWidth is the width content must be wrapped to before SetLines: the viewport
@@ -154,17 +154,17 @@ func (p *ScrollContainer) ScrollTo(line int) { p.vp.SetYOffset(line) }
 
 // ScrollOffset is the current top row — what a scroll-syncing host (or a test)
 // reads back.
-func (p *ScrollContainer) ScrollOffset() int { return p.vp.YOffset }
+func (p *ScrollContainer) ScrollOffset() int { return p.vp.YOffset() }
 
 // LineCount is the content's total rows.
 func (p *ScrollContainer) LineCount() int { return p.vp.TotalLineCount() }
 
 // MaxScrollOffset is the furthest ScrollTo can take the content.
-func (p *ScrollContainer) MaxScrollOffset() int { return max(p.LineCount()-p.vp.Height, 0) }
+func (p *ScrollContainer) MaxScrollOffset() int { return max(p.LineCount()-p.vp.Height(), 0) }
 
 // VisibleRows is how many rows the pane shows at once — what a host centering content
 // in it has to know.
-func (p *ScrollContainer) VisibleRows() int { return p.vp.Height }
+func (p *ScrollContainer) VisibleRows() int { return p.vp.Height() }
 
 // innerWidth is the text width inside the box (cell width minus side borders and
 // the 1-col padding on each side).

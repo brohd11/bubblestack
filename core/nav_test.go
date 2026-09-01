@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // initScreen counts Init calls, so push/replace can be checked to have fired Init.

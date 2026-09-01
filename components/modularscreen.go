@@ -3,9 +3,9 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // ModularScreen is the content-agnostic multi-pane screen: a grid of Panel cells
@@ -187,7 +187,7 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 // even beyond the pane. Presses that miss every slot (or hit a non-focusable one)
 // fall through to the broadcast.
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
-	if km, ok := msg.(tea.KeyMsg); ok {
+	if km, ok := msg.(tea.KeyPressMsg); ok {
 		k := km.String()
 		if cmd, moved := s.moveFocus(k); moved {
 			// The pane key itself is consumed here and never reaches a panel, so
@@ -212,12 +212,16 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		return s, core.Action{}
 	}
 	if mm, ok := msg.(tea.MouseMsg); ok {
-		if mm.Action == tea.MouseActionPress {
+		// v1 reported the wheel as a press, so "aims at a pane" means a click or a
+		// wheel notch; motion and release continue whatever gesture a click started.
+		_, isClick := mm.(tea.MouseClickMsg)
+		_, isWheel := mm.(tea.MouseWheelMsg)
+		_, isRelease := mm.(tea.MouseReleaseMsg)
+		m := mm.Mouse()
+		if isClick || isWheel {
 			s.mouseSlot = -1
-		}
-		if mm.Action == tea.MouseActionPress {
-			if i := s.slotAt(sh, mm.X, mm.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
-				if mm.Button == tea.MouseButtonLeft || mm.Button == tea.MouseButtonRight {
+			if i := s.slotAt(sh, m.X, m.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
+				if m.Button == tea.MouseLeft || m.Button == tea.MouseRight {
 					s.mouseSlot = i
 				}
 				focus := s.focusSlot(i)
@@ -230,7 +234,7 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		} else if s.mouseSlot >= 0 {
 			i := s.mouseSlot
 			act := s.updateMouseSlot(sh, i, mm)
-			if mm.Action == tea.MouseActionRelease {
+			if isRelease {
 				s.mouseSlot = -1
 			}
 			return s, act
@@ -262,13 +266,32 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 // this subtracts, which it receives through PaneOriginer.
 func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {
 	r := s.slotRect(i)
-	mm.X -= r.x
-	mm.Y -= sh.BodyY() + r.y
 	if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
-		act, _ := u.UpdatePanel(sh, mm)
+		act, _ := u.UpdatePanel(sh, translateMouse(mm, r.x, sh.BodyY()+r.y))
 		return act
 	}
 	return core.Action{}
+}
+
+// translateMouse shifts a mouse message's position by (dx, dy), preserving its concrete
+// type so the receiving panel still reads a click as a click and a release as a release.
+// v2 keeps the coordinates on the concrete message rather than a shared struct behind an
+// Action field, so the shift is a rebuild per kind rather than two assignments.
+func translateMouse(mm tea.MouseMsg, dx, dy int) tea.Msg {
+	m := mm.Mouse()
+	m.X -= dx
+	m.Y -= dy
+	switch mm.(type) {
+	case tea.MouseClickMsg:
+		return tea.MouseClickMsg(m)
+	case tea.MouseReleaseMsg:
+		return tea.MouseReleaseMsg(m)
+	case tea.MouseWheelMsg:
+		return tea.MouseWheelMsg(m)
+	case tea.MouseMotionMsg:
+		return tea.MouseMotionMsg(m)
+	}
+	return mm
 }
 
 // Filtering keeps the router's global single-key shortcuts (O, q, [ ]) from

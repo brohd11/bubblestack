@@ -1,8 +1,8 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 // wrapperOutput reports the output pane when there is one and it can wrap.
@@ -53,7 +53,7 @@ func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Actio
 // (e.g. tea.Quit or an output-scroll cmd) — or (Action{}, false) to let the active
 // screen handle it. Pointer receiver: [ / ] mutate active/stack, which must persist
 // back to Update's router.
-func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
+func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 	k := msg.String()
 	if k == "ctrl+c" {
 		return r.quitAction(), true
@@ -124,15 +124,13 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 	// selection is the whole reason to press it.
 	if MatchKey(k, Keys.Mouse) {
 		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
+			// v2 has no enable/disable command: mouse reporting is a field on the
+			// tea.View the next render returns, which Router.View reads off mouseOn.
 			r.mouseOn = !r.mouseOn
 			if r.mouseOn {
-				act := SetStatus("mouse on · wheel scrolls")
-				act.Cmd = tea.EnableMouseCellMotion
-				return act, true
+				return SetStatus("mouse on · wheel scrolls"), true
 			}
-			act := SetStatus("mouse off · text selection on")
-			act.Cmd = tea.DisableMouse
-			return act, true
+			return SetStatus("mouse off · text selection on"), true
 		}
 	}
 
@@ -225,10 +223,16 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 // focusing would snap straight back. Focus already means "the user is reading rather
 // than tailing" here, so the wheel just says so — and the pane's border and legend
 // announce it, with O/esc returning as they do from a keyboard focus.
-func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
-	if msg.Action != tea.MouseActionPress {
+func (r *Router) mouse(mm tea.MouseMsg) (Action, bool) {
+	// v2 splits the old Action field into distinct message types. Only clicks and
+	// wheel notches are the router's business; motion and release fall through
+	// untouched to the active screen, which is what drives editor drag-select.
+	switch mm.(type) {
+	case tea.MouseClickMsg, tea.MouseWheelMsg:
+	default:
 		return Action{}, false
 	}
+	msg := mm.Mouse()
 	// A press aimed at the body returns output-pane focus to it: the pane grabs
 	// focus on wheel (below), and the keyboard has O/esc to come back — but a
 	// click or wheel over the body must release it too, or the pane keeps the
@@ -240,7 +244,7 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	// A left click on a breadcrumb segment pops the stack back to it — the mouse
 	// analog of hammering esc. Router-owned chrome, so it lives here with the
 	// output-pane wheel claim below.
-	if msg.Button == tea.MouseButtonLeft {
+	if msg.Button == tea.MouseLeft {
 		if act, ok := r.headerClick(msg.X, msg.Y); ok {
 			return act, true
 		}
@@ -257,7 +261,7 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 			return Action{}, true
 		}
 	}
-	if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
+	if msg.Button != tea.MouseWheelUp && msg.Button != tea.MouseWheelDown {
 		return Action{}, false
 	}
 	if !r.outputVisible() || r.currentMask().Output || !r.inOutput(msg.Y) {
@@ -265,7 +269,9 @@ func (r *Router) mouse(msg tea.MouseMsg) (Action, bool) {
 	}
 	ch := r.sh.Chrome
 	r.setOutputFocused(true)
-	return Async(ch.Output.Update(msg)), true
+	// The pane forwards to a bubbles viewport, which matches on the concrete message
+	// type — so it gets the original mm, not the flattened tea.Mouse used for hit-testing.
+	return Async(ch.Output.Update(mm)), true
 }
 
 // headerClick hit-tests a left click against the header box — the topmost chrome,

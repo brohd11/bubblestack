@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // Span is a run of text sharing one style — the unit a Highlighter answers with.

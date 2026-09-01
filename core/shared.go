@@ -1,8 +1,8 @@
 package core
 
 import (
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/spinner"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/spinner"
 )
 
 // Shared holds the cross-cutting state owned by the router: the consumer's own

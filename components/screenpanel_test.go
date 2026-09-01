@@ -5,7 +5,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // stubScreen is a minimal core.Screen recording its Init count, size, and render
@@ -174,7 +174,7 @@ func TestScreenPanelSwapSurvivesUpdate(t *testing.T) {
 	swap.name = "swapper"
 	p.SetChild(swap)
 
-	p.UpdatePanel(sh, tea.KeyMsg{Type: tea.KeyCtrlX})
+	p.UpdatePanel(sh, keyMsg("ctrl+x"))
 	if got := p.View(false); got != "replacement" {
 		t.Fatalf("the mid-update swap should survive, pane renders %q", got)
 	}

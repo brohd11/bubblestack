@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
+	"charm.land/bubbles/v2/list"
 )
 
 // SortMode selects the ordering of a data-backed list. It is a per-screen session

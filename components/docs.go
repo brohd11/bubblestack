@@ -7,8 +7,8 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -497,7 +497,7 @@ func quoteText(trimmed string) string {
 func (r *docRenderer) heading(rendered string) {
 	r.flush()
 	r.blank()
-	r.emit(ansi.Wrap(rendered, r.width, wrapBreaks))
+	r.emit(wrapText(rendered, r.width))
 }
 
 // flush wraps the accumulated block and empties it. An unclosed fence is also ended
@@ -554,7 +554,7 @@ func (r *docRenderer) block() string {
 	case r.marker != "":
 		return hang(r.marker, inline(joined), r.width)
 	}
-	return ansi.Wrap(inline(joined), r.width, wrapBreaks)
+	return wrapText(inline(joined), r.width)
 }
 
 // emitCode renders an accumulated fenced block through CodeBlockRenderer. The rows come
@@ -585,13 +585,43 @@ func (r *docRenderer) emitCode(lang string, code []string) {
 // rest of that row. Wrapping first is safe because styling adds no display cells, so
 // the break positions are identical either way; the cost is that an inline construct
 // straddling a break renders literally.
+// wrapText is ansi.Wrap plus the one correction it needs. When the token after a break
+// opens with a style, ansi.Wrap keeps the space before it at the END of the row rather
+// than dropping it, so the row measures one cell wider than the width it was given. The
+// space is invisible at a line end but the extra cell is not: a row wider than the pane
+// is clipped with nowhere to scroll to it. Every wrap in this file goes through here.
+//
+// lipgloss v1 hid this under `go test` — with no TTY it resolved the Ascii profile and
+// emitted no escapes at all, so the wrapped text was byte-clean and the bug only showed
+// in a real terminal. v2 renders styles verbatim, so it shows in both.
+func wrapText(text string, w int) string {
+	rows := strings.Split(ansi.Wrap(text, w, wrapBreaks), "\n")
+	for i, row := range rows {
+		if ansi.StringWidth(row) > w {
+			rows[i] = trimWrappedRow(row)
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// trailingSGR matches the style sequences ansi.Wrap can leave stranded at the end of a
+// wrapped row. lipgloss emits only SGR on this path.
+var trailingSGR = regexp.MustCompile(`(?:\x1b\[[0-9;]*m)+$`)
+
+// trimWrappedRow drops the trailing spaces sitting between a row's last visible
+// character and any style sequence stranded after it.
+func trimWrappedRow(row string) string {
+	tail := trailingSGR.FindString(row)
+	return strings.TrimRight(strings.TrimSuffix(row, tail), " ") + tail
+}
+
 func quoteBlock(text string, width int) string {
 	w := width - lipgloss.Width(quoteBar)
 	if w < 1 {
 		w = 1
 	}
 	bar := ruleStyle().Render(quoteBar)
-	rows := strings.Split(ansi.Wrap(text, w, wrapBreaks), "\n")
+	rows := strings.Split(wrapText(text, w), "\n")
 	for i, row := range rows {
 		rows[i] = bar + inlineOver(row, quoteTextStyle())
 	}
@@ -804,7 +834,7 @@ func tableWidths(t tableSpec, width int) []int {
 // profile inline emits no escapes at all, and an unconditional reset would put one on the
 // end of every plain row.
 func wrapCell(text string, w int, base lipgloss.Style) []string {
-	rows := strings.Split(ansi.Wrap(inlineOver(text, base), w, wrapBreaks), "\n")
+	rows := strings.Split(wrapText(inlineOver(text, base), w), "\n")
 	for i, row := range rows {
 		if strings.Contains(row, "\x1b") {
 			rows[i] = row + ansi.ResetStyle
@@ -934,7 +964,7 @@ func hang(marker, text string, width int) string {
 	if w < 1 {
 		w = 1
 	}
-	rows := strings.Split(ansi.Wrap(text, w, wrapBreaks), "\n")
+	rows := strings.Split(wrapText(text, w), "\n")
 	for i, row := range rows {
 		if i == 0 {
 			rows[i] = marker + row
@@ -1068,7 +1098,7 @@ func h1Style() lipgloss.Style {
 // whose accent is the terminal's own extreme (mono) would flatten all three into body
 // text. MarkdownAccent is the active theme's accent unless it borrows one.
 func headingStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Foreground(core.MarkdownAccent())
+	return lipgloss.NewStyle().Bold(true).Foreground(core.Resolve(core.MarkdownAccent()))
 }
 
 func boldStyle() lipgloss.Style {
@@ -1080,7 +1110,7 @@ func italicStyle() lipgloss.Style {
 }
 
 func linkStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Underline(true).Foreground(core.MarkdownAccent())
+	return lipgloss.NewStyle().Underline(true).Foreground(core.Resolve(core.MarkdownAccent()))
 }
 
 // subheadingStyle is every heading below "##": the same accent, dimmed one step (see
@@ -1089,7 +1119,7 @@ func linkStyle() lipgloss.Style {
 // theme's muted grey, which is what body-secondary text wears — a "###" read as
 // de-emphasized prose rather than as a heading ranking under its section.
 func subheadingStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Foreground(core.Dim(core.MarkdownAccent(), subheadingDim))
+	return lipgloss.NewStyle().Bold(true).Foreground(core.Resolve(core.Dim(core.MarkdownAccent(), subheadingDim)))
 }
 
 // subheadingDim is how far a subheading recedes: far enough that every preset accent
@@ -1109,8 +1139,8 @@ func codeStyle() lipgloss.Style {
 // terminal is not — the adaptive pattern core's neutral palette uses.
 func codeSpanStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(core.MarkdownAccent()).
-		Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"})
+		Foreground(core.Resolve(core.MarkdownAccent())).
+		Background(core.Resolve(core.Color{Light: 254, Dark: 236}))
 }
 
 // tableHeadStyle is a table's header row — the accent heading the "##" sections use, not a

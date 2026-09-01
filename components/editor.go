@@ -10,10 +10,10 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // EditorScreen is the simple nano-like text editor: it loads a file (or starts empty),
@@ -628,54 +628,96 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			s.insertText(m.text)
 		})
 		return s, core.SetStatus(fmt.Sprintf("pasted %d characters", utf8.RuneCountInString(m.text)))
-	case tea.KeyMsg:
+	// A bracketed terminal paste. v1 delivered it as a rune-bearing key with Paste
+	// set, so the whole key path had to keep guarding against reading a payload as
+	// typing; v2 gives it a message of its own, which lands here and shares the
+	// clipboard paste's insert — one undo step, selection replaced, no auto-pairing,
+	// and the extension key handler never sees it.
+	case tea.PasteMsg:
+		if s.confirmExit || m.Content == "" {
+			return s, core.Action{}
+		}
+		s.resetMouseGesture()
+		s.clickCount = 0
+		s.editAtomic(func() {
+			s.deleteSelection() // a no-op without a selection
+			s.insertText(m.Content)
+		})
+		return s, core.Action{}
+	case tea.KeyPressMsg:
 		return s.key(sh, m)
-	case tea.MouseMsg:
+	// v2 splits the old Action field into one message type per kind of event; the
+	// arms below are the same three cases in that shape.
+	case tea.MouseClickMsg:
 		if s.confirmExit {
 			return s, core.Action{}
 		}
-		switch m.Action {
-		case tea.MouseActionPress:
-			switch m.Button {
-			case tea.MouseButtonLeft:
-				if s.searchBarHit(sh, m.X, m.Y) {
-					s.resetMouseGesture()
-					s.clickCount = 0
-					return s, core.Push(s.buildSearchEdit(sh, false))
-				}
-				if editorExtendClick(m) {
-					s.extendSelectionTo(sh, m.X, m.Y)
-				} else {
-					s.pressSelection(sh, m.X, m.Y, time.Now())
-				}
-			case tea.MouseButtonRight:
-				if s.contextMenu {
-					return s, s.pressContext(sh, m.X, m.Y)
-				}
-			case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown,
-				tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
-				// The wheel is browse-only and only while focused: mouse msgs are
-				// broadcast to every pane, so an unfocused editor must not roll.
-				if s.focused {
-					s.wheel(m)
-				}
+		mm := m.Mouse()
+		switch mm.Button {
+		case tea.MouseLeft:
+			if s.searchBarHit(sh, mm.X, mm.Y) {
+				s.resetMouseGesture()
+				s.clickCount = 0
+				return s, core.Push(s.buildSearchEdit(sh, false))
 			}
-		// A drag is the only state motion and release can act on now that the left button
-		// is the only one that starts a gesture. Neither ever arrives while the context
-		// menu is up: the menu is the top screen, and it consumes every message.
-		case tea.MouseActionMotion:
-			if s.dragging {
-				s.extendDrag(sh, m.X, m.Y)
+			if editorExtendClick(mm) {
+				s.extendSelectionTo(sh, mm.X, mm.Y)
+			} else {
+				s.pressSelection(sh, mm.X, mm.Y, time.Now())
 			}
-		case tea.MouseActionRelease:
-			if s.dragging {
-				s.extendDrag(sh, m.X, m.Y)
+		case tea.MouseRight:
+			if s.contextMenu {
+				return s, s.pressContext(sh, mm.X, mm.Y)
 			}
-			s.resetMouseGesture()
 		}
+		return s, core.Action{}
+	case tea.MouseWheelMsg:
+		if s.confirmExit {
+			return s, core.Action{}
+		}
+		// The wheel is browse-only and only while focused: mouse msgs are
+		// broadcast to every pane, so an unfocused editor must not roll.
+		if s.focused {
+			s.wheel(m.Mouse())
+		}
+		return s, core.Action{}
+	// A drag is the only state motion and release can act on now that the left button
+	// is the only one that starts a gesture. Neither ever arrives while the context
+	// menu is up: the menu is the top screen, and it consumes every message.
+	case tea.MouseMotionMsg:
+		if s.confirmExit {
+			return s, core.Action{}
+		}
+		if s.dragging {
+			mm := m.Mouse()
+			s.extendDrag(sh, mm.X, mm.Y)
+		}
+		return s, core.Action{}
+	case tea.MouseReleaseMsg:
+		if s.confirmExit {
+			return s, core.Action{}
+		}
+		if s.dragging {
+			mm := m.Mouse()
+			s.extendDrag(sh, mm.X, mm.Y)
+		}
+		s.resetMouseGesture()
 		return s, core.Action{}
 	}
 	return s, core.Action{}
+}
+
+// editorTypedRune reports the single printable rune a key press typed, and false for
+// anything else. v2 populates Key.Text only for keys that stand for printable
+// characters — never for special keys or modifier combos — so it replaces v1's
+// len(Runes) == 1 && !Alt idiom outright. A bracketed paste can no longer reach here
+// carrying a whole payload either: v2 delivers it as tea.PasteMsg.
+func editorTypedRune(m tea.KeyPressMsg) (rune, bool) {
+	r := []rune(m.Text)
+	if len(r) != 1 {
+		return 0, false
+	}
+	return r[0], true
 }
 
 // editorExtendClick reports whether a left press EXTENDS the selection rather than
@@ -684,12 +726,12 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 // selection (the same fact that put the wheel's sideways mode on alt — see wheel), so on
 // many terminals this press never reaches us at all. If that proves too many of them,
 // moving the gesture to alt is this line and nothing else.
-func editorExtendClick(m tea.MouseMsg) bool { return m.Shift }
+func editorExtendClick(m tea.Mouse) bool { return m.Mod.Contains(tea.ModShift) }
 
 // copySelectionCmd is the clipboard write the menu's Copy and Cut rows issue. The write
 // travels in the cmd lane because atotto shells out to pbcopy/xclip, which must never run
 // inside Update.
-func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Action) {
+func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Action) {
 	k := m.String()
 	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
@@ -755,9 +797,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 	// Wrapping the selection has to be decided before the pre-pass below, which deletes
 	// the selection for every rune-bearing key. The undo gate above has already taken its
 	// snapshot (a rune key is always an edit key), so both insertions land in one step.
-	if s.selectionActive() && len(m.Runes) == 1 && !m.Alt {
-		if closer, ok := editorPairs[m.Runes[0]]; ok {
-			s.surroundSelection(m.Runes[0], closer)
+	if r, typed := editorTypedRune(m); typed && s.selectionActive() {
+		if closer, ok := editorPairs[r]; ok {
+			s.surroundSelection(r, closer)
 			s.wrapDirty = true
 			s.clampScroll()
 			return s, core.Action{}
@@ -789,7 +831,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
 			s.clearSelection()
 		default:
-			if len(m.Runes) > 0 && !m.Alt {
+			if m.Text != "" {
 				s.deleteSelection()
 			}
 		}
@@ -863,9 +905,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		// A single typed opening delimiter brings its closer with it and leaves the caret
 		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
 		// the whole payload) on the insertText path below.
-		if len(m.Runes) == 1 && !m.Alt {
-			if closer, ok := editorPairs[m.Runes[0]]; ok && !selectionOnlyPairRune(m.Runes[0]) {
-				s.insertRunes(m.Runes[0], closer)
+		if r, typed := editorTypedRune(m); typed {
+			if closer, ok := editorPairs[r]; ok && !selectionOnlyPairRune(r) {
+				s.insertRunes(r, closer)
 				s.curX--
 				s.wantX = s.curX
 				break
@@ -876,8 +918,8 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyMsg) (core.Screen, core.Act
 		// insertRunes. Unknown Alt runes are control chords, never text — besides avoiding
 		// accidental chord insertion, that is the editor-side guard against a truncated
 		// terminal escape sequence reaching a screen outside bubblestack.Run's filter.
-		if len(m.Runes) > 0 && !m.Alt {
-			s.insertText(string(m.Runes))
+		if m.Text != "" {
+			s.insertText(m.Text)
 		}
 	}
 	s.wrapDirty = true

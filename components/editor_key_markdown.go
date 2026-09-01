@@ -1,6 +1,6 @@
 package components
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 func init() {
 	registerEditorKeyHandler(markdownEditorKey, ".md", ".markdown")
@@ -9,7 +9,7 @@ func init() {
 // markdownEditorKey continues dash list items, preserving their exact indentation.
 // It intentionally recognizes no other marker and keeps an empty item going: list
 // termination and the other Markdown list forms are outside this first behavior.
-func markdownEditorKey(s *EditorScreen, msg tea.KeyMsg) bool {
+func markdownEditorKey(s *EditorScreen, msg tea.KeyPressMsg) bool {
 	if msg.String() != "enter" {
 		return false
 	}

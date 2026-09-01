@@ -1,6 +1,7 @@
 package components
 
 import (
+	"image/color"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -9,10 +10,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -291,9 +291,7 @@ func TestFilePanelClickSelects(t *testing.T) {
 		if !ok {
 			t.Fatalf("compact=%v: row %d should be on-page", compact, idx)
 		}
-		p.UpdatePanel(sh, tea.MouseMsg{
-			Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: y,
-		})
+		p.UpdatePanel(sh, tea.MouseClickMsg{Y: y, Button: tea.MouseLeft})
 		if opened != "alpha.txt" {
 			t.Fatalf("compact=%v: click at row %d opened %q, want alpha.txt", compact, y, opened)
 		}
@@ -546,7 +544,7 @@ func TestFilePanelRowColors(t *testing.T) {
 	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true, Colors: true})
 	p.SetSize(30, 12)
 
-	got := map[string]lipgloss.TerminalColor{}
+	got := map[string]color.Color{}
 	for _, it := range p.List().VisibleItems() {
 		fi, ok := it.(fileItem)
 		if !ok {
@@ -590,20 +588,22 @@ func TestFilePanelRowColors(t *testing.T) {
 // here as a mismatch, whatever the frame, the truncation or the marquee did with it.
 func TestFilePanelColorIsStyleOnly(t *testing.T) {
 	root := colorTree(t)
-	build := func() string {
-		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true, Colors: true})
+	build := func(colors bool) string {
+		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true, Colors: colors})
 		p.SetSize(24, 12) // narrow enough that names truncate
 		return p.View(false)
 	}
-	plain := build() // no TTY under `go test`: the Ascii profile drops every color
-	withColor(t)
-	colored := build()
+	// lipgloss v2 renders styles verbatim — downsampling moved to the output layer, so
+	// there is no color profile to flip a single render between plain and styled. The
+	// claim is the same one either way: the type color is style, so an opted-in panel
+	// and an opted-out one draw the same cells and differ only in the escapes.
+	colored, plain := build(true), build(false)
 
 	if colored == plain {
 		t.Fatal("a listing of dirs, dotfiles and source files should print some color")
 	}
-	if ansi.Strip(colored) != plain {
-		t.Fatalf("color must not change what the panel draws:\n%q\n%q", ansi.Strip(colored), plain)
+	if ansi.Strip(colored) != ansi.Strip(plain) {
+		t.Fatalf("color must not change what the panel draws:\n%q\n%q", ansi.Strip(colored), ansi.Strip(plain))
 	}
 }
 
@@ -634,7 +634,6 @@ func TestFilePanelColorsAreOptIn(t *testing.T) {
 	// panel over the same directory rather than against an uncolored render of this one:
 	// the frame, the cursor accent and the muted size column are color too, so "prints no
 	// escape codes" was never the claim — "prints no file-type color" is.
-	withColor(t)
 	off := build().View(false)
 	on := func() string {
 		p := NewFilePanel(FilePanelOpts{Dir: root, Compact: true, Border: true, Colors: true})
@@ -795,8 +794,8 @@ func TestFilePanelSymlinkedDirStaysSymlinkColored(t *testing.T) {
 // ---------- mouse buttons ----------
 
 // rowPress is a mouse press on panel-relative row y with the given button.
-func rowPress(y int, button tea.MouseButton) tea.MouseMsg {
-	return tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: 5, Y: y}
+func rowPress(y int, button tea.MouseButton) tea.MouseClickMsg {
+	return tea.MouseClickMsg{X: 5, Y: y, Button: button}
 }
 
 // clickRow presses button over the row titled name, which must be on-page.
@@ -841,7 +840,7 @@ func TestLeftClickWalksIntoDirectory(t *testing.T) {
 	var opened, menued string
 	p, sh := mousePanel(t, root, &opened, &menued)
 
-	clickRow(t, p, sh, "sub/", tea.MouseButtonLeft)
+	clickRow(t, p, sh, "sub/", tea.MouseLeft)
 	if menued != "" {
 		t.Fatalf("a left click must not raise the host's folder menu (got %q)", menued)
 	}
@@ -857,7 +856,7 @@ func TestRightClickIsEnter(t *testing.T) {
 	var opened, menued string
 	p, sh := mousePanel(t, root, &opened, &menued)
 
-	clickRow(t, p, sh, "sub/", tea.MouseButtonRight)
+	clickRow(t, p, sh, "sub/", tea.MouseRight)
 	if menued != "sub" {
 		t.Fatalf("a right click should reach OnOpenDir, got %q", menued)
 	}
@@ -873,7 +872,7 @@ func TestClickOnFileOpensEitherButton(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		button tea.MouseButton
-	}{{"left", tea.MouseButtonLeft}, {"right", tea.MouseButtonRight}} {
+	}{{"left", tea.MouseLeft}, {"right", tea.MouseRight}} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := fileTree(t)
 			var opened, menued string
@@ -899,7 +898,7 @@ func TestRightClickSelectsTheRowItLandsOn(t *testing.T) {
 	p, sh := mousePanel(t, root, &opened, &menued)
 
 	p.List().Select(0)
-	clickRow(t, p, sh, "alpha.txt", tea.MouseButtonRight)
+	clickRow(t, p, sh, "alpha.txt", tea.MouseRight)
 	if sel, _ := p.Selected(); sel.Name != "alpha.txt" {
 		t.Fatalf("the cursor should be on the clicked row, got %q", sel.Name)
 	}
@@ -911,7 +910,7 @@ func TestRightClickSelectsTheRowItLandsOn(t *testing.T) {
 func TestClickOnUpRowWalksUp(t *testing.T) {
 	root := fileTree(t)
 	sh := core.NewShared(nil)
-	for _, button := range []tea.MouseButton{tea.MouseButtonLeft, tea.MouseButtonRight} {
+	for _, button := range []tea.MouseButton{tea.MouseLeft, tea.MouseRight} {
 		p := NewFilePanel(FilePanelOpts{
 			Dir: filepath.Join(root, "sub"), Compact: true,
 			OnOpenDir: func(_ *core.Shared, e FileEntry) (core.Action, bool) {

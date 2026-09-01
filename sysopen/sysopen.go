@@ -21,7 +21,7 @@ import (
 	"github.com/brohd11/goutil/shellquote"
 	goutilsysopen "github.com/brohd11/goutil/sysopen"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // start runs cmd detached and reports the failure on the status line rather than

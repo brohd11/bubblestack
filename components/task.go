@@ -6,8 +6,8 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
 // RunFunc executes a streaming background task: report() pipes progress lines into
@@ -99,7 +99,7 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 		// reloads another tab), so returning s keeps the screen on top.
 		return s, act
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		k := msg.String()
 		// While the task is still running, esc requests an abort: cancel the run's
 		// context and wait for its terminating event (handled above) to unwind it.
@@ -114,12 +114,12 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 			return s.dismiss(sh)
 		}
 
-	case tea.MouseMsg:
+	case tea.MouseClickMsg:
 		// A click dismisses a finished task, the same as esc/enter — a done task
 		// is a dead end whose only moves are exits. Clicks while it runs do
 		// nothing: aborting work is esc's job, and a click that cancelled would
 		// be a landmine.
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft &&
+		if msg.Button == tea.MouseLeft &&
 			s.done && (s.aborting || s.stay) {
 			return s.dismiss(sh)
 		}

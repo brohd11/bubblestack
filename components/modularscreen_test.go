@@ -6,10 +6,10 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // shortPanel renders exactly h rows no matter what height it is allocated —
@@ -122,7 +122,7 @@ func TestCaptureFollowsFocus(t *testing.T) {
 	sh := core.NewShared(nil)
 	m.SetSize(sh, 80, 20)
 	m.View(sh)
-	key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")}
+	key := keyMsg("a")
 
 	m.Update(sh, key)
 	if len(form.got) != 1 {
@@ -153,7 +153,7 @@ func TestCaptureFollowsFocus(t *testing.T) {
 
 func TestMouseDragStaysWithOriginatingPane(t *testing.T) {
 	for name, button := range map[string]tea.MouseButton{
-		"left": tea.MouseButtonLeft, "right": tea.MouseButtonRight,
+		"left": tea.MouseLeft, "right": tea.MouseRight,
 	} {
 		t.Run(name, func(t *testing.T) {
 			left, right := &capturePanel{}, &capturePanel{}
@@ -165,16 +165,16 @@ func TestMouseDragStaysWithOriginatingPane(t *testing.T) {
 			m.SetSize(sh, 20, 5)
 			m.View(sh)
 
-			m.Update(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: 0, Y: 0})
-			m.Update(sh, tea.MouseMsg{Action: tea.MouseActionMotion, Button: button, X: 15, Y: 0})
-			m.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 16, Y: 0})
+			m.Update(sh, tea.MouseClickMsg{X: 0, Y: 0, Button: button})
+			m.Update(sh, tea.MouseMotionMsg{X: 15, Y: 0, Button: button})
+			m.Update(sh, tea.MouseReleaseMsg{X: 16, Y: 0, Button: tea.MouseNone})
 			if len(left.got) != 3 {
 				t.Fatalf("originating pane received %d events, want press/motion/release", len(left.got))
 			}
 			if len(right.got) != 0 {
 				t.Fatalf("the pane crossed during a drag received %d events, want none", len(right.got))
 			}
-			motion := left.got[1].(tea.MouseMsg)
+			motion := left.got[1].(tea.MouseMotionMsg)
 			if motion.X != 15 {
 				t.Fatalf("motion x = %d, want coordinates relative to the originating pane", motion.X)
 			}
@@ -196,10 +196,10 @@ func paneKey(t *testing.T, b key.Binding) tea.KeyMsg {
 	}
 	switch k := b.Keys()[0]; k {
 	case "shift+tab":
-		return tea.KeyMsg{Type: tea.KeyShiftTab}
+		return keyMsg("shift+tab")
 	default:
-		t.Fatalf("no tea.KeyType mapping for pane key %q", k)
-		return tea.KeyMsg{}
+		t.Fatalf("no keystroke mapping for pane key %q", k)
+		return tea.KeyPressMsg{}
 	}
 }
 
@@ -266,7 +266,7 @@ func TestPaneCycleOnShiftTab(t *testing.T) {
 	sh := core.NewShared(nil)
 	m.SetSize(sh, 80, 20)
 
-	tab := tea.KeyMsg{Type: tea.KeyShiftTab}
+	tab := keyMsg("shift+tab")
 	for i, want := range []int{1, 2, 0} {
 		m.Update(sh, tab)
 		if m.focus != want {
@@ -279,7 +279,7 @@ func TestPaneCycleOnShiftTab(t *testing.T) {
 	}
 	// The editor still owns everything that isn't a pane key.
 	m.focusSlot(1)
-	m.Update(sh, tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(sh, keyMsg("tab"))
 	if len(editor.got) != 1 {
 		t.Fatal("bare tab must still reach the capturing panel")
 	}
@@ -348,7 +348,7 @@ func TestPaneNavEscapesCapturingPanel(t *testing.T) {
 	m.SetSize(sh, 80, 20)
 
 	m.focusSlot(1)
-	m.Update(sh, tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(sh, keyMsg("tab"))
 	if len(editor.got) != 1 {
 		t.Fatal("tab is the panel's key now: a capturing panel must receive it")
 	}
@@ -620,7 +620,7 @@ func TestFocusNotifierOnMousePress(t *testing.T) {
 	sh := core.NewShared(nil)
 	m.SetSize(sh, 80, 20)
 
-	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 60, Y: 5}
+	press := tea.MouseClickMsg{X: 60, Y: 5, Button: tea.MouseLeft}
 	_, act := m.Update(sh, press)
 	if m.focus != 1 {
 		t.Fatalf("a press in the second pane should focus it, got %d", m.focus)

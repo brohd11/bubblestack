@@ -6,7 +6,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // fetchResult is a stand-in for a caller's fetch message (releasesMsg / branchesMsg).

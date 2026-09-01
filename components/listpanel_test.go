@@ -7,9 +7,9 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -31,7 +31,7 @@ func TestListPanelBorder(t *testing.T) {
 		t.Fatal("a bordered panel should hide the list's own title bar")
 	}
 	v := p.View(false)
-	if !strings.HasPrefix(v, "┌─ Docs ") {
+	if !strings.HasPrefix(ansi.Strip(v), "┌─ Docs ") {
 		t.Fatalf("bordered View should open with the title legend, got %q", strings.SplitN(v, "\n", 2)[0])
 	}
 	if w := lipgloss.Width(v); w != 30 {
@@ -78,7 +78,7 @@ func TestListPanelFocusTint(t *testing.T) {
 		lipgloss.Height(focused) != lipgloss.Height(blurred) {
 		t.Fatal("focus must not change the framed panel's footprint")
 	}
-	if !strings.HasPrefix(focused, "┌─ Docs ") {
+	if !strings.HasPrefix(ansi.Strip(focused), "┌─ Docs ") {
 		t.Fatal("the legend should survive the focused tint")
 	}
 }
@@ -119,7 +119,7 @@ func TestCompactListPanelRowsAndPagination(t *testing.T) {
 	}
 	p.List().ResetFilter()
 	p.sizeList()
-	if v := p.View(false); !strings.Contains(v, "doc0.md  notes/") {
+	if v := p.View(false); !strings.Contains(ansi.Strip(v), "doc0.md  notes/") {
 		t.Fatalf("compact row should place suffix on the title line, got:\n%s", v)
 	}
 }
@@ -255,7 +255,7 @@ func TestListPanelClampsOvertallList(t *testing.T) {
 	if got := lipgloss.Height(v); got != height {
 		t.Fatalf("clamped panel rendered %d rows, want %d", got, height)
 	}
-	if !strings.HasPrefix(v, "┌─ Docs ") {
+	if !strings.HasPrefix(ansi.Strip(v), "┌─ Docs ") {
 		t.Fatal("height clamping must preserve the panel's top edge")
 	}
 }
@@ -263,7 +263,7 @@ func TestListPanelClampsOvertallList(t *testing.T) {
 func TestBorderedListPanelMouseRows(t *testing.T) {
 	sh := core.NewShared(nil)
 	click := func(y int) tea.MouseMsg {
-		return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: y}
+		return tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseLeft}
 	}
 
 	t.Run("compact", func(t *testing.T) {
@@ -429,7 +429,7 @@ func TestCompactPanelFilterLine(t *testing.T) {
 	}
 	// The prompt keeps the color bubbles gives it — that yellow is what makes the line
 	// read as a filter rather than as a row.
-	if !strings.Contains(p.filterLine(), l.FilterInput.PromptStyle.Render(l.FilterInput.Prompt)) {
+	if !strings.Contains(p.filterLine(), l.FilterInput.Styles().Blurred.Prompt.Render(l.FilterInput.Prompt)) {
 		t.Error("the applied line should carry the filter prompt's own styling")
 	}
 }
@@ -511,9 +511,7 @@ func TestCompactPanelRowY(t *testing.T) {
 				t.Fatalf("%s: item %d has no row", label, i)
 			}
 			picked = ""
-			p.UpdatePanel(sh, tea.MouseMsg{
-				Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: row,
-			})
+			p.UpdatePanel(sh, tea.MouseClickMsg{X: 5, Y: row, Button: tea.MouseLeft})
 			if want := item.(compactTestItem).title; picked != want {
 				t.Fatalf("%s: RowY(%d) = %d selects %q, want %q", label, i, row, picked, want)
 			}
@@ -707,7 +705,7 @@ func TestMarqueeResetsOnCursorMove(t *testing.T) {
 	}
 
 	p.List().Select(1) // the short row
-	p.UpdatePanel(core.NewShared(nil), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	p.UpdatePanel(core.NewShared(nil), keyMsg("z"))
 	if p.marquee != 0 {
 		t.Fatalf("a cursor move should restart the row from its left edge, got %d", p.marquee)
 	}
@@ -814,7 +812,7 @@ func TestListPanelIgnoresRightClickWithoutHook(t *testing.T) {
 	if !ok {
 		t.Fatal("row 2 should be on-page")
 	}
-	p.UpdatePanel(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 5, Y: y})
+	p.UpdatePanel(sh, tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseRight})
 	if picked != "" {
 		t.Fatalf("a right click must not select on a list with no OnPointer (picked %q)", picked)
 	}
@@ -823,7 +821,7 @@ func TestListPanelIgnoresRightClickWithoutHook(t *testing.T) {
 	}
 
 	// The left button is untouched by the same change.
-	p.UpdatePanel(sh, tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: y})
+	p.UpdatePanel(sh, tea.MouseClickMsg{X: 5, Y: y, Button: tea.MouseLeft})
 	if picked != "three" {
 		t.Fatalf("a left click should still be enter, picked %q", picked)
 	}

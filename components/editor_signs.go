@@ -1,6 +1,6 @@
 package components
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // The sign column: one decorated cell per buffer line, left of the line numbers.
 //

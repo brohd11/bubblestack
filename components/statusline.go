@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // StatusLine is the default core.Status: a transient, themed one-liner the router draws

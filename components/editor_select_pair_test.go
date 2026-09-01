@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestEditorWordBoundsAt(t *testing.T) {
@@ -95,13 +95,13 @@ func TestEditorLeftDoubleClickSurvivesReleaseWithoutCopy(t *testing.T) {
 	writeEditorClipboard = func(text string) error { copied = text; return nil }
 	y := s.titleH()
 
-	down := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: y}
+	down := tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft}
 	s.Update(sh, down)
 	_, act := s.Update(sh, down)
 	if act.Cmd != nil || copied != "" {
 		t.Fatal("a left double click should select without copying")
 	}
-	s.Update(sh, tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonNone, X: 1, Y: y})
+	s.Update(sh, tea.MouseReleaseMsg{X: 1, Y: y, Button: tea.MouseNone})
 	if !s.selectionActive() || s.selectedText() != "foo" {
 		t.Fatalf("the release cleared the word selection: active=%v text=%q", s.selectionActive(), s.selectedText())
 	}
@@ -114,7 +114,7 @@ func TestEditorRightPressNeverMultiSelects(t *testing.T) {
 	s, sh := newEditor(EditorOpts{ContextMenu: true})
 	s.setContent("foo bar\nnext")
 	y := s.titleH()
-	down := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 1, Y: y}
+	down := tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseRight}
 
 	for i := 0; i < 3; i++ {
 		if _, act := s.Update(sh, down); act.Msg == nil {
@@ -224,7 +224,7 @@ func TestEditorSurroundIsOneUndoStepEach(t *testing.T) {
 	if len(s.undoStack) != 2 {
 		t.Fatalf("undo stack has %d entries, want one per wrap", len(s.undoStack))
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlZ})
+	s.key(nil, keyMsg("ctrl+z"))
 	if got := buffer(s); got != "a(bcd)ef" {
 		t.Fatalf("after undo = %q, want one wrap removed: %q", got, "a(bcd)ef")
 	}
@@ -318,7 +318,7 @@ func TestEditorAutoPair(t *testing.T) {
 
 func TestEditorAutoPairLeavesPasteAlone(t *testing.T) {
 	s, _ := newEditor(EditorOpts{Path: "x.go"})
-	s.key(nil, tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("f(a, b)")})
+	s.Update(nil, tea.PasteMsg{Content: "f(a, b)"})
 	if got := buffer(s); got != "f(a, b)" {
 		t.Fatalf("pasted %q, want it verbatim with no added closers", got)
 	}
@@ -330,7 +330,7 @@ func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
 	if len(s.undoStack) != 1 {
 		t.Fatalf("undo stack has %d entries, want 1 for the pair", len(s.undoStack))
 	}
-	s.key(nil, tea.KeyMsg{Type: tea.KeyCtrlZ})
+	s.key(nil, keyMsg("ctrl+z"))
 	if got := buffer(s); got != "" {
 		t.Fatalf("undo left %q, want the pair fully removed", got)
 	}

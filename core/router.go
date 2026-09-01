@@ -3,8 +3,8 @@ package core
 import (
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 )
 
 // statusClearDelay is how long a status line stays up after the most recent write
@@ -126,7 +126,10 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// the output-pane focus/scroll mode, and O/c (gated by the active screen's
 	// filter so they don't steal filter keystrokes). globalKey returns an Action whose
 	// control message is resolved inline and whose async cmd (e.g. tea.Quit) is queued.
-	if key, ok := msg.(tea.KeyMsg); ok {
+	// KeyPressMsg, not the tea.KeyMsg interface: in v2 that interface also covers key
+	// RELEASES, which a terminal negotiating keyboard enhancements will send. Matching
+	// it would fire every binding twice.
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		if act, handled := r.globalKey(key); handled {
 			r.apply(act, &cmds)
 			r.resize()
@@ -147,6 +150,18 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		// The terminal answering the OSC 11 query is what tells the adaptive palette
+		// which half of each Color pair to use. v1 asked synchronously through a
+		// process-global cache in lipgloss; v2 delivers it here, so the palette is
+		// re-resolved and every derived style rebuilt against the real answer.
+		if SetBackgroundIsDark(msg.IsDark()) {
+			// Same repaint a theme switch takes: the cached tab roots have already
+			// baked delegate/list styles from the old resolution.
+			r.apply(RefreshRoots(), &cmds)
+		}
+		return r, tea.Batch(cmds...)
+
 	case tea.WindowSizeMsg:
 		r.sh.width, r.sh.height = msg.Width, msg.Height
 		r.resize()

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
+	"charm.land/bubbles/v2/key"
 )
 
 // KeyMap is the single source of truth for every keybinding in the TUI. Each
@@ -178,11 +178,12 @@ var Keys = KeyMap{
 	// shift+tab here is the pushed-form binding; a form living in a ModularScreen pane
 	// loses it to PaneNext (see above) and moves fields on ↑/↓.
 	PrevField: key.NewBinding(key.WithKeys("up", "shift+tab")),
-	// Space is " " as a key string: bubbletea normalizes a bare space rune to KeySpace,
-	// whose name is " " (key.go, keyNames). It only ever reaches a form's keybind switch
-	// on a non-text field — components.QueryUpdate diverts KeySpace into a focused text
-	// field before the switch runs.
-	Toggle: key.NewBinding(key.WithKeys(" ")),
+	// Space is "space" as a key string: v2's Key.String() answers the key's text except
+	// for a bare space, which falls through to Keystroke() and names itself. (v1 called
+	// it " ".) It only ever reaches a form's keybind switch on a non-text field —
+	// components.QueryUpdate diverts a printable key into a focused text field before
+	// the switch runs, and a space is printable.
+	Toggle: key.NewBinding(key.WithKeys("space")),
 
 	PageNext: key.NewBinding(key.WithKeys("'", "3")),
 	PagePrev: key.NewBinding(key.WithKeys(";", "2")),
@@ -226,8 +227,6 @@ func prettyKey(k string) string {
 		return "⇧→"
 	case "shift+tab":
 		return "⇧tab"
-	case " ":
-		return "space" // a literal blank would render as a help entry with no key
 	default:
 		return k
 	}

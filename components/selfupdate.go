@@ -7,7 +7,7 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // This file holds the shared self-update TUI flow, extracted from two near-identical

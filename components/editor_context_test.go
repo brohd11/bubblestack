@@ -7,14 +7,14 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 var errFakeClipboard = errors.New("no clipboard")
 
 // rightPress is the gesture under test throughout this file.
 func rightPress(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: x, Y: y}
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseRight}
 }
 
 // stubClipboard swaps both clipboard seams for the duration of one test and returns a

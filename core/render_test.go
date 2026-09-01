@@ -1,14 +1,14 @@
 package core
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
 
 func TestTruncLeft(t *testing.T) {
@@ -169,10 +169,6 @@ func (renderListItem) Description() string   { return "" }
 func (i renderListItem) FilterValue() string { return string(i) }
 
 func TestRenderListKeepsAppliedFilterInTitle(t *testing.T) {
-	prevProfile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prevProfile) })
-
 	const title = "Repos — A→Z"
 	l := NewSelectList([]list.Item{renderListItem("alpha"), renderListItem("beta")}, title)
 	l.SetSize(40, 8)
@@ -185,7 +181,7 @@ func TestRenderListKeepsAppliedFilterInTitle(t *testing.T) {
 	if l.FilterState() != list.FilterApplied {
 		t.Fatalf("setup: filter state = %v, want applied", l.FilterState())
 	}
-	filter := l.FilterInput.PromptStyle.Render(l.FilterInput.Prompt) + "alp"
+	filter := l.FilterInput.Styles().Blurred.Prompt.Render(l.FilterInput.Prompt) + "alp"
 	if got := RenderFilter(&l); got != filter {
 		t.Fatalf("applied filter rendering = %q, want prompt-only styling %q", got, filter)
 	}
@@ -313,10 +309,10 @@ func TestCompactMarqueeRender(t *testing.T) {
 	// Offset 0 shows the name from its start; the last offset has scrolled far enough
 	// that the whole suffix — the thing the static fit used to drop — is on screen.
 	zero := 0
-	if first := renderCompact(t, &zero, width, item); !strings.Contains(first, "architecture-notes.md") {
+	if first := renderCompact(t, &zero, width, item); !strings.Contains(ansi.Strip(first), "architecture-notes.md") {
 		t.Errorf("offset 0 should show the name from its left edge, got %q", first)
 	}
-	if last := renderCompact(t, &maxOff, width, item); !strings.HasSuffix(last, "design/deep/") {
+	if last := renderCompact(t, &maxOff, width, item); !strings.HasSuffix(ansi.Strip(last), "design/deep/") {
 		t.Errorf("last offset should end on the full suffix, got %q", last)
 	}
 }
@@ -420,20 +416,10 @@ func TestCompactMarkPinnedUnderMarquee(t *testing.T) {
 // coloredItem is a compact row that names its own foreground.
 type coloredItem struct {
 	marqueeItem
-	color lipgloss.TerminalColor
+	color color.Color
 }
 
-func (i coloredItem) TitleColor() lipgloss.TerminalColor { return i.color }
-
-// withColorProfile forces a real color profile for one test. Under `go test` stdout is not
-// a TTY, so lipgloss resolves the Ascii profile and drops every Foreground — which would
-// make a colored row and a plain one byte-identical and these assertions vacuous.
-func withColorProfile(t *testing.T) {
-	t.Helper()
-	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
-}
+func (i coloredItem) TitleColor() color.Color { return i.color }
 
 // renderCompactRow renders one row of a compact list by index, so a test can look at a row
 // that is NOT the cursor (renderCompact always draws row 0, which is the selected one).
@@ -449,7 +435,6 @@ func renderCompactRow(t *testing.T, index, width int, items ...list.Item) string
 // TestCompactColorItem: an unselected ColorItem row is drawn in its own color, and the row
 // text is untouched — only the style changed, so nothing about the width math moved.
 func TestCompactColorItem(t *testing.T) {
-	withColorProfile(t)
 	plain := marqueeItem{title: "notes.md"}
 	items := []list.Item{marqueeItem{title: "first"}, plain, coloredItem{marqueeItem: plain, color: lipgloss.Color("12")}}
 
@@ -469,7 +454,6 @@ func TestCompactColorItem(t *testing.T) {
 // TestCompactColorItemNilIsPlain: a ColorItem answering nil is exactly an uncolored row —
 // the "ordinary file keeps the terminal's foreground" case.
 func TestCompactColorItemNilIsPlain(t *testing.T) {
-	withColorProfile(t)
 	plain := marqueeItem{title: "notes.md"}
 	items := []list.Item{marqueeItem{title: "first"}, plain, coloredItem{marqueeItem: plain}}
 	if renderCompactRow(t, 1, 30, items...) != renderCompactRow(t, 2, 30, items...) {
@@ -481,7 +465,6 @@ func TestCompactColorItemNilIsPlain(t *testing.T) {
 // type color says. A listing whose selected row could be any of ten colors is a listing
 // with no cursor.
 func TestCompactSelectionOutranksColor(t *testing.T) {
-	withColorProfile(t)
 	plain := marqueeItem{title: "notes.md"}
 	items := []list.Item{plain, coloredItem{marqueeItem: plain, color: lipgloss.Color("12")}}
 
@@ -499,7 +482,6 @@ func TestCompactSelectionOutranksColor(t *testing.T) {
 // TestColorDelegateRow: the three-row delegate colors an unselected ColorItem row too, and
 // leaves the selected one to the accent.
 func TestColorDelegateRow(t *testing.T) {
-	withColorProfile(t)
 	plain := renderListItem("notes.md")
 	items := []list.Item{renderListItem("first"), plain, coloredListItem{renderListItem: plain, color: lipgloss.Color("12")}}
 
@@ -527,7 +509,7 @@ func TestColorDelegateRow(t *testing.T) {
 
 type coloredListItem struct {
 	renderListItem
-	color lipgloss.TerminalColor
+	color color.Color
 }
 
-func (i coloredListItem) TitleColor() lipgloss.TerminalColor { return i.color }
+func (i coloredListItem) TitleColor() color.Color { return i.color }

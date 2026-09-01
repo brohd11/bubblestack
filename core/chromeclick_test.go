@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // chromeMaskScreen is a stubScreen that suppresses chrome elements, so a click aimed at

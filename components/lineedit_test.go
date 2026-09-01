@@ -6,10 +6,8 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/bubbles/v2/key"
+	"charm.land/lipgloss/v2"
 )
 
 func newLineEdit(width int) (*LineEditScreen, *core.Shared) {
@@ -38,29 +36,29 @@ var lineEditValues = map[string]string{
 // on, and the default renderer strips styling with no TTY attached, which hides the
 // whole defect.
 func TestLineEditBoxGeometry(t *testing.T) {
-	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
-	lipgloss.SetColorProfile(termenv.TrueColor)
-
 	const width = 30
 	for name, value := range lineEditValues {
 		t.Run(name, func(t *testing.T) {
 			s, sh := newLineEdit(width)
 			s.SetValue(value) // caret at the end: the wrapping case
 
-			for _, blink := range []bool{false, true} {
-				s.input.Cursor.Blink = blink // true is the hidden phase
+			// v2 keeps the blink phase inside textinput's unexported virtual
+			// cursor, so the two states are driven through SetVirtualCursor:
+			// off is the caret-less phase, on the one that renders the block.
+			for _, caret := range []bool{false, true} {
+				s.input.SetVirtualCursor(caret)
 				v := s.View(sh)
 				if got := lipgloss.Height(v); got != 3 {
-					t.Errorf("height with blink=%v = %d, want 3:\n%s", blink, got, v)
+					t.Errorf("height with caret=%v = %d, want 3:\n%s", caret, got, v)
 				}
 				if got := lipgloss.Width(v); got != width {
-					t.Errorf("width with blink=%v = %d, want %d", blink, got, width)
+					t.Errorf("width with caret=%v = %d, want %d", caret, got, width)
 				}
 			}
 
 			// Caret off the end renders inline over a character instead — the state
 			// that always fit, and it must stay that way.
-			lineEditKey(s, sh, tea.KeyMsg{Type: tea.KeyLeft})
+			lineEditKey(s, sh, keyMsg("left"))
 			if got := lipgloss.Height(s.View(sh)); got != 3 {
 				t.Errorf("height with the caret moved back = %d, want 3", got)
 			}
@@ -72,19 +70,16 @@ func TestLineEditBoxGeometry(t *testing.T) {
 // the degenerate ones where the prompt alone outgrows the content area: the input line
 // is cell-truncated rather than wrapped, so the box holds its one row and its width.
 func TestLineEditNarrowBox(t *testing.T) {
-	defer lipgloss.SetColorProfile(lipgloss.ColorProfile())
-	lipgloss.SetColorProfile(termenv.TrueColor)
-
 	for width := 4; width <= 40; width++ {
 		for name, value := range lineEditValues {
 			s, sh := newLineEdit(width)
 			s.SetValue(value)
-			for _, blink := range []bool{false, true} {
-				s.input.Cursor.Blink = blink
+			for _, caret := range []bool{false, true} {
+				s.input.SetVirtualCursor(caret)
 				v := s.View(sh)
 				want := max(width, 4) // border and padding: the box has no narrower shape
 				if h, w := lipgloss.Height(v), lipgloss.Width(v); h != 3 || w != want {
-					t.Errorf("width=%d %s blink=%v: box is %dx%d, want %dx3", width, name, blink, w, h, want)
+					t.Errorf("width=%d %s caret=%v: box is %dx%d, want %dx3", width, name, caret, w, h, want)
 				}
 			}
 		}

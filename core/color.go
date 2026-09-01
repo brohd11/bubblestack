@@ -1,35 +1,19 @@
 package core
 
-import (
-	"strconv"
-
-	"github.com/charmbracelet/lipgloss"
-)
-
 // Dim returns c one step quieter: blended toward the terminal's own ground, which means
-// DARKER on a dark background and LIGHTER on a light one. An AdaptiveColor is dimmed per
-// variant (Light toward white, Dark toward black), so a dimmed accent reads as
-// subordinate to the undimmed one under EITHER background — a literal darken would make
+// DARKER on a dark background and LIGHTER on a light one. Both variants are dimmed, each
+// toward its own ground (Light toward white, Dark toward black), so a dimmed accent reads
+// as subordinate to the undimmed one under EITHER background — a literal darken would make
 // it the louder of the two on a light terminal, inverting the hierarchy it exists to
-// express. A flat lipgloss.Color has no light/dark pair to tell the ground from, so it is
-// darkened; every preset in theme.go is adaptive, so that path is for a consumer's own
-// RegisterTheme. amount is the fraction of the distance to the ground, 0..1.
+// express. amount is the fraction of the distance to the ground, 0..1.
 //
-// The palette is ANSI-256 indices rather than hex (see Theme), so this is not a plain
+// The palette is ANSI-256 indices rather than hex (see Color), so this is not a plain
 // multiply: the index is expanded to RGB, blended, then snapped back to the nearest index.
-// Anything that is not a parseable 0..255 index — a hex lipgloss.Color, a CompleteColor,
-// nil — comes back unchanged rather than guessed at.
-func Dim(c lipgloss.TerminalColor, amount float64) lipgloss.TerminalColor {
-	switch v := c.(type) {
-	case lipgloss.AdaptiveColor:
-		return lipgloss.AdaptiveColor{
-			Light: dimIndex(v.Light, 255, amount),
-			Dark:  dimIndex(v.Dark, 0, amount),
-		}
-	case lipgloss.Color:
-		return lipgloss.Color(dimIndex(string(v), 0, amount))
+func Dim(c Color, amount float64) Color {
+	return Color{
+		Light: dimIndex(c.Light, 255, amount),
+		Dark:  dimIndex(c.Dark, 0, amount),
 	}
-	return c
 }
 
 // dimIndex blends one ANSI-256 index toward ground (0 black, 255 white) and returns the
@@ -37,19 +21,15 @@ func Dim(c lipgloss.TerminalColor, amount float64) lipgloss.TerminalColor {
 // coarse and a small blend need not leave the cell — which would make Dim a silent no-op
 // on some themes, so the blend is stepped up until the index actually moves. A color
 // already sitting on the ground never moves and comes back as it went in.
-func dimIndex(s string, ground int, amount float64) string {
-	i, err := strconv.Atoi(s)
-	if err != nil || i < 0 || i > 255 {
-		return s
-	}
+func dimIndex(i uint8, ground int, amount float64) uint8 {
 	r, g, b := ansiRGB(i)
 	for a := amount; a <= 1.0001; a += 0.05 {
 		n := nearestANSI(blend(r, ground, a), blend(g, ground, a), blend(b, ground, a))
 		if n != i {
-			return strconv.Itoa(n)
+			return n
 		}
 	}
-	return s
+	return i
 }
 
 func blend(c, ground int, amount float64) int {
@@ -72,7 +52,8 @@ var ansiBasic = [16][3]int{
 
 // ansiRGB expands an ANSI-256 index to its RGB: the basic sixteen from the table, 16..231
 // from the cube, and 232..255 from the greyscale ramp.
-func ansiRGB(i int) (int, int, int) {
+func ansiRGB(idx uint8) (int, int, int) {
+	i := int(idx)
 	switch {
 	case i < 16:
 		c := ansiBasic[i]
@@ -90,14 +71,14 @@ func ansiRGB(i int) (int, int, int) {
 // distance. Only 16..255 are candidates — the basic sixteen are whatever the user's
 // terminal profile says they are, so picking one would make the dim's result depend on a
 // palette this code cannot see.
-func nearestANSI(r, g, b int) int {
+func nearestANSI(r, g, b int) uint8 {
 	best, bestDist := 16, 1<<31-1
 	for i := 16; i < 256; i++ {
-		cr, cg, cb := ansiRGB(i)
+		cr, cg, cb := ansiRGB(uint8(i))
 		d := (cr-r)*(cr-r) + (cg-g)*(cg-g) + (cb-b)*(cb-b)
 		if d < bestDist {
 			best, bestDist = i, d
 		}
 	}
-	return best
+	return uint8(best)
 }

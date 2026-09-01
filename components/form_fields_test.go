@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -22,7 +22,7 @@ func newArea(label string, width int) *TextAreaField {
 // typeInto feeds s a rune at a time, the way a user's keystrokes actually arrive.
 func typeInto(ta *TextAreaField, s string) {
 	for _, r := range s {
-		ta.UpdateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		ta.UpdateInput(keyMsg(string(r)))
 	}
 }
 
@@ -107,7 +107,7 @@ func TestTextAreaFieldRowsHangUnderTheText(t *testing.T) {
 // View's height silently wrong. A bracketed paste is the only way one can arrive.
 func TestTextAreaFieldPasteStaysOneLine(t *testing.T) {
 	ta := newArea("M: ", 40)
-	ta.UpdateInput(tea.KeyMsg{Type: tea.KeyRunes, Paste: true, Runes: []rune("first\nsecond")})
+	ta.UpdateInput(tea.PasteMsg{Content: "first\nsecond"})
 
 	if got := ta.Value(); got != "first second" {
 		t.Errorf("a pasted newline should collapse to a space, got %q", got)

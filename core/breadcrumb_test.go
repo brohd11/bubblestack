@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // crumbScreen is a stubScreen with a breadcrumb segment, so a test can click it.
@@ -22,7 +22,7 @@ func (s crumbScreen) CrumbLabel(shortForm bool) string {
 
 // clickAt builds a left-press mouse msg at terminal cell (x, y).
 func clickAt(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
 // crumbClickRouter pushes "Git" then "Tags" over the (crumbless) stub root, so the
