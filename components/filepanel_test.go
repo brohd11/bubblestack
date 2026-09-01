@@ -12,6 +12,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // fileTree builds a fixture: root/{sub/{deep.txt}, alpha.txt, Beta.md, .hidden}.
@@ -452,5 +454,155 @@ func TestFilePanelRowAnchor(t *testing.T) {
 
 	if _, ok := p.RowAnchor(999, 0, originY); ok {
 		t.Fatal("an off-page index should report false, as RowY does")
+	}
+}
+
+// ---------- type coloring ----------
+
+// colorTree builds a fixture with one entry of every kind the classifier names.
+func colorTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, d := range []string{"sub", ".git"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]fs.FileMode{
+		"main.go":  0o644,
+		"notes.md": 0o644,
+		"logo.png": 0o644,
+		"src.zip":  0o644,
+		"run.sh":   0o755,
+		"LICENSE":  0o644,
+		".profile": 0o644,
+	}
+	for name, mode := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(root, "main.go"), filepath.Join(root, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	return root
+}
+
+// TestClassifyFile: every branch of the precedence order, over a real directory read the
+// way FilePanel reads one.
+func TestClassifyFile(t *testing.T) {
+	root := colorTree(t)
+	des, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]FileKind{
+		"sub":      KindDir,
+		".git":     KindHiddenDir,
+		".profile": KindHiddenFile,
+		"link":     KindSymlink,
+		"run.sh":   KindExec, // the exec bit outranks the .sh suffix
+		"main.go":  KindCode,
+		"notes.md": KindDoc,
+		"logo.png": KindImage,
+		"src.zip":  KindArchive,
+		"LICENSE":  KindFile, // no extension, no bit: an ordinary file
+	}
+	for _, d := range des {
+		var info fs.FileInfo
+		if !d.IsDir() {
+			info, _ = d.Info()
+		}
+		if got := ClassifyFile(d, info); got != want[d.Name()] {
+			t.Errorf("%s: kind %d, want %d", d.Name(), got, want[d.Name()])
+		}
+	}
+}
+
+// TestClassifyFileNilInfo: a stat that failed loses the exec distinction and falls through
+// to the tables rather than erroring — run.sh reads as code, not as a program.
+func TestClassifyFileNilInfo(t *testing.T) {
+	root := colorTree(t)
+	des, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range des {
+		if d.Name() != "run.sh" {
+			continue
+		}
+		if got := ClassifyFile(d, nil); got != KindCode {
+			t.Fatalf("run.sh with no stat: kind %d, want %d", got, KindCode)
+		}
+		return
+	}
+	t.Fatal("fixture lost run.sh")
+}
+
+// TestFilePanelRowColors: the panel classifies at read time, and the ".." row — which has
+// no fs.DirEntry behind it — is colored as the folder it is.
+func TestFilePanelRowColors(t *testing.T) {
+	root := colorTree(t)
+	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true})
+	p.SetSize(30, 12)
+
+	got := map[string]lipgloss.TerminalColor{}
+	for _, it := range p.List().VisibleItems() {
+		fi, ok := it.(fileItem)
+		if !ok {
+			continue
+		}
+		got[fi.Title()] = fi.TitleColor()
+	}
+	if got[".."] != FileKindColor(KindDir) {
+		t.Errorf("the parent row should be dir-colored, got %v", got[".."])
+	}
+
+	p = NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true})
+	p.SetSize(30, 12)
+	want := map[string]FileKind{
+		"sub/":     KindDir,
+		".git/":    KindHiddenDir,
+		".profile": KindHiddenFile,
+		"run.sh":   KindExec,
+		"main.go":  KindCode,
+		"notes.md": KindDoc,
+		"LICENSE":  KindFile,
+	}
+	for _, it := range p.List().VisibleItems() {
+		fi, ok := it.(fileItem)
+		if !ok {
+			continue
+		}
+		k, listed := want[fi.Title()]
+		if !listed {
+			continue
+		}
+		if fi.TitleColor() != FileKindColor(k) {
+			t.Errorf("%s: color %v, want %v (kind %d)", fi.Title(), fi.TitleColor(), FileKindColor(k), k)
+		}
+	}
+}
+
+// TestFilePanelColorIsStyleOnly: the whole point of coloring through the delegate's style
+// rather than through Title() — the panel prints color, and stripping it back off leaves
+// exactly the text an uncolored terminal draws. A color that moved a cell would show up
+// here as a mismatch, whatever the frame, the truncation or the marquee did with it.
+func TestFilePanelColorIsStyleOnly(t *testing.T) {
+	root := colorTree(t)
+	build := func() string {
+		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true})
+		p.SetSize(24, 12) // narrow enough that names truncate
+		return p.View(false)
+	}
+	plain := build() // no TTY under `go test`: the Ascii profile drops every color
+	withColor(t)
+	colored := build()
+
+	if colored == plain {
+		t.Fatal("a listing of dirs, dotfiles and source files should print some color")
+	}
+	if ansi.Strip(colored) != plain {
+		t.Fatalf("color must not change what the panel draws:\n%q\n%q", ansi.Strip(colored), plain)
 	}
 }

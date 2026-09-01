@@ -200,6 +200,31 @@ type SuffixItem interface {
 // this renders exactly as it did before.
 type MarkItem interface{ Mark() string }
 
+// ColorItem is an optional contract a row may satisfy alongside list.Item: it names the
+// row's OWN foreground, for a list whose rows carry a type the eye should sort by without
+// reading the name — a file listing's directories against its files. A row that does not
+// implement it, or answers nil, renders exactly as it did before.
+//
+// The selection accent OUTRANKS it: the cursor row, and the dimmed rows of an open-but-
+// empty filter, keep the delegate's own styles, so a type color can never make the cursor
+// ambiguous. itemColor is where that precedence lives and both delegates read it, so the
+// two densities cannot disagree about which rows are colored.
+type ColorItem interface{ TitleColor() lipgloss.TerminalColor }
+
+// itemColor is the foreground a delegate should apply to one row, and false when it should
+// apply none — the row is selected or dimmed, is not a ColorItem, or answers nil.
+func itemColor(item list.Item, isSelected, dimmed bool) (lipgloss.TerminalColor, bool) {
+	if isSelected || dimmed {
+		return nil, false
+	}
+	ci, ok := item.(ColorItem)
+	if !ok {
+		return nil, false
+	}
+	c := ci.TitleColor()
+	return c, c != nil
+}
+
 // NewCompactList builds the single-line counterpart of NewSelectList. It keeps
 // the same title, filtering, keymap, help, and pagination behavior; only the row
 // delegate changes to a one-cell-high title plus optional muted suffix.
@@ -367,6 +392,14 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	} else if isSelected {
 		titleStyle = styles.SelectedTitle
 	}
+	// Before the highlight pass, never after: the match style below INHERITS titleStyle, so
+	// recoloring here is what keeps a filtered row's matched runes underlined in the row's
+	// own color rather than reverting to the delegate's default. It is a Foreground on the
+	// STYLE, applied to already-truncated text — no ANSI enters the raw string, so every
+	// width computation above (CompactMarquee, fitWidth, marqueeSeg) is untouched.
+	if c, ok := itemColor(item, isSelected, emptyFilter); ok {
+		titleStyle = titleStyle.Foreground(c)
+	}
 	if isFiltered && !emptyFilter && index < len(m.VisibleItems()) {
 		matched := titleStyle.Inline(true).Inherit(styles.FilterMatch)
 		title = lipgloss.StyleRunes(title, m.MatchesForItem(index), matched, titleStyle.Inline(true))
@@ -391,13 +424,33 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 // selected row recolored to the theme accent (bubbles' default selected styles are
 // a hardcoded pink). The left-border layout from the default delegate is kept; only
 // the colors change.
-func NewDelegate() list.DefaultDelegate {
+// ColorDelegate is the three-row delegate with per-row foregrounds: a row implementing
+// ColorItem is drawn in its own color, every other row exactly as bubbles draws it.
+//
+// A wrapper rather than a copy of list.DefaultDelegate.Render, because that method takes
+// its receiver BY VALUE — recoloring this copy's styles is therefore local to the single
+// row being rendered, and the sixty-odd lines of truncation, filter highlighting and
+// description layout stay upstream's. Height, Spacing and Update are the embedded
+// delegate's, so the row geometry every caller measures (components.listItemRows) is
+// unchanged.
+type ColorDelegate struct{ list.DefaultDelegate }
+
+func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	isSelected := index == m.Index() && m.FilterState() != list.Filtering
+	dimmed := m.FilterState() == list.Filtering && m.FilterValue() == ""
+	if c, ok := itemColor(item, isSelected, dimmed); ok {
+		d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(c)
+	}
+	d.DefaultDelegate.Render(w, m, index, item)
+}
+
+func NewDelegate() ColorDelegate {
 	d := list.NewDefaultDelegate()
 	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(MutedColor)
 	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(MutedColor)
 	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(FocusedColor).BorderForeground(FocusedColor)
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(FocusedColor).BorderForeground(FocusedColor)
-	return d
+	return ColorDelegate{d}
 }
 
 // styleList applies the shared list config: hide the built-in status bar and

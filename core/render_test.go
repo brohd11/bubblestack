@@ -414,3 +414,120 @@ func TestCompactMarkPinnedUnderMarquee(t *testing.T) {
 		}
 	}
 }
+
+// ---------- per-row color (ColorItem) ----------
+
+// coloredItem is a compact row that names its own foreground.
+type coloredItem struct {
+	marqueeItem
+	color lipgloss.TerminalColor
+}
+
+func (i coloredItem) TitleColor() lipgloss.TerminalColor { return i.color }
+
+// withColorProfile forces a real color profile for one test. Under `go test` stdout is not
+// a TTY, so lipgloss resolves the Ascii profile and drops every Foreground — which would
+// make a colored row and a plain one byte-identical and these assertions vacuous.
+func withColorProfile(t *testing.T) {
+	t.Helper()
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+}
+
+// renderCompactRow renders one row of a compact list by index, so a test can look at a row
+// that is NOT the cursor (renderCompact always draws row 0, which is the selected one).
+func renderCompactRow(t *testing.T, index, width int, items ...list.Item) string {
+	t.Helper()
+	l := NewCompactList(items, "")
+	l.SetSize(width, 10)
+	var b strings.Builder
+	CompactDelegate{}.Render(&b, l, index, items[index])
+	return b.String()
+}
+
+// TestCompactColorItem: an unselected ColorItem row is drawn in its own color, and the row
+// text is untouched — only the style changed, so nothing about the width math moved.
+func TestCompactColorItem(t *testing.T) {
+	withColorProfile(t)
+	plain := marqueeItem{title: "notes.md"}
+	items := []list.Item{marqueeItem{title: "first"}, plain, coloredItem{marqueeItem: plain, color: lipgloss.Color("12")}}
+
+	uncolored := renderCompactRow(t, 1, 30, items...)
+	colored := renderCompactRow(t, 2, 30, items...)
+	if uncolored == colored {
+		t.Fatal("a ColorItem row must render differently from an uncolored one")
+	}
+	if ansi.Strip(colored) != ansi.Strip(uncolored) {
+		t.Fatalf("color must not change the row's text: %q vs %q", ansi.Strip(colored), ansi.Strip(uncolored))
+	}
+	if lipgloss.Width(colored) != lipgloss.Width(uncolored) {
+		t.Fatal("color must not change the row's width")
+	}
+}
+
+// TestCompactColorItemNilIsPlain: a ColorItem answering nil is exactly an uncolored row —
+// the "ordinary file keeps the terminal's foreground" case.
+func TestCompactColorItemNilIsPlain(t *testing.T) {
+	withColorProfile(t)
+	plain := marqueeItem{title: "notes.md"}
+	items := []list.Item{marqueeItem{title: "first"}, plain, coloredItem{marqueeItem: plain}}
+	if renderCompactRow(t, 1, 30, items...) != renderCompactRow(t, 2, 30, items...) {
+		t.Fatal("a nil TitleColor must render exactly as an uncolored row")
+	}
+}
+
+// TestCompactSelectionOutranksColor: the cursor row keeps the theme accent whatever its
+// type color says. A listing whose selected row could be any of ten colors is a listing
+// with no cursor.
+func TestCompactSelectionOutranksColor(t *testing.T) {
+	withColorProfile(t)
+	plain := marqueeItem{title: "notes.md"}
+	items := []list.Item{plain, coloredItem{marqueeItem: plain, color: lipgloss.Color("12")}}
+
+	l := NewCompactList(items, "")
+	l.SetSize(30, 10)
+	var uncolored, colored strings.Builder
+	CompactDelegate{}.Render(&uncolored, l, 0, items[0]) // index 0 is the cursor
+	l.Select(1)
+	CompactDelegate{}.Render(&colored, l, 1, items[1])
+	if uncolored.String() != colored.String() {
+		t.Fatal("the selected row must take the accent, not its type color")
+	}
+}
+
+// TestColorDelegateRow: the three-row delegate colors an unselected ColorItem row too, and
+// leaves the selected one to the accent.
+func TestColorDelegateRow(t *testing.T) {
+	withColorProfile(t)
+	plain := renderListItem("notes.md")
+	items := []list.Item{renderListItem("first"), plain, coloredListItem{renderListItem: plain, color: lipgloss.Color("12")}}
+
+	l := NewSelectList(items, "")
+	l.SetSize(30, 10)
+	d := NewDelegate()
+	render := func(index int) string {
+		var b strings.Builder
+		d.Render(&b, l, index, items[index])
+		return b.String()
+	}
+	if render(1) == render(2) {
+		t.Fatal("a ColorItem row must render differently from an uncolored one")
+	}
+	if ansi.Strip(render(2)) != ansi.Strip(render(1)) {
+		t.Fatal("color must not change the row's text")
+	}
+	l.Select(1)
+	selPlain := render(1)
+	l.Select(2)
+	if selColored := render(2); selColored != selPlain {
+		t.Fatal("the selected row must take the accent, not its type color")
+	}
+}
+
+type coloredListItem struct {
+	renderListItem
+	color lipgloss.TerminalColor
+}
+
+func (i coloredListItem) TitleColor() lipgloss.TerminalColor { return i.color }

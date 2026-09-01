@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // FilePanel is a directory listing packaged as a ModularScreen panel: the folders and
@@ -215,9 +216,17 @@ func (p *FilePanel) read(dir string) ([]fileItem, error) {
 		if p.opts.Include != nil && !p.opts.Include(path, d) {
 			continue
 		}
+		// One stat per row, shared: the size line and the row's type color both want it,
+		// and asking twice would double the cost entryDesc's comment says this component
+		// can only just afford. A directory needs neither, so it is not stat'd at all.
+		var info fs.FileInfo
+		if !d.IsDir() {
+			info, _ = d.Info()
+		}
 		out = append(out, fileItem{
 			entry: FileEntry{Name: d.Name(), Path: path, Dir: dir, IsDir: d.IsDir()},
-			desc:  entryDesc(d),
+			desc:  entryDesc(d, info),
+			color: FileKindColor(ClassifyFile(d, info)),
 		})
 	}
 	less := p.opts.Less
@@ -252,6 +261,9 @@ func (p *FilePanel) rows() []list.Item {
 		items = append(items, fileItem{
 			entry: FileEntry{Name: "..", Path: filepath.Dir(p.dir), Dir: p.dir, IsDir: true, Up: true},
 			desc:  "parent directory",
+			// The way out is a folder, and is colored as one: it is synthetic, so there is
+			// no fs.DirEntry for ClassifyFile to read.
+			color: FileKindColor(KindDir),
 		})
 	}
 	for _, it := range p.items {
@@ -291,7 +303,10 @@ func (p *FilePanel) clamp(dir string) string {
 type fileItem struct {
 	entry FileEntry
 	desc  string
+	color lipgloss.TerminalColor // the type color, nil for an ordinary file
 }
+
+var _ core.ColorItem = fileItem{}
 
 func (i fileItem) Title() string {
 	if i.entry.Up {
@@ -306,6 +321,13 @@ func (i fileItem) Title() string {
 func (i fileItem) Description() string { return i.desc }
 func (i fileItem) SuffixText() string  { return "" }
 
+// TitleColor implements core.ColorItem: the row's own foreground, so a directory reads as
+// one without the eye having to find the trailing slash. Classified once at read time
+// rather than per frame — a delegate's Render must stay cheap, and the entry it would have
+// to re-examine is gone by then. nil (an ordinary file) leaves the row unstyled, and the
+// selection accent outranks this on the cursor row.
+func (i fileItem) TitleColor() lipgloss.TerminalColor { return i.color }
+
 // FilterValue keeps ".." out of every search: a filter is a question about which entries
 // you want, and the way out of the folder is not one of the answers (the same rule an
 // inert action row follows). Nothing matches an empty target, so the row leaves as soon as
@@ -319,13 +341,14 @@ func (i fileItem) FilterValue() string {
 
 // entryDesc is the standard delegate's second line: what a directory is, or how big a file
 // is. Info() costs one stat per row, which a single directory can afford and a recursive
-// walk could not — one more reason this component lists one folder at a time.
-func entryDesc(d fs.DirEntry) string {
+// walk could not — one more reason this component lists one folder at a time. It takes that
+// stat rather than making it, so the one read also feeds the row's type color; a nil info
+// is a stat that failed, and the row keeps its name and loses its size.
+func entryDesc(d fs.DirEntry, info fs.FileInfo) string {
 	if d.IsDir() {
 		return "dir"
 	}
-	info, err := d.Info()
-	if err != nil {
+	if info == nil {
 		return ""
 	}
 	return formatSize(info.Size())
