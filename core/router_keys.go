@@ -165,7 +165,7 @@ func (r *Router) globalKey(msg tea.KeyMsg) (Action, bool) {
 
 	// O jumps into the output pane, o shows/hides it, c clears the log, [ / ]
 	// switch top-level tabs (only at the root, so the live stack always belongs
-	// to the active tab), and ` unwinds a deep stack back to the root for a
+	// to the active tab), and alt+u unwinds a deep stack back to the root for a
 	// quick exit — unless the active screen is capturing filter text (and even
 	// then, a modified-key combo passes: it types no text — see modifiedKey).
 	// The output keys pass through (no consume) when there is no output pane, so a

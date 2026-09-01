@@ -694,3 +694,28 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
 }
+
+// TestUnwindKey pins the Unwind binding after it moved off the backtick: alt+u resets a
+// deep stack to the root, and the backtick — now bound nowhere — does not.
+//
+// The combo is read from the keymap so a rebind tracks, but the backtick is written as a
+// literal on purpose: the assertion IS that no binding carries it any more, which a lookup
+// through Keys could not express.
+func TestUnwindKey(t *testing.T) {
+	tm := sized(newCoreTestRouter())
+	tm, _ = tm.Update(pushMsg{s: stubScreen{}})
+	tm, _ = tm.Update(pushMsg{s: stubScreen{}})
+	if got := len(tm.(Router).stack); got != 3 {
+		t.Fatalf("fixture should be three deep, got %d", got)
+	}
+
+	tm = pump(tm, keyMsg("`"))
+	if got := len(tm.(Router).stack); got != 3 {
+		t.Fatalf("the backtick is bound nowhere and must not unwind; stack = %d", got)
+	}
+
+	tm = pump(tm, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u"), Alt: true})
+	if got := len(tm.(Router).stack); got != 1 {
+		t.Fatalf("alt+u should unwind to the root; stack = %d", got)
+	}
+}

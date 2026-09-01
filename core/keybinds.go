@@ -115,8 +115,15 @@ var Keys = KeyMap{
 	Wrap:         key.NewBinding(key.WithKeys("w")),
 	Mouse:        key.NewBinding(key.WithKeys("ctrl+g")),
 	Clear:        key.NewBinding(key.WithKeys("C")),
-	Unwind:       key.NewBinding(key.WithKeys("`", "u")),
-	Refresh:      key.NewBinding(key.WithKeys("r")),
+	// alt+u rather than the backtick it used to carry: a stack reset is a big gesture for
+	// a bare key sitting under the ESC row, and the modifier is what stops a stray press
+	// from throwing away a deep navigation. Being modified it also clears the router's
+	// filter gate (modifiedKey), so it still reaches globalKey from a screen that captures
+	// every keystroke — a MenuScreen, whose Filtering() is unconditionally true, above all.
+	// Bare u stays for the times the stack is not capturing. The backtick is now bound
+	// nowhere.
+	Unwind:  key.NewBinding(key.WithKeys("alt+u", "u")),
+	Refresh: key.NewBinding(key.WithKeys("r")),
 	// t hands this process's terminal to a shell and comes back when it exits; T is the
 	// detached window. The inline form gets the unshifted key because it is the one you
 	// reach for mid-task — a two-command detour shouldn't cost a window. That pushed the
