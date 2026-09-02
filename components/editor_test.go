@@ -1655,21 +1655,54 @@ func TestEditorScrollbar(t *testing.T) {
 	}
 }
 
-// TestEditorScrollbarClick: the bar column carries no buffer position — a click
-// there is ignored rather than yanking the caret to a line's end.
+// TestEditorScrollbarClick: the bar is a direct proportional navigator. It browses the
+// viewport without moving the caret or selection, and its endpoints reach the document
+// endpoints exactly.
 func TestEditorScrollbarClick(t *testing.T) {
 	s, sh := newEditor(EditorOpts{})
 	s.setContent(longDoc())
+	selectRange(s, 0, 0, 0, 1)
 	click := func(x, y int) {
 		s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	}
-	click(s.w-1, s.titleH()+5) // the bar column
-	if s.curY != 0 || s.curX != 0 {
-		t.Fatalf("click on the scrollbar moved the caret to (%d,%d)", s.curY, s.curX)
+	barX := s.insetX() + s.textW()
+	click(barX, s.insetY())
+	if s.scrY != 0 {
+		t.Fatalf("top click scrolled to %d, want 0", s.scrY)
 	}
+	middle := s.h / 2
+	click(barX, s.insetY()+middle)
+	wantMiddle := (middle*(len(s.lines)-s.h) + (s.h-1)/2) / (s.h - 1)
+	if s.scrY != wantMiddle {
+		t.Fatalf("middle click scrolled to %d, want %d", s.scrY, wantMiddle)
+	}
+	click(barX, s.insetY()+s.h-1)
+	if want := len(s.lines) - s.h; s.scrY != want {
+		t.Fatalf("bottom click scrolled to %d, want %d", s.scrY, want)
+	}
+	if s.curY != 0 || s.curX != 1 || !s.selectionActive() {
+		t.Fatalf("bar browsing changed caret/selection: caret=(%d,%d) selected=%v", s.curY, s.curX, s.selectionActive())
+	}
+
+	s.scrY = 0
 	click(3, s.titleH()+5) // inside the text: still lands (the 1-rune line clamps the column)
 	if s.curY != 5 || s.curX != 1 {
 		t.Fatalf("click in the text = (%d,%d), want (5,1)", s.curY, s.curX)
+	}
+}
+
+func TestEditorScrollbarClickEmbeddedWrapped(t *testing.T) {
+	s, sh := newPaneEditor(EditorOpts{Border: true})
+	s.setContent(strings.Repeat("abcdefghij", 40))
+	s.ToggleWrap()
+	if !s.barVisible() {
+		t.Fatal("wrapped fixture should raise the scrollbar")
+	}
+	s.Update(sh, tea.MouseClickMsg{
+		X: s.insetX() + s.textW(), Y: s.insetY() + s.h - 1, Button: tea.MouseLeft,
+	})
+	if want := s.rowCount() - s.h; s.scrY != want {
+		t.Fatalf("embedded wrapped bottom click scrolled to %d, want %d", s.scrY, want)
 	}
 }
 

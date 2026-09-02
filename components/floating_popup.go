@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/sahilm/fuzzy"
 )
 
 // PopupPlacement places a floating popup within its parent's rendered frame. All
@@ -98,12 +99,15 @@ type PopupListItem[T any] struct {
 	Value                     T
 }
 
-// PopupListOpts configures an input-transparent selectable popup list.
+// PopupListOpts configures an input-transparent selectable popup list. Fuzzy matches
+// non-empty queries against FilterText and orders matches by quality; an optional
+// Filter runs first as a prefilter. Empty queries retain source order.
 type PopupListOpts[T any] struct {
 	Items      []PopupListItem[T]
 	MaxVisible int
 	MaxWidth   int
 	Filter     func(query string, item PopupListItem[T]) bool
+	Fuzzy      bool
 	OnAccept   func(*core.Shared, PopupListItem[T]) core.Action
 	OnCancel   func(*core.Shared) core.Action
 }
@@ -119,13 +123,14 @@ type PopupList[T any] struct {
 	maxVisible int
 	maxWidth   int
 	filter     func(string, PopupListItem[T]) bool
+	fuzzy      bool
 	onAccept   func(*core.Shared, PopupListItem[T]) core.Action
 	onCancel   func(*core.Shared) core.Action
 }
 
 func NewPopupList[T any](opts PopupListOpts[T]) *PopupList[T] {
 	p := &PopupList[T]{maxVisible: opts.MaxVisible, maxWidth: opts.MaxWidth,
-		filter: opts.Filter, onAccept: opts.OnAccept, onCancel: opts.OnCancel}
+		filter: opts.Filter, fuzzy: opts.Fuzzy, onAccept: opts.OnAccept, onCancel: opts.OnCancel}
 	p.SetItems(opts.Items)
 	return p
 }
@@ -172,11 +177,20 @@ func (p *PopupList[T]) rebuild() {
 	if p.sel >= 0 && p.sel < len(p.visible) {
 		selectedSource = p.visible[p.sel]
 	}
-	p.visible = p.visible[:0]
+	candidates := make([]int, 0, len(p.items))
 	for i, item := range p.items {
 		if p.filter == nil || p.query == "" || p.filter(p.query, item) {
-			p.visible = append(p.visible, i)
+			candidates = append(candidates, i)
 		}
+	}
+	p.visible = p.visible[:0]
+	if p.fuzzy && p.query != "" {
+		matches := fuzzy.FindFrom(p.query, popupListFuzzySource[T]{items: p.items, indexes: candidates})
+		for _, match := range matches {
+			p.visible = append(p.visible, candidates[match.Index])
+		}
+	} else {
+		p.visible = append(p.visible, candidates...)
 	}
 	p.sel = -1
 	for i, source := range p.visible {
@@ -190,6 +204,16 @@ func (p *PopupList[T]) rebuild() {
 	}
 	p.clampWindow()
 }
+
+// popupListFuzzySource lets the matcher rank a filtered subset while preserving each
+// result's source index in PopupList.items. fuzzy.FindFrom is stable for equal scores.
+type popupListFuzzySource[T any] struct {
+	items   []PopupListItem[T]
+	indexes []int
+}
+
+func (s popupListFuzzySource[T]) String(i int) string { return s.items[s.indexes[i]].FilterText }
+func (s popupListFuzzySource[T]) Len() int            { return len(s.indexes) }
 
 func (p *PopupList[T]) clampWindow() {
 	n := p.visibleRows()

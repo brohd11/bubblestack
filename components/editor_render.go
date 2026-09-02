@@ -416,7 +416,9 @@ func (s *EditorScreen) renderLine(row int) string {
 // display-cell window. Selection is measured in rune columns but converted to cells,
 // so every cell of an expanded tab receives the same background.
 func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
-	disp := expandLine(s.lines[row])
+	line := s.lines[row]
+	disp := expandLine(line)
+	guides := s.indentGuideCells(line)
 	vis := disp[start:end]
 	c := -1
 	if s.focused && row == s.curY {
@@ -433,14 +435,20 @@ func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
 		}
 		sel := s.cellSelected(row, start+i)
 		match := s.cellMatched(row, start+i)
+		guide := guideCell(guides, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel && s.cellMatched(row, start+j) == match {
+		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel &&
+			s.cellMatched(row, start+j) == match && guideCell(guides, start+j) == guide {
 			j++
 		}
 		style := lipgloss.NewStyle()
 		styled := false
 		if !s.focused {
 			style = muted
+			styled = true
+		}
+		if guide {
+			style = style.Foreground(core.MutedColor)
 			styled = true
 		}
 		if sel {
@@ -450,10 +458,14 @@ func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
 			style = s.editorSearchStyle()
 			styled = true
 		}
+		text := string(vis[i:j])
+		if guide {
+			text = strings.Repeat(string(editorIndentGuide), j-i)
+		}
 		if styled {
-			b.WriteString(style.Render(string(vis[i:j])))
+			b.WriteString(style.Render(text))
 		} else {
-			b.WriteString(string(vis[i:j]))
+			b.WriteString(text)
 		}
 		i = j
 	}
@@ -466,6 +478,34 @@ func (s *EditorScreen) renderLinePlain(row, start, end int, eol bool) string {
 		}
 	}
 	return b.String()
+}
+
+// indentGuideCells marks complete leading indent levels in display-cell space. This
+// keeps guides aligned through literal tabs, mixed indentation, horizontal scrolling,
+// and wrapping without changing any of the buffer's rune/cell mappings.
+func (s *EditorScreen) indentGuideCells(line []rune) []bool {
+	if !s.indentGuides {
+		return nil
+	}
+	leading := len(leadingWhitespace(line))
+	leadingCells := cellOfCol(line, leading)
+	unit := s.indentUnit()
+	unitCells := len(unit)
+	if len(unit) == 1 && unit[0] == '\t' {
+		unitCells = editorTabWidth
+	}
+	if unitCells <= 0 || leadingCells < unitCells {
+		return nil
+	}
+	guides := make([]bool, leadingCells)
+	for cell := 0; cell+unitCells <= leadingCells; cell += unitCells {
+		guides[cell] = true
+	}
+	return guides
+}
+
+func guideCell(guides []bool, cell int) bool {
+	return cell >= 0 && cell < len(guides) && guides[cell]
 }
 
 func (s *EditorScreen) cellSelected(row, cell int) bool {
@@ -593,6 +633,7 @@ func (s *EditorScreen) renderLineStyled(row, start, end int, eol bool) (string, 
 		return "", false
 	}
 	line := s.lines[row]
+	guides := s.indentGuideCells(line)
 	// Cells sharing a span share its style, so the run grouping compares span
 	// indexes — never lipgloss.Style values (they carry a func field, so == does
 	// not even compile).
@@ -632,17 +673,26 @@ func (s *EditorScreen) renderLineStyled(row, start, end int, eol bool) (string, 
 		}
 		sel := s.cellSelected(row, start+i)
 		match := s.cellMatched(row, start+i)
+		guide := guideCell(guides, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel && s.cellMatched(row, start+j) == match {
+		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel &&
+			s.cellMatched(row, start+j) == match && guideCell(guides, start+j) == guide {
 			j++
 		}
 		style := spans[vidx[i]].Style
+		if guide {
+			style = style.Foreground(core.MutedColor)
+		}
 		if sel {
 			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
 		} else if match {
 			style = s.editorSearchStyle()
 		}
-		b.WriteString(style.Render(string(vis[i:j])))
+		text := string(vis[i:j])
+		if guide {
+			text = strings.Repeat(string(editorIndentGuide), j-i)
+		}
+		b.WriteString(style.Render(text))
 		i = j
 	}
 	if eol && end-start < s.contentW() {

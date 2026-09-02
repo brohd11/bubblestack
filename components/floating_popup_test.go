@@ -1,6 +1,7 @@
 package components
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -86,5 +87,50 @@ func TestPopupListFiltersAndPreservesSelection(t *testing.T) {
 	list.SetQuery("z")
 	if list.Len() != 0 || list.View() != "" {
 		t.Fatalf("empty filter should hide popup: len=%d view=%q", list.Len(), list.View())
+	}
+}
+
+func TestPopupListFuzzyRanksAndPreservesSelection(t *testing.T) {
+	list := NewPopupList(PopupListOpts[int]{
+		Items: []PopupListItem[int]{
+			{Label: "sprint", Value: 1},
+			{Label: "private", Value: 2},
+			{Label: "print", Value: 3},
+			{Label: "unrelated", Value: 4},
+		},
+		Fuzzy: true,
+	})
+	list.Select(0)
+	list.SetQuery("PRI")
+	if list.Len() != 3 || list.visible[0] != 2 {
+		t.Fatalf("ranked sources = %v, want print first and three matches", list.visible)
+	}
+	if list.visible[list.sel] != 0 {
+		t.Fatalf("selection did not follow sprint through reranking: visible=%v sel=%d", list.visible, list.sel)
+	}
+
+	list.SetQuery("spt") // a non-prefix subsequence, matched case-insensitively
+	if list.Len() != 1 || list.visible[0] != 0 {
+		t.Fatalf("subsequence sources = %v, want only sprint", list.visible)
+	}
+	list.SetQuery("")
+	if !slices.Equal(list.visible, []int{0, 1, 2, 3}) {
+		t.Fatalf("empty query order = %v, want provider order", list.visible)
+	}
+}
+
+func TestPopupListFuzzyUsesFilterAsPrefilterAndKeepsStableTies(t *testing.T) {
+	list := NewPopupList(PopupListOpts[int]{
+		Items: []PopupListItem[int]{
+			{Label: "first", FilterText: "same", Value: 1},
+			{Label: "second", FilterText: "same", Value: 2},
+			{Label: "third", FilterText: "same", Value: 3},
+		},
+		Filter: func(_ string, item PopupListItem[int]) bool { return item.Value != 2 },
+		Fuzzy:  true,
+	})
+	list.SetQuery("sme")
+	if !slices.Equal(list.visible, []int{0, 2}) {
+		t.Fatalf("filtered stable ties = %v, want [0 2]", list.visible)
 	}
 }

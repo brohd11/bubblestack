@@ -16,6 +16,33 @@ func (s *EditorScreen) scrollLines(delta int) {
 	s.clampScrollBounds()
 }
 
+// scrollbarRowAt reports the body-relative row of a click on the visible scrollbar.
+// It follows positionAt's coordinate convention: standalone mouse rows are terminal
+// absolute, while an embedded editor receives pane-relative coordinates.
+func (s *EditorScreen) scrollbarRowAt(sh *core.Shared, x, y int) (int, bool) {
+	if !s.barVisible() || x-s.insetX() != s.textW() {
+		return 0, false
+	}
+	row := y - s.insetY()
+	if !s.embedded {
+		row -= sh.BodyY()
+	}
+	return row, row >= 0 && row < s.h
+}
+
+// scrollToBarRow maps the track from top to bottom onto the complete valid scroll
+// range. The caret deliberately stays put: a bar click is viewport browsing, like the
+// wheel, and the next caret movement may snap the view back to it.
+func (s *EditorScreen) scrollToBarRow(row int) {
+	limit := max(s.rowCount()-s.h, 0)
+	if limit == 0 || s.h <= 1 {
+		s.scrY = 0
+		return
+	}
+	s.scrY = (row*limit + (s.h-1)/2) / (s.h - 1)
+	s.clampScrollBounds()
+}
+
 // wheel routes one wheel notch. The vertical pair turns sideways while alt is held: the
 // terminals that matter claim ctrl+wheel for their own font zoom and shift+wheel for
 // bypassing mouse reporting, so alt is the one modifier that reaches the app. A

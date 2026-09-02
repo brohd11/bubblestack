@@ -107,6 +107,7 @@ type EditorScreen struct {
 	indentWidth         int        // spaces per level under IndentSpaces
 	indentWidthExplicit bool       // that width came from EditorOpts: a rename must not replace it
 	autoIndentSpaces    int        // what the resolved profile asks for; 0 ⇒ a literal tab
+	indentGuides        bool       // render leading indent levels without changing buffer geometry
 
 	bordered bool // EditorOpts.Border: draw the frame instead of the title bar
 	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
@@ -258,6 +259,9 @@ type wrapRow struct{ line, start, end int }
 // structured Enter, an automatic indent unit and a highlighter factory. A nil resolver
 // or nil result leaves the editor literal, and the resolver is consulted again after a
 // save-as or SetPath changes the path.
+//
+// IndentGuides draws a muted vertical guide in the leading whitespace occupied by each
+// complete live indent unit. It is render-only and defaults off.
 type EditorOpts struct {
 	Path            string
 	Title           string
@@ -273,6 +277,7 @@ type EditorOpts struct {
 	ContextItems    func(*core.Shared) []MenuItem
 	Indent          IndentMode
 	IndentWidth     int
+	IndentGuides    bool
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -373,6 +378,10 @@ const editorControlPlaceholder = '·'
 // screen already). It costs a column of text, so clampScroll keeps the caret out of it:
 // a caret hidden under the marker would be worse than the ambiguity the marker fixes.
 const editorOverflowMark = '~'
+
+// editorIndentGuide replaces one existing leading-whitespace cell when guides are
+// enabled. Like the overflow and control marks it is exactly one display cell wide.
+const editorIndentGuide = '│'
 
 // expandLine renders a buffer line to display runes, tabs expanded to spaces and any
 // other control rune replaced by a placeholder — none of them may reach View, where the
@@ -485,6 +494,7 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		indentMode:          opts.Indent,
 		indentWidth:         opts.IndentWidth,
 		indentWidthExplicit: opts.IndentWidth > 0,
+		indentGuides:        opts.IndentGuides,
 	}
 	ed.applyLanguage(opts.Path)
 	return ed
@@ -778,6 +788,12 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen,
 				s.resetMouseGesture()
 				s.clickCount = 0
 				return s, core.Push(s.buildSearchEdit(sh, false))
+			}
+			if row, ok := s.scrollbarRowAt(sh, mm.X, mm.Y); ok {
+				s.resetMouseGesture()
+				s.clickCount = 0
+				s.scrollToBarRow(row)
+				return s, core.Action{}
 			}
 			if editorExtendClick(mm) {
 				s.extendSelectionTo(sh, mm.X, mm.Y)
