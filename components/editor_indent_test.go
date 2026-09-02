@@ -99,6 +99,9 @@ func TestEditorDedentTakesTabsThenSpaces(t *testing.T) {
 	if got, want := buffer(s), "one\ntwo\nthree\nfour"; got != want {
 		t.Fatalf("dedent at column 0 = %q, want it unchanged", got)
 	}
+	if len(s.undoStack) != 1 {
+		t.Fatalf("no-op dedent left %d history steps, want the original dedent only", len(s.undoStack))
+	}
 }
 
 func TestEditorDedentClampsSelectionStart(t *testing.T) {
@@ -163,6 +166,66 @@ func TestEditorBlockIndentIsOneUndoStep(t *testing.T) {
 	// The history entry carries the selection, so the block is still selected to retry.
 	if s.selStart != (textPos{0, 1}) || s.selEnd != (textPos{2, 2}) {
 		t.Fatalf("selection after undo = %v..%v, want {0 1}..{2 2}", s.selStart, s.selEnd)
+	}
+}
+
+// The alt chords carry no KeyPressMsg.Text, so they must be listed explicitly as
+// editing keys. Otherwise the shift changes the buffer without taking a history step,
+// and undo replays the preceding edit at columns invalidated by the shift.
+func TestEditorIndentChordsHaveTheirOwnUndoStep(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, shifted string
+		key                   tea.KeyPressMsg
+	}{
+		{"indent", "one\ntwo", "\tone\n\ttwo", indentKey},
+		{"dedent", "\tone\n\ttwo", "one\ntwo", dedentKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(EditorOpts{})
+			s.setContent(tc.before)
+			selectRange(s, 0, 0, 1, len(s.lines[1]))
+			s.key(nil, tc.key)
+			if got := buffer(s); got != tc.shifted {
+				t.Fatalf("shifted buffer = %q, want %q", got, tc.shifted)
+			}
+			if len(s.undoStack) != 1 {
+				t.Fatalf("history = %d steps, want 1", len(s.undoStack))
+			}
+
+			undoEditor(s)
+			if got := buffer(s); got != tc.before {
+				t.Fatalf("undo = %q, want %q", got, tc.before)
+			}
+			redoEditor(s)
+			if got := buffer(s); got != tc.shifted {
+				t.Fatalf("redo = %q, want %q", got, tc.shifted)
+			}
+		})
+	}
+}
+
+func TestEditorDedentThenUndoKeepsEarlierHistoryCoordinatesValid(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("func ready():\n\tpas")
+	s.curY, s.curX, s.wantX = 1, 4, 4
+	typeRunes(s, 's')
+
+	selectRange(s, 0, 0, 1, 5)
+	s.key(nil, dedentKey)
+	if got, want := buffer(s), "func ready():\npass"; got != want {
+		t.Fatalf("dedent = %q, want %q", got, want)
+	}
+	if len(s.undoStack) != 2 {
+		t.Fatalf("history = %d steps, want typed rune plus dedent", len(s.undoStack))
+	}
+
+	undoEditor(s)
+	if got, want := buffer(s), "func ready():\n\tpass"; got != want {
+		t.Fatalf("undo dedent = %q, want %q", got, want)
+	}
+	undoEditor(s)
+	if got, want := buffer(s), "func ready():\n\tpas"; got != want {
+		t.Fatalf("undo preceding edit = %q, want %q", got, want)
 	}
 }
 
