@@ -122,7 +122,8 @@ type EditorScreen struct {
 	contextMenu  bool                          // EditorOpts.ContextMenu: a right press raises the edit menu
 	contextItems func(*core.Shared) []MenuItem // host rows appended to that menu below a rule
 
-	undoStack, redoStack                  []editorSnapshot
+	undoStack, redoStack                  []editorHistoryEntry
+	activeEdit                            *editorHistoryEntry
 	revision, savedRevision, nextRevision uint64
 
 	searchEnabled bool          // EditorOpts.Search: ctrl+f and match rendering are available
@@ -142,14 +143,24 @@ type textPos struct{ y, x int }
 // repeatedly walk every prefix of a tabbed line.
 type textRange struct{ from, to int }
 
-// editorSnapshot is one logical edit boundary. Lines are deep-copied because the
-// editor's mutation helpers edit rune slices in place; the remaining fields restore
-// the exact insertion/selection state without treating viewport browsing as history.
-type editorSnapshot struct {
-	lines             [][]rune
+// editorState is the small non-text state restored at one side of a history entry.
+// Viewport browsing is deliberately absent, as it was from the old snapshots.
+type editorState struct {
 	curY, curX, wantX int
 	selStart, selEnd  textPos
 	revision          uint64
+}
+
+// editorChange is one reversible replacement made during a logical key event. Text is
+// immutable and proportional to the replacement rather than the rest of the buffer.
+type editorChange struct {
+	start             textPos
+	deleted, inserted string
+}
+
+type editorHistoryEntry struct {
+	changes       []editorChange
+	before, after editorState
 }
 
 // wrapRow is one display row of a soft-wrapped buffer line: the half-open chunk
@@ -294,7 +305,7 @@ var (
 // every later frame shifts (the "screen advances a line" corruption).
 const editorTabWidth = 4
 
-// editorHistoryLimit bounds each of the whole-buffer snapshot stacks.
+// editorHistoryLimit bounds each stack in logical edit events.
 const editorHistoryLimit = 100
 
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
@@ -792,16 +803,12 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 		return s, core.Action{}
 	}
 	if editorEditKey(k, m) {
-		before, seq := s.snapshot(), s.editSeq
-		defer func() {
-			if s.editSeq != seq {
-				s.recordEdit(before)
-			}
-		}()
+		entry := s.beginHistory()
+		defer s.finishHistory(entry)
 	}
 	// Wrapping the selection has to be decided before the pre-pass below, which deletes
-	// the selection for every rune-bearing key. The undo gate above has already taken its
-	// snapshot (a rune key is always an edit key), so both insertions land in one step.
+	// the selection for every rune-bearing key. The history transaction above is already
+	// open (a rune key is always an edit key), so both insertions land in one step.
 	if r, typed := editorTypedRune(m); typed && s.selectionActive() {
 		if closer, ok := s.surroundPairs[r]; ok {
 			s.surroundSelection(r, closer)
@@ -888,9 +895,7 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 		s.curX, s.wantX = 0, 0
 	case "ctrl+k":
 		if s.curX < len(s.lines[s.curY]) {
-			s.lines[s.curY] = s.lines[s.curY][:s.curX]
-			s.dirty = true
-			s.editSeq++
+			s.deleteRange(s.curY, s.curX, s.curY, len(s.lines[s.curY]))
 		}
 	case "up":
 		s.moveVertical(-1)

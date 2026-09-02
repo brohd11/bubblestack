@@ -59,6 +59,61 @@ func TestEditorUndoRestoresSelectionReplacement(t *testing.T) {
 	}
 }
 
+func TestEditorUndoRedoCompoundMultilineReplacement(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("alpha\nbeta\ngamma")
+	selectRange(s, 0, 2, 2, 3)
+	s.editAtomic(func() {
+		s.deleteSelection()
+		s.insertText("X\nY")
+	})
+	if got := buffer(s); got != "alX\nYma" || len(s.undoStack) != 1 {
+		t.Fatalf("replacement = %q history=%d, want alX\\nYma/1", got, len(s.undoStack))
+	}
+	if got := len(s.undoStack[0].changes); got != 2 {
+		t.Fatalf("compound history changes = %d, want delete plus insert", got)
+	}
+
+	undoEditor(s)
+	if got := buffer(s); got != "alpha\nbeta\ngamma" {
+		t.Fatalf("undo multiline replacement = %q", got)
+	}
+	if s.selStart != (textPos{0, 2}) || s.selEnd != (textPos{2, 3}) || s.curY != 2 || s.curX != 3 {
+		t.Fatalf("undo selection = %v..%v caret=%d,%d", s.selStart, s.selEnd, s.curY, s.curX)
+	}
+
+	redoEditor(s)
+	if got := buffer(s); got != "alX\nYma" || s.selectionActive() || s.curY != 1 || s.curX != 1 {
+		t.Fatalf("redo multiline replacement = %q selection=%v caret=%d,%d",
+			got, s.selectionActive(), s.curY, s.curX)
+	}
+}
+
+func TestEditorHistoryPayloadIsIndependentOfUntouchedBuffer(t *testing.T) {
+	const rows = 10_000
+	line := strings.Repeat("0123456789", 8)
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat(line+"\n", rows) + line)
+	s.curY, s.curX, s.wantX = rows/2, len([]rune(line)), len([]rune(line))
+	typeRunes(s, '!')
+
+	if len(s.undoStack) != 1 || len(s.undoStack[0].changes) != 1 {
+		t.Fatalf("large-buffer history = %#v", s.undoStack)
+	}
+	change := s.undoStack[0].changes[0]
+	if change.deleted != "" || change.inserted != "!" {
+		t.Fatalf("large-buffer payload = deleted %q inserted %q", change.deleted, change.inserted)
+	}
+	undoEditor(s)
+	if got := string(s.lines[rows/2]); got != line {
+		t.Fatalf("large-buffer undo line = %q", got)
+	}
+	redoEditor(s)
+	if got := string(s.lines[rows/2]); got != line+"!" {
+		t.Fatalf("large-buffer redo line = %q", got)
+	}
+}
+
 func TestEditorStructuredEnterIsOneUndoStep(t *testing.T) {
 	resolver := func(string) *EditorLanguageConfig {
 		return &EditorLanguageConfig{OnEnter: func(EditorEnterContext) (EditorEnterAction, bool) {
@@ -198,5 +253,19 @@ func TestEditorUndoRedoHelpBindings(t *testing.T) {
 	joined := strings.Join(all, " ")
 	if !strings.Contains(joined, "ctrl+z") || !strings.Contains(joined, "ctrl+y") {
 		t.Fatalf("editor help keys %q should advertise undo and redo", joined)
+	}
+}
+
+func BenchmarkEditorHistoryLargeBuffer(b *testing.B) {
+	line := strings.Repeat("0123456789", 8)
+	content := strings.Repeat(line+"\n", 20_000) + line
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(content)
+	s.curY, s.curX, s.wantX = 10_000, len([]rune(line)), len([]rune(line))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		typeRunes(s, '!')
+		undoEditor(s)
 	}
 }

@@ -8,7 +8,7 @@ package components
 // deleteEmptyAutoPair removes the delimiters immediately around the caret when they
 // form one of the active profile's auto-closing pairs. Adjacency is deliberate: pair
 // provenance is not stored, so a manually formed empty pair behaves like an inserted
-// one. The caller's existing key snapshot keeps both removals in one undo step.
+// one. The caller's existing key transaction keeps both removals in one undo step.
 func (s *EditorScreen) deleteEmptyAutoPair() bool {
 	if s.curX == 0 {
 		return false
@@ -21,11 +21,9 @@ func (s *EditorScreen) deleteEmptyAutoPair() bool {
 	if configured, ok := s.autoPairs[open]; !ok || configured != close {
 		return false
 	}
-	s.lines[s.curY] = append(line[:s.curX-1], line[s.curX+1:]...)
+	s.replaceText(textPos{s.curY, s.curX - 1}, textPos{s.curY, s.curX + 1}, "")
 	s.curX--
 	s.wantX = s.curX
-	s.dirty = true
-	s.editSeq++
 	return true
 }
 
@@ -41,8 +39,8 @@ func (s *EditorScreen) surroundSelection(open, close rune) {
 		// the end of the last selected line; the selection narrows to the text it wrapped.
 		end = textPos{end.y - 1, len(s.lines[end.y-1])}
 	}
-	s.lines[end.y] = spliceRune(s.lines[end.y], end.x, close)
-	s.lines[start.y] = spliceRune(s.lines[start.y], start.x, open)
+	s.replaceText(end, end, string(close))
+	s.replaceText(start, start, string(open))
 	s.selStart = textPos{start.y, start.x + 1}
 	if start.y == end.y {
 		s.selEnd = textPos{end.y, end.x + 1} // the opener pushed the closer along too
@@ -50,16 +48,4 @@ func (s *EditorScreen) surroundSelection(open, close rune) {
 		s.selEnd = textPos{end.y, end.x} // a different line: only the closer moved it
 	}
 	s.curY, s.curX, s.wantX = s.selEnd.y, s.selEnd.x, s.selEnd.x
-	s.dirty = true
-	s.editSeq++
-}
-
-// spliceRune inserts r at column x, returning a line that shares no backing array with
-// the original. The editing helpers splice in place around the cursor; this one is for
-// the two edits surroundSelection makes away from it.
-func spliceRune(line []rune, x int, r rune) []rune {
-	out := make([]rune, 0, len(line)+1)
-	out = append(out, line[:x]...)
-	out = append(out, r)
-	return append(out, line[x:]...)
 }

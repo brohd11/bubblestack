@@ -313,7 +313,7 @@ func TestEditorPasteSplitsLines(t *testing.T) {
 }
 
 // TestEditorPasteSelectionAndUndo: a paste replaces the selection like typing does, and
-// the whole block is a single undo step (editorEditKey snapshots any rune-bearing key).
+// the whole block is a single undo step (editorEditKey opens one transaction per key).
 func TestEditorPasteSelectionAndUndo(t *testing.T) {
 	s, _ := newEditor(EditorOpts{})
 	s.setContent("abc\ndef")

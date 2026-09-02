@@ -146,13 +146,7 @@ func (s *EditorScreen) moveWordForward() {
 // into y1 and dropping the lines between. An empty range is a no-op (and stays
 // clean); the caller owns the cursor afterwards.
 func (s *EditorScreen) deleteRange(y1, x1, y2, x2 int) {
-	if y1 == y2 && x1 == x2 {
-		return
-	}
-	s.lines[y1] = append(s.lines[y1][:x1], s.lines[y2][x2:]...)
-	s.lines = append(s.lines[:y1+1], s.lines[y2+1:]...)
-	s.dirty = true
-	s.editSeq++
+	s.replaceText(textPos{y1, x1}, textPos{y2, x2}, "")
 }
 
 // deleteWordBack is DeleteWordBackward: deletes from deleteWordBackPos to the

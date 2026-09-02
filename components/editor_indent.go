@@ -129,15 +129,11 @@ func (s *EditorScreen) shiftLineIndent(y int, unit []rune, dir int) int {
 		return 0
 	}
 	if dir > 0 {
-		// A fresh array: the caret helpers splice in place, so a line must never share
-		// its backing store with the one an undo snapshot copied.
-		out := make([]rune, 0, len(line)+len(unit))
-		out = append(out, unit...)
-		s.lines[y] = append(out, line...)
+		s.replaceText(textPos{y, 0}, textPos{y, 0}, string(unit))
 		return len(unit)
 	}
 	if line[0] == '\t' {
-		s.lines[y] = append([]rune(nil), line[1:]...)
+		s.replaceText(textPos{y, 0}, textPos{y, 1}, "")
 		return -1
 	}
 	width := len(unit)
@@ -151,7 +147,7 @@ func (s *EditorScreen) shiftLineIndent(y int, unit []rune, dir int) int {
 	if n == 0 {
 		return 0
 	}
-	s.lines[y] = append([]rune(nil), line[n:]...)
+	s.replaceText(textPos{y, 0}, textPos{y, n}, "")
 	return -n
 }
 
@@ -189,9 +185,6 @@ func (s *EditorScreen) shiftSelectionIndent(dir int) {
 	if !moved {
 		return
 	}
-	s.dirty = true
-	s.editSeq++
-
 	if !selected {
 		s.curX = shiftIndentCol(s.curX, dCaret)
 		s.wantX = s.curX

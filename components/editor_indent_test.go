@@ -160,7 +160,7 @@ func TestEditorBlockIndentIsOneUndoStep(t *testing.T) {
 	if got, want := buffer(s), "one\ntwo\nthree"; got != want {
 		t.Fatalf("after undo = %q, want %q", got, want)
 	}
-	// editorSnapshot carries the selection, so the block is still selected to retry.
+	// The history entry carries the selection, so the block is still selected to retry.
 	if s.selStart != (textPos{0, 1}) || s.selEnd != (textPos{2, 2}) {
 		t.Fatalf("selection after undo = %v..%v, want {0 1}..{2 2}", s.selStart, s.selEnd)
 	}

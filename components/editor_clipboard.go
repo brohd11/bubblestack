@@ -106,16 +106,14 @@ func (s *EditorScreen) deleteLine() {
 }
 
 // editAtomic runs one buffer mutation as a single undo step from outside key(). key()'s
-// own gate can't be reused — it is a deferred snapshot wrapped around a keystroke, and a
-// menu's Pick never passes through it — but the rule is the same one: record the snapshot
-// only if the mutation actually moved editSeq, so a no-op leaves the undo stack alone.
+// own transaction can't be reused because a menu's Pick never passes through it. A no-op
+// records no changes and therefore leaves the undo stack alone.
 func (s *EditorScreen) editAtomic(mutate func()) {
-	before, seq := s.snapshot(), s.editSeq
+	entry := s.beginHistory()
 	mutate()
-	if s.editSeq == seq {
+	if !s.finishHistory(entry) {
 		return
 	}
-	s.recordEdit(before)
 	s.wrapDirty = true
 	s.clampScroll()
 }
