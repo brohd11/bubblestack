@@ -160,13 +160,11 @@ func (p *LogPane) wrapEntry(line string) string {
 // "Output" legend (plus a scroll hint while focused). Wrapped mode is advertised in the
 // legend either way, so the render mode is visible without focusing the pane.
 func (p *LogPane) View(focused bool) string {
-	color := core.BorderColor
 	label := "Output"
 	if p.wrap {
 		label = "Output [wrap]"
 	}
 	if focused {
-		color = core.FocusedColor
 		// Derived from the keymap for the same reason ScrollContainer's is: a spelled-out
 		// legend goes stale silently the next time one of these keys is rebound.
 		label += " · " + core.Legend(
@@ -177,24 +175,11 @@ func (p *LogPane) View(focused bool) string {
 		)
 	}
 
-	inner := p.innerWidth()
-	box := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderTop(false).
-		BorderForeground(color).
-		Padding(0, 1).
-		Width(inner + 2) // inner text + the 1-col padding on each side
-	content := box.Render(p.vp.View())
-
-	// Hand-draw the top border so the legend can sit mid-line. The run between the
-	// corners is the same width as the bottom border: inner + 2 (padding).
-	legend := "─ " + label + " "
-	fill := (inner + 2) - lipgloss.Width(legend)
-	if fill < 0 {
-		fill = 0
-	}
-	top := lipgloss.NewStyle().Foreground(color).
-		Render("┌" + legend + strings.Repeat("─", fill) + "┐")
-
-	return top + "\n" + content
+	// Include the horizontal padding in the run between the corners. frameBox adds
+	// the border cells back for lipgloss v2, whose Width includes the border; keeping
+	// that arithmetic in the shared helpers prevents the hand-drawn top edge and the
+	// box below it from drifting apart.
+	inner := p.innerWidth() + 2
+	content := frameBox(inner, focused).Padding(0, 1).Render(p.vp.View())
+	return frameTop(label, inner, focused) + "\n" + content
 }

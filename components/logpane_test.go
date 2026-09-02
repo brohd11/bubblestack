@@ -158,6 +158,31 @@ func TestHeightMatchesRenderedRows(t *testing.T) {
 	}
 }
 
+// TestLogPaneFrameRowsAlign guards lipgloss's box-width contract: the hand-drawn
+// top edge and every bordered row below it must put their right edge in the same
+// terminal column. Lipgloss v2 includes border cells in Style.Width, unlike v1.
+func TestLogPaneFrameRowsAlign(t *testing.T) {
+	p := paneAt("one", "two", longPath)
+
+	for _, wrapped := range []bool{false, true} {
+		if p.Wrapped() != wrapped {
+			p.ToggleWrap()
+		}
+		for _, focused := range []bool{false, true} {
+			name := fmt.Sprintf("wrapped=%t/focused=%t", wrapped, focused)
+			t.Run(name, func(t *testing.T) {
+				rows := strings.Split(p.View(focused), "\n")
+				want := p.innerWidth() + 4 // text + horizontal padding + side borders
+				for i, row := range rows {
+					if got := lipgloss.Width(row); got != want {
+						t.Errorf("row %d width = %d, want %d", i, got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 // stubRootScreen is a minimal core.Screen (no help bar) so a router test can place the
 // output pane at a known row range.
 type stubRootScreen struct{}
