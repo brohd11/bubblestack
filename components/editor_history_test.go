@@ -269,3 +269,17 @@ func BenchmarkEditorHistoryLargeBuffer(b *testing.B) {
 		undoEditor(s)
 	}
 }
+
+var benchmarkEditorText string
+
+func BenchmarkEditorTextCachedLargeBuffer(b *testing.B) {
+	line := strings.Repeat("0123456789", 8)
+	s, _ := newEditor(EditorOpts{})
+	s.setContent(strings.Repeat(line+"\n", 20_000) + line)
+	benchmarkEditorText = s.Text()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkEditorText = s.Text()
+	}
+}

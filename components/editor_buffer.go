@@ -2,6 +2,7 @@ package components
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,6 +32,9 @@ func (s *EditorScreen) setContent(content string) {
 	s.activeEdit = nil
 	s.revision, s.savedRevision, s.nextRevision = 0, 0, 1
 	s.editSeq++ // the buffer changed even though the load is clean: reparse
+	s.textSeq = -1
+	s.hlSeq = -1
+	s.hlChanged = time.Time{}
 	s.wrapDirty = true
 }
 
@@ -62,6 +66,7 @@ func (s *EditorScreen) restoreHistoryState(state editorState) {
 	s.dirty = s.revision != s.savedRevision
 	s.resetMouseGesture()
 	s.editSeq++
+	s.hlChanged = time.Now()
 	s.wrapDirty = true
 	s.clampScroll()
 }
@@ -219,6 +224,7 @@ func (s *EditorScreen) replaceText(start, end textPos, inserted string) textPos 
 	}
 	s.dirty = true
 	s.editSeq++
+	s.hlChanged = time.Now()
 	return textEnd(start, inserted)
 }
 

@@ -3,6 +3,7 @@ package components
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brohd11/bubblestack/core"
 
@@ -114,8 +115,45 @@ func TestEditorHighlighterReparseCache(t *testing.T) {
 	}
 	typeRunes(s, 'x')
 	s.View(sh)
+	if h.parses != 1 {
+		t.Fatalf("an active edit parsed immediately: %d parses", h.parses)
+	}
+	s.hlChanged = time.Now().Add(-s.highlightDelay())
+	s.View(sh)
 	if h.parses != 2 || h.last != buffer(s) {
 		t.Fatalf("edit parse count/content = %d/%q, want 2/%q", h.parses, h.last, buffer(s))
+	}
+}
+
+func TestEditorHighlighterDebounceUsesLatestEdit(t *testing.T) {
+	h := &countingHL{}
+	s, sh := newEditor(EditorOpts{Highlighter: h})
+	s.setContent("alpha\nbeta")
+	s.View(sh)
+	s.hlDebounce = time.Hour
+
+	_, act := s.Update(sh, keyMsg("x"))
+	if act.Cmd == nil {
+		t.Fatal("an edit should schedule a highlighter refresh")
+	}
+	s.View(sh)
+	if h.parses != 1 {
+		t.Fatalf("highlighting parsed inside the quiet window: %d", h.parses)
+	}
+	seq := s.editSeq
+	s.Update(sh, editorHighlightMsg{target: s, seq: seq - 1})
+	if h.parses != 1 {
+		t.Fatal("a stale highlight message reparsed the buffer")
+	}
+
+	s.hlChanged = time.Now().Add(-s.highlightDelay())
+	s.Update(sh, editorHighlightMsg{target: s, seq: seq})
+	if h.parses != 2 || h.last != "xalpha\nbeta" || s.hlSeq != seq {
+		t.Fatalf("latest parse = count %d text %q seq %d", h.parses, h.last, s.hlSeq)
+	}
+	s.Update(sh, editorHighlightMsg{target: s, seq: seq})
+	if h.parses != 2 {
+		t.Fatal("an already-current highlight message parsed twice")
 	}
 }
 

@@ -1,5 +1,7 @@
 package components
 
+import "time"
+
 // EditorLanguageResolver is the host-owned seam between a path and the editing
 // behavior that path should receive. The editor calls it when it is constructed and
 // whenever save-as or SetPath changes its identity. A nil resolver or nil result means
@@ -78,6 +80,7 @@ func (s *EditorScreen) applyLanguage(path string) {
 		s.hl = cfg.NewHighlighter()
 	}
 	s.hlSeq = -1
+	s.hlChanged = time.Time{}
 }
 
 func pairMap(pairs []EditorPair) map[rune]rune {

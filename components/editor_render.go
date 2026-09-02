@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/brohd11/bubblestack/core"
@@ -554,15 +555,12 @@ func (s *EditorScreen) editorSearchStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(core.Resolve(editorSearchYellow)).Foreground(editorSearchText)
 }
 
-// hlSpans answers the row's validated spans, reparsing the buffer first when it
-// changed since the last parse — lazy and once per edit sequence, never per
-// frame or per row. nil means "render plain": the row is unstyled, or the spans
-// failed validation (their concatenated text must reconstruct the buffer line
-// exactly — the check that keeps a buggy highlighter from corrupting the frame).
+// hlSpans answers the row's validated spans. The first render parses immediately;
+// subsequent edits keep the cached spans until their debounce expires. A changed row
+// whose old spans no longer reconstruct it renders plain in the meantime.
 func (s *EditorScreen) hlSpans(row int) []Span {
-	if s.hlSeq != s.editSeq {
-		s.hl.Parse(s.Text())
-		s.hlSeq = s.editSeq
+	if s.hlSeq != s.editSeq && (s.hlSeq < 0 || s.highlightWait(time.Now()) == 0) {
+		s.parseHighlight()
 	}
 	spans := s.hl.HighlightLine(row)
 	if spansText(spans) != string(s.lines[row]) {

@@ -37,6 +37,24 @@ func buffer(s *EditorScreen) string {
 	return b.String()
 }
 
+func TestEditorTextCachesByEditSequence(t *testing.T) {
+	s, _ := newEditor(EditorOpts{})
+	s.setContent("alpha\nbeta")
+	if got := s.Text(); got != "alpha\nbeta" || s.textSeq != s.editSeq {
+		t.Fatalf("initial Text = %q cache seq=%d edit seq=%d", got, s.textSeq, s.editSeq)
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _ = s.Text() }); allocs != 0 {
+		t.Fatalf("cached Text allocations = %v, want 0", allocs)
+	}
+	typeRunes(s, '!')
+	if s.textSeq == s.editSeq {
+		t.Fatal("editing did not invalidate the Text cache")
+	}
+	if got := s.Text(); got != "!alpha\nbeta" || s.textSeq != s.editSeq {
+		t.Fatalf("edited Text = %q cache seq=%d edit seq=%d", got, s.textSeq, s.editSeq)
+	}
+}
+
 func selectRange(s *EditorScreen, y1, x1, y2, x2 int) {
 	s.selStart, s.selEnd = textPos{y1, x1}, textPos{y2, x2}
 	s.curY, s.curX, s.wantX = y2, x2, x2

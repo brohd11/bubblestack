@@ -148,14 +148,7 @@ func (s *EditorScreen) SetPath(path string) { s.applySaveName(path) }
 func (s *EditorScreen) saveCmd() tea.Cmd {
 	path := s.path
 	revision := s.revision
-	var b strings.Builder
-	for i, l := range s.lines {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(string(l))
-	}
-	content := b.String()
+	content := s.Text()
 	return func() tea.Msg {
 		if path == "" {
 			return editorSavedMsg{err: errors.New("no file path"), revision: revision}

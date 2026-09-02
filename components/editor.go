@@ -81,6 +81,10 @@ type EditorScreen struct {
 	hlExplicit bool        // hl came from EditorOpts: a rename must not replace it
 	editSeq    int         // bumped at every buffer mutation; hl reparses when hlSeq lags
 	hlSeq      int         // the edit sequence hl last parsed (-1 ⇒ never)
+	hlChanged  time.Time   // latest edit; reparsing waits for a quiet debounce window
+	hlDebounce time.Duration
+	textCache  string // lines joined for text consumers at textSeq
+	textSeq    int    // editSeq represented by textCache (-1 ⇒ stale)
 
 	resolveLanguage EditorLanguageResolver // host-owned path → behavior seam
 	autoPairs       map[rune]rune          // typed opener → closer; nil ⇒ literal typing
@@ -288,6 +292,13 @@ type editorPastedMsg struct {
 	err    error
 }
 
+// editorHighlightMsg wakes the editor after an edit's quiet window. It is addressed
+// because async messages may reach a different editor after a pane switch.
+type editorHighlightMsg struct {
+	target *EditorScreen
+	seq    int
+}
+
 var writeEditorClipboard = clipboard.WriteAll
 
 // readEditorClipboard is the read seam, mirroring writeEditorClipboard so tests can drive
@@ -304,6 +315,9 @@ var (
 // renderer measures it as zero-width, so the padded frame line overflows, wraps, and
 // every later frame shifts (the "screen advances a line" corruption).
 const editorTabWidth = 4
+
+// editorHighlightDebounce coalesces full-document parsers while the user is typing.
+const editorHighlightDebounce = 250 * time.Millisecond
 
 // editorHistoryLimit bounds each stack in logical edit events.
 const editorHistoryLimit = 100
@@ -422,7 +436,9 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		hl:              hl,
 		hlExplicit:      hlExplicit,
 		resolveLanguage: opts.ResolveLanguage,
-		hlSeq:           -1,   // nothing parsed yet, even before the first edit
+		hlSeq:           -1, // nothing parsed yet, even before the first edit
+		hlDebounce:      editorHighlightDebounce,
+		textSeq:         -1,
 		wrapDirty:       true, // no rows measured yet, even before the first edit
 		nextRevision:    1,
 		searchEnabled:   opts.Search,
@@ -490,6 +506,9 @@ func (s *EditorScreen) SetFocused(focused bool) { s.focused = focused }
 // would write, and what a host reads to do something with the content while it is
 // still being edited (a rendered preview beside the pane, a word count).
 func (s *EditorScreen) Text() string {
+	if s.textSeq == s.editSeq {
+		return s.textCache
+	}
 	var b strings.Builder
 	for i, l := range s.lines {
 		if i > 0 {
@@ -497,7 +516,9 @@ func (s *EditorScreen) Text() string {
 		}
 		b.WriteString(string(l))
 	}
-	return b.String()
+	s.textCache = b.String()
+	s.textSeq = s.editSeq
+	return s.textCache
 }
 
 // SetText replaces the buffer with content, exactly as a completed load does: the caret
@@ -590,10 +611,54 @@ func (s *EditorScreen) searchBarHit(sh *core.Shared, x, y int) bool {
 	return ax >= px && ax < px+w && ay >= top && ay < py+h
 }
 
+func (s *EditorScreen) highlightDelay() time.Duration {
+	if s.hlDebounce <= 0 {
+		return editorHighlightDebounce
+	}
+	return s.hlDebounce
+}
+
+func (s *EditorScreen) highlightWait(now time.Time) time.Duration {
+	if s.hlChanged.IsZero() {
+		return 0
+	}
+	return max(s.hlChanged.Add(s.highlightDelay()).Sub(now), 0)
+}
+
+func (s *EditorScreen) highlightRefreshCmd(seq int, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return editorHighlightMsg{target: s, seq: seq}
+	})
+}
+
+func (s *EditorScreen) parseHighlight() {
+	if s.hl == nil || s.hlSeq == s.editSeq {
+		return
+	}
+	s.hl.Parse(s.Text())
+	s.hlSeq = s.editSeq
+}
+
 // Update handles the async load/save results, mouse presses, and keystrokes — in the
-// exit prompt's mode only its y/n/esc/c answers are live.
-func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
+// exit prompt's mode only its y/n/esc/c answers are live. An edit made here schedules a
+// repaint at the end of the highlighter's quiet window without replacing another cmd.
+func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, action core.Action) {
+	seq := s.editSeq
+	defer func() {
+		if s.hl != nil && s.hlSeq >= 0 && s.editSeq != seq {
+			action.Cmd = tea.Batch(action.Cmd, s.highlightRefreshCmd(s.editSeq, s.highlightDelay()))
+		}
+	}()
 	switch m := msg.(type) {
+	case editorHighlightMsg:
+		if m.target != s || m.seq != s.editSeq || s.hl == nil {
+			return s, core.Action{}
+		}
+		if wait := s.highlightWait(time.Now()); wait > 0 {
+			return s, core.Async(s.highlightRefreshCmd(m.seq, wait))
+		}
+		s.parseHighlight()
+		return s, core.Action{}
 	case editorLoadedMsg:
 		if m.err == nil {
 			s.setContent(m.content)

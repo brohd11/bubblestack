@@ -22,8 +22,8 @@ type Span struct {
 // adapter the editor's syntax coloring hangs on. A host supplies one explicitly through
 // EditorOpts.Highlighter or from an EditorLanguageConfig factory.
 //
-// Parse is called lazily, once per buffer edit (not per frame, not per row),
-// so implementations may reparse the whole document each time.
+// Parse is called lazily on the first render and after editing pauses (not per frame or
+// per row), so implementations may reparse the whole document each time.
 type Highlighter interface {
 	// Parse ingests the full document text (lines joined with '\n').
 	Parse(text string)
