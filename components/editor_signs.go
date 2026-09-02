@@ -25,6 +25,117 @@ type Sign struct {
 	Style lipgloss.Style
 }
 
+type signColumn struct {
+	signs map[int]Sign
+	shown bool
+}
+
+// legacySignColumn is the reserved name behind the original one-column API. Keeping
+// that API as a real named column lets existing hosts coexist with newer consumers
+// instead of making SetSigns unexpectedly erase their columns.
+const legacySignColumn = "\x00default"
+
+// ensureSignColumn returns id's column, registering a new one at the inner edge. Hosts
+// wanting a different deterministic order can call SetSignColumnOrder; registration
+// order remains a useful no-setup default.
+func (s *EditorScreen) ensureSignColumn(id string) *signColumn {
+	if s.signColumns == nil {
+		s.signColumns = make(map[string]*signColumn)
+	}
+	if col := s.signColumns[id]; col != nil {
+		return col
+	}
+	col := &signColumn{}
+	s.signColumns[id] = col
+	listed := false
+	for _, name := range s.signOrder {
+		listed = listed || name == id
+	}
+	if !listed {
+		s.signOrder = append(s.signOrder, id)
+	}
+	return col
+}
+
+// SetSignColumn replaces one named column's signs, keyed by 0-based buffer line. It
+// does not affect any other column or its visibility.
+func (s *EditorScreen) SetSignColumn(id string, signs map[int]Sign) {
+	s.ensureSignColumn(id).signs = signs
+}
+
+// ShowSignColumn draws or hides one named column. Columns are retained while hidden so
+// a host can toggle them without recomputing their contents.
+func (s *EditorScreen) ShowSignColumn(id string, on bool) {
+	col := s.ensureSignColumn(id)
+	if col.shown == on {
+		return
+	}
+	col.shown = on
+	s.wrapDirty = true
+	s.clampScrollBounds()
+}
+
+// ToggleSignColumn flips one named column.
+func (s *EditorScreen) ToggleSignColumn(id string) {
+	s.ShowSignColumn(id, !s.SignColumnMode(id))
+}
+
+// SignColumnMode reports whether a named column is enabled.
+func (s *EditorScreen) SignColumnMode(id string) bool {
+	col := s.signColumns[id]
+	return col != nil && col.shown
+}
+
+// SignsForColumn reads back one named column's live sign map. As with Signs, the map is
+// borrowed: replace it with SetSignColumn rather than mutating it in place.
+func (s *EditorScreen) SignsForColumn(id string) map[int]Sign {
+	if col := s.signColumns[id]; col != nil {
+		return col.signs
+	}
+	return nil
+}
+
+// SetSignColumnOrder sets the outer-to-inner order for named columns. Existing columns
+// omitted from ids are appended in their prior order, so changing one host's preferred
+// columns cannot silently hide a column installed by another host.
+func (s *EditorScreen) SetSignColumnOrder(ids ...string) {
+	seen := make(map[string]bool, len(ids)+len(s.signOrder))
+	order := make([]string, 0, len(ids)+len(s.signOrder))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		order = append(order, id)
+	}
+	for _, id := range s.signOrder {
+		if !seen[id] {
+			seen[id] = true
+			order = append(order, id)
+		}
+	}
+	s.signOrder = order
+}
+
+// RemoveSignColumn forgets a named column and its place in the order.
+func (s *EditorScreen) RemoveSignColumn(id string) {
+	col := s.signColumns[id]
+	if col == nil {
+		return
+	}
+	delete(s.signColumns, id)
+	for i, name := range s.signOrder {
+		if name == id {
+			s.signOrder = append(s.signOrder[:i], s.signOrder[i+1:]...)
+			break
+		}
+	}
+	if col.shown {
+		s.wrapDirty = true
+		s.clampScrollBounds()
+	}
+}
+
 // SetSigns replaces the whole sign map, keyed by 0-based buffer line. A nil or empty map
 // clears it. Keys outside the buffer are harmless — nothing looks them up — which is what
 // lets a host set signs computed against a buffer that has since shrunk without having to
@@ -33,31 +144,31 @@ type Sign struct {
 // This does NOT dirty the wrap cache: the column's width depends on whether signs are
 // shown (ShowSigns), never on what is in them, so a recompute on every keystroke costs a
 // map swap and no re-measure.
-func (s *EditorScreen) SetSigns(signs map[int]Sign) { s.signs = signs }
+func (s *EditorScreen) SetSigns(signs map[int]Sign) { s.SetSignColumn(legacySignColumn, signs) }
 
 // ShowSigns draws or hides the column. Unlike the line-number gutter it is independent of
 // wrap and of the ctrl+l preference — a host that wants change markers without line
 // numbers should get them — so it has its own flag rather than joining gutterOn.
 func (s *EditorScreen) ShowSigns(on bool) {
-	if s.signsOn == on {
-		return
-	}
-	s.signsOn = on
-	s.wrapDirty = true // a column appears or goes: the whole geometry moved
-	s.clampScrollBounds()
+	s.ShowSignColumn(legacySignColumn, on)
 }
 
 // ToggleSigns flips the column, for a host binding it to a key.
-func (s *EditorScreen) ToggleSigns() { s.ShowSigns(!s.signsOn) }
+func (s *EditorScreen) ToggleSigns() { s.ToggleSignColumn(legacySignColumn) }
 
 // SignsMode reports whether the column is drawn, so a host can keep its own UI in sync
 // (as WrapMode and LineNumMode do).
-func (s *EditorScreen) SignsMode() bool { return s.signsOn }
+func (s *EditorScreen) SignsMode() bool { return s.SignColumnMode(legacySignColumn) }
 
 // Signs reads back the map last set. It is the live map, not a copy — a host that hands
 // signs over has given them away and should build a fresh map rather than mutate this
 // one, exactly as it would with the slice behind SetItems.
-func (s *EditorScreen) Signs() map[int]Sign { return s.signs }
+func (s *EditorScreen) Signs() map[int]Sign {
+	if col := s.signColumns[legacySignColumn]; col != nil {
+		return col.signs
+	}
+	return nil
+}
 
 // EditSeq is the buffer's change generation, bumped by every mutation. A host computing
 // something from the text — a diff, a lint pass — compares it to decide whether its
@@ -66,24 +177,29 @@ func (s *EditorScreen) Signs() map[int]Sign { return s.signs }
 // cannot be fooled by an edit that arrives while the work is in flight.
 func (s *EditorScreen) EditSeq() int { return s.editSeq }
 
-// signGutterWidth is the column's contribution to the left gutter: one cell, or none.
-// Like numGutterWidth it must not consult textW or barVisible — see leftGutterWidth.
-func (s *EditorScreen) signGutterWidth() int {
-	if !s.signsOn {
-		return 0
+// shownSignColumns returns the enabled columns in their outer-to-inner order. Like
+// numGutterWidth it must not consult textW or barVisible — see leftGutterWidth.
+func (s *EditorScreen) shownSignColumns() []string {
+	ids := make([]string, 0, len(s.signOrder))
+	for _, id := range s.signOrder {
+		if col := s.signColumns[id]; col != nil && col.shown {
+			ids = append(ids, id)
+		}
 	}
-	return 1
+	return ids
 }
 
-// signText is the sign cell for one display row: the line's sign on its first row, a
-// blank on its wrapped continuations and on any line that has none.
-func (s *EditorScreen) signText(line int, first bool) string {
-	if s.signGutterWidth() == 0 {
-		return ""
+// signText renders the supplied outer-to-inner columns for one display row: a line's
+// signs on its first row and blanks on wrapped continuations or missing entries.
+func (s *EditorScreen) signText(ids []string, line int, first bool) string {
+	var out string
+	for _, id := range ids {
+		sign, ok := s.signColumns[id].signs[line]
+		if !ok || !first || sign.Text == "" {
+			out += " "
+			continue
+		}
+		out += sign.Style.Render(sign.Text)
 	}
-	sign, ok := s.signs[line]
-	if !ok || !first || sign.Text == "" {
-		return " "
-	}
-	return sign.Style.Render(sign.Text)
+	return out
 }

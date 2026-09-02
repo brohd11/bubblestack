@@ -108,8 +108,8 @@ type EditorScreen struct {
 	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
 	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 
-	signs   map[int]Sign // per-line decorations for the sign column (see editor_signs.go)
-	signsOn bool         // whether that column is drawn at all
+	signColumns map[string]*signColumn // host-named per-line decoration columns (see editor_signs.go)
+	signOrder   []string               // outermost to innermost; registration order for unlisted columns
 
 	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)

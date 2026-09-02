@@ -119,6 +119,41 @@ func TestSignsStyle(t *testing.T) {
 	}
 }
 
+func TestNamedSignColumns(t *testing.T) {
+	s, sh := newEditor(EditorOpts{})
+	s.setContent("alpha\nbeta")
+	s.SetSignColumnOrder("git", "diagnostics") // ordering may be declared before registration
+	s.SetSignColumn("diagnostics", map[int]Sign{0: {Text: "E"}})
+	s.SetSignColumn("git", map[int]Sign{0: {Text: "+"}, 1: {Text: "~"}})
+	s.ShowSignColumn("git", true)
+	s.ShowSignColumn("diagnostics", true)
+
+	if got := ansi.Strip(strings.Split(s.body(), "\n")[0]); !strings.HasPrefix(got, "+Ealpha") {
+		t.Fatalf("named columns should render outer-to-inner, got %q", got)
+	}
+	if got := ansi.Strip(strings.Split(s.body(), "\n")[1]); !strings.HasPrefix(got, "~ beta") {
+		t.Fatalf("each missing sign should retain its cell, got %q", got)
+	}
+
+	s.ShowSignColumn("git", false)
+	if got := ansi.Strip(strings.Split(s.body(), "\n")[0]); !strings.HasPrefix(got, "Ealpha") {
+		t.Fatalf("hiding git should leave diagnostics, got %q", got)
+	}
+	if s.SignColumnMode("git") || !s.SignColumnMode("diagnostics") {
+		t.Fatal("named column visibility should be independent")
+	}
+
+	s.ShowSignColumn("git", true)
+	s.SetSize(sh, 3, 20) // one gutter cell and two text cells: retain the inner column
+	if got := s.gutterText(0, true); got != "E" {
+		t.Fatalf("narrow panes should retain the inner diagnostics column, got %q", got)
+	}
+	s.RemoveSignColumn("diagnostics")
+	if s.SignColumnMode("diagnostics") {
+		t.Fatal("removed columns should no longer be visible")
+	}
+}
+
 // TestEditSeqTracksEdits pins the debounce key hosts compute against: it must move on an
 // edit and hold still otherwise, or a host's "is my diff still current" check is either
 // always stale or never.

@@ -205,7 +205,7 @@ func (s *EditorScreen) numGutterWidth() int {
 	return w
 }
 
-// leftGutterWidth is everything drawn left of the text: the host's sign column
+// leftGutterWidth is everything drawn left of the text: the host's sign columns
 // (editor_signs.go) plus the line-number column. It is the width the body is measured
 // against, and every consumer of a "how far in does text start" answer must use THIS,
 // not numGutterWidth — contentW, the wrap rebuild and the click-to-cursor math all
@@ -216,32 +216,47 @@ func (s *EditorScreen) numGutterWidth() int {
 // which reads barVisible, which under wrap reads the row cache, which is measured
 // against this width. Neither part does.
 //
-// The too-narrow guard applies to the total as well as to the numbers, so a viewport
-// that can hold one but not both keeps the sign — a marker is one cell and still says
-// something, where a truncated line number would say the wrong thing.
-func (s *EditorScreen) leftGutterWidth() int {
-	w := s.signGutterWidth() + s.numGutterWidth()
-	if w > s.w-2 {
-		return 0
+// In a too-narrow viewport the numbers go first, followed by sign columns from the
+// outside in. The innermost annotation therefore survives nearest the text.
+func (s *EditorScreen) visibleGutter() (signs []string, nums int) {
+	capacity := max(s.w-2, 0)
+	signs = s.shownSignColumns()
+	nums = s.numGutterWidth()
+	if len(signs)+nums > capacity {
+		nums = 0
 	}
-	return w
+	if len(signs) > capacity {
+		// The order is outer-to-inner. On a tiny viewport retain the columns closest
+		// to the text, where the most immediate annotation belongs.
+		signs = signs[len(signs)-capacity:]
+	}
+	return signs, nums
 }
 
-// gutterText is everything left of the text for one display row: the sign cell then the
-// line-number cell. Both are blank on a line's wrapped continuations, and the whole
-// gutter goes when it does not fit — checked here rather than in the two halves so the
+func (s *EditorScreen) leftGutterWidth() int {
+	signs, nums := s.visibleGutter()
+	return len(signs) + nums
+}
+
+// gutterText is everything left of the text for one display row: the visible sign cells
+// then the line-number cell. All are blank on a line's wrapped continuations, and the
 // string this returns always measures exactly leftGutterWidth cells.
 func (s *EditorScreen) gutterText(line int, first bool) string {
-	if s.leftGutterWidth() == 0 {
+	signs, nums := s.visibleGutter()
+	if len(signs)+nums == 0 {
 		return ""
 	}
-	return s.signText(line, first) + s.lineNumText(line, first)
+	return s.signText(signs, line, first) + s.lineNumTextWidth(nums, line, first)
 }
 
 // lineNumText is the number cell for one display row: the 1-based line number on a
 // line's first row, blanks on its wrapped continuations.
 func (s *EditorScreen) lineNumText(line int, first bool) string {
-	w := s.numGutterWidth()
+	_, w := s.visibleGutter()
+	return s.lineNumTextWidth(w, line, first)
+}
+
+func (s *EditorScreen) lineNumTextWidth(w, line int, first bool) string {
 	if w == 0 {
 		return ""
 	}
