@@ -58,6 +58,7 @@ type EditorEnterHandler func(EditorEnterContext) (EditorEnterAction, bool)
 // applyLanguage replaces every path-derived behavior at once. Explicit highlighters
 // and indent overrides came directly from EditorOpts and therefore survive a rename.
 func (s *EditorScreen) applyLanguage(path string) {
+	s.cancelCompletionSession()
 	s.autoPairs = nil
 	s.surroundPairs = nil
 	s.onEnter = nil

@@ -16,6 +16,7 @@ import (
 
 // setContent replaces the buffer with loaded file content, marking it clean.
 func (s *EditorScreen) setContent(content string) {
+	s.cancelCompletionSession()
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	raw := strings.Split(content, "\n")
 	s.lines = make([][]rune, len(raw))
@@ -109,6 +110,7 @@ func (s *EditorScreen) finishHistory(entry *editorHistoryEntry) bool {
 }
 
 func (s *EditorScreen) undo() {
+	s.cancelCompletionSession()
 	if len(s.undoStack) == 0 {
 		return
 	}
@@ -125,6 +127,7 @@ func (s *EditorScreen) undo() {
 }
 
 func (s *EditorScreen) redo() {
+	s.cancelCompletionSession()
 	if len(s.redoStack) == 0 {
 		return
 	}
@@ -220,6 +223,7 @@ func (s *EditorScreen) replaceText(start, end textPos, inserted string) textPos 
 		return start
 	}
 	deleted := s.textBetween(start, end)
+	s.rebaseCompletionEdit(start, end, inserted)
 	s.applyTextReplacement(start, end, inserted)
 	if s.activeEdit != nil {
 		s.activeEdit.changes = append(s.activeEdit.changes, editorChange{

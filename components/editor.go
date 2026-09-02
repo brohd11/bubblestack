@@ -141,6 +141,7 @@ type EditorScreen struct {
 	undoStack, redoStack                  []editorHistoryEntry
 	activeEdit                            *editorHistoryEntry
 	revision, savedRevision, nextRevision uint64
+	completion                            *editorCompletionSession
 
 	searchEnabled bool          // EditorOpts.Search: ctrl+f and match rendering are available
 	searchEditing bool          // the modal line edit is open; keeps its bottom rows reserved even while empty
@@ -769,6 +770,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen,
 		if s.confirmExit {
 			return s, core.Action{}
 		}
+		s.cancelCompletionSession()
 		mm := m.Mouse()
 		switch mm.Button {
 		case tea.MouseLeft:
@@ -863,6 +865,9 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 		case "esc", "c":
 			s.confirmExit = false
 		}
+		return s, core.Action{}
+	}
+	if s.handleCompletionKey(k, m) {
 		return s, core.Action{}
 	}
 	if s.searchEnabled && k == "ctrl+f" {
