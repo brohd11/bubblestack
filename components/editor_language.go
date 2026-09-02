@@ -10,7 +10,9 @@ type EditorLanguageResolver func(path string) *EditorLanguageConfig
 
 // EditorLanguageConfig describes language-aware behavior without teaching the editor
 // about any particular language or filename. Configs may be shared: the editor copies
-// their pair tables and creates a fresh highlighter whenever it applies one.
+// their pair tables. NewHighlighter must return an independent instance; the editor
+// calls it for bounded viewport previews and background exact snapshots, and a preview
+// may be created while another instance is parsing off the UI goroutine.
 //
 // IndentSpaces is the profile's automatic block-indent unit. A positive value means
 // that many spaces; zero means one literal tab. EditorOpts.Indent and IndentWidth remain
@@ -76,11 +78,15 @@ func (s *EditorScreen) applyLanguage(path string) {
 		return
 	}
 	s.hl = nil
+	s.hlFactory = nil
 	if cfg != nil && cfg.NewHighlighter != nil {
-		s.hl = cfg.NewHighlighter()
+		s.hlFactory = cfg.NewHighlighter
+		s.hl = s.hlFactory()
 	}
+	s.hlEpoch++
 	s.hlSeq = -1
 	s.hlChanged = time.Time{}
+	s.resetHighlightRows()
 }
 
 func pairMap(pairs []EditorPair) map[rune]rune {

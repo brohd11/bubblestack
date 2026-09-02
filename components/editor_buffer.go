@@ -35,6 +35,7 @@ func (s *EditorScreen) setContent(content string) {
 	s.textSeq = -1
 	s.hlSeq = -1
 	s.hlChanged = time.Time{}
+	s.resetHighlightRows()
 	s.wrapDirty = true
 }
 
@@ -170,9 +171,11 @@ func textEnd(start textPos, text string) textPos {
 }
 
 // applyTextReplacement performs the raw buffer splice without touching history or edit
-// generations. Single-line replacements keep the outer line slice intact, making an
-// ordinary keystroke proportional to its line rather than to the document.
+// generations. It does rebase the exact highlight snapshot before moving the lines.
+// Single-line replacements keep the outer line slice intact, making an ordinary
+// keystroke proportional to its line rather than to the document.
 func (s *EditorScreen) applyTextReplacement(start, end textPos, inserted string) {
+	s.rebaseHighlightRows(start, end, inserted)
 	if start.y == end.y && !strings.ContainsRune(inserted, '\n') {
 		line, replacement := s.lines[start.y], []rune(inserted)
 		out := make([]rune, 0, len(line)-(end.x-start.x)+len(replacement))

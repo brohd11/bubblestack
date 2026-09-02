@@ -36,6 +36,16 @@ type paneStub struct {
 	focused  bool
 }
 
+type receiverStub struct {
+	stubScreen
+	got any
+}
+
+func (s *receiverStub) Receive(_ *core.Shared, payload any) core.Action {
+	s.got = payload
+	return core.Async(func() tea.Msg { return "follow-up" })
+}
+
 func newPaneStub() *paneStub { return &paneStub{focused: true} }
 
 func (s *paneStub) SetEmbedded(on bool) { s.embedded = on }
@@ -101,6 +111,20 @@ func TestScreenPanelSyncsChild(t *testing.T) {
 			t.Fatal("a child swapped in before Init should still be embedded")
 		}
 	})
+}
+
+func TestModularBroadcastReachesScreenPanelChild(t *testing.T) {
+	sh := core.NewShared(nil)
+	child := &receiverStub{}
+	panel := NewScreenPanel(child)
+	modular := NewModularScreen([][]Slot{{{Panel: panel}}}, ModularOpts{})
+	act := modular.Receive(sh, "highlight-ready")
+	if child.got != "highlight-ready" {
+		t.Fatalf("embedded receiver got %v", child.got)
+	}
+	if act.Cmd == nil || act.Cmd() != "follow-up" {
+		t.Fatal("the embedded receiver's follow-up command was not relayed")
+	}
 }
 
 // TestScreenPanelSetChild covers the swap in both orders: before the panel's Init

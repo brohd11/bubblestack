@@ -326,15 +326,30 @@ func (s *ModularScreen) SetFocused(focused bool) {
 // falls through).
 func (s *ModularScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 
-// Receive relays a PropagateAll broadcast to the Refresh closure when one is
-// configured; without one it's a no-op (the common case). The closure answers
-// the payload out of the panels it owns (SetLines/SetItems), so the screen
-// itself stays content-agnostic.
+// Receive relays a PropagateAll broadcast to receiving panels and to the optional
+// Refresh closure. The recursive relay lets an async result reach a ScreenPanel child
+// even while another screen is on top of this root.
 func (s *ModularScreen) Receive(sh *core.Shared, payload any) core.Action {
+	var acts []core.Action
+	for _, slot := range s.flat {
+		if receiver, ok := slot.Panel.(core.Receiver); ok {
+			act := receiver.Receive(sh, payload)
+			if act.Msg != nil || act.Cmd != nil {
+				acts = append(acts, act)
+			}
+		}
+	}
 	if s.refresh != nil {
 		s.refresh(sh, payload)
 	}
-	return core.Action{}
+	switch len(acts) {
+	case 0:
+		return core.Action{}
+	case 1:
+		return acts[0]
+	default:
+		return core.Seq(acts...)
+	}
 }
 
 // CrumbLabel contributes the screen's breadcrumb segment: the short form when

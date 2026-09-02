@@ -77,11 +77,23 @@ type EditorScreen struct {
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
 
-	hl         Highlighter // syntax coloring; nil ⇒ plain render (see EditorOpts.Highlighter)
-	hlExplicit bool        // hl came from EditorOpts: a rename must not replace it
-	editSeq    int         // bumped at every buffer mutation; hl reparses when hlSeq lags
-	hlSeq      int         // the edit sequence hl last parsed (-1 ⇒ never)
-	hlChanged  time.Time   // latest edit; reparsing waits for a quiet debounce window
+	hl         Highlighter // latest exact syntax snapshot; nil ⇒ plain render
+	hlFactory  func() Highlighter
+	hlExplicit bool   // hl came from EditorOpts: a rename must not replace it
+	editSeq    int    // bumped at every buffer mutation
+	hlSeq      int    // edit sequence represented by hl (-1 ⇒ never)
+	hlEpoch    uint64 // language identity; rejects a parse finishing after a rename
+	hlRows     []int  // current row → row in hl; -1 means text affected by an edit
+	hlPreview  map[int][]Span
+	hlPrevSeq  int
+	hlPrevFrom int
+	hlPrevTo   int
+	hlDirty    int // earliest row whose lexical state may have changed; -1 ⇒ exact
+	hlAnchor   int // best current-buffer restart row for the provisional parse
+	hlFar      bool
+	hlParsing  bool
+	hlJob      uint64
+	hlChanged  time.Time // latest edit; exact parsing waits for a quiet window
 	hlDebounce time.Duration
 	textCache  string // lines joined for text consumers at textSeq
 	textSeq    int    // editSeq represented by textCache (-1 ⇒ stale)
@@ -210,12 +222,13 @@ type wrapRow struct{ line, start, end int }
 // Default off — an editor denotes focus by muting its text either way.
 //
 // Highlighter adds syntax coloring. Set explicitly, it wins over any highlighter
-// returned by ResolveLanguage and survives save-as/SetPath; left nil, the active
-// language config may create one. With neither source the editor renders plain.
-// Highlighting is
-// render-only: styles never change cell widths, and a highlighter whose spans
-// don't reconstruct the line exactly is ignored (plain render), so the frame
-// contract — no raw tabs, rectangular body — can't be broken by one.
+// returned by ResolveLanguage and survives save-as/SetPath; as a direct instance it
+// keeps the legacy synchronous debounce. Left nil, the active language config may use
+// its factory for bounded immediate previews and asynchronous exact snapshots. With
+// neither source the editor renders plain. Highlighting is render-only: styles never
+// change cell widths, and a highlighter whose spans don't reconstruct the line exactly
+// is ignored (plain render), so the frame contract — no raw tabs, rectangular body —
+// can't be broken by one.
 //
 // Search enables the editor's ctrl+f literal search. A floating LineEditScreen opens
 // over a reserved bar at the editor's bottom edge and every case-insensitive match is
@@ -299,6 +312,16 @@ type editorHighlightMsg struct {
 	seq    int
 }
 
+// editorHighlightReadyMsg carries an independently parsed snapshot back to the editor.
+// job identifies the single in-flight worker; epoch and seq guard language/buffer moves.
+type editorHighlightReadyMsg struct {
+	target *EditorScreen
+	job    uint64
+	epoch  uint64
+	seq    int
+	hl     Highlighter
+}
+
 var writeEditorClipboard = clipboard.WriteAll
 
 // readEditorClipboard is the read seam, mirroring writeEditorClipboard so tests can drive
@@ -318,6 +341,10 @@ const editorTabWidth = 4
 
 // editorHighlightDebounce coalesces full-document parsers while the user is typing.
 const editorHighlightDebounce = 250 * time.Millisecond
+
+// editorHighlightPreviewLines bounds work allowed to run synchronously in the input
+// path. A farther multiline opener is left to the exact background snapshot.
+const editorHighlightPreviewLines = 128
 
 // editorHistoryLimit bounds each stack in logical edit events.
 const editorHistoryLimit = 100
@@ -404,11 +431,13 @@ var _ core.Filterer = (*EditorScreen)(nil)
 var _ core.Crumber = (*EditorScreen)(nil)
 var _ core.Embeddable = (*EditorScreen)(nil)
 var _ core.FocusableScreen = (*EditorScreen)(nil)
+var _ core.Receiver = (*EditorScreen)(nil)
 var _ PaneOriginer = (*EditorScreen)(nil)
 
 // NewEditorScreen builds the screen with an empty buffer; a configured Path is read
 // asynchronously from the FIRST Init (the framework idiom — IO only in the cmd lane).
-// Later Inits are no-ops, so the instance is what holds the buffer for its lifetime.
+// Later Inits never re-read the file; they may resume an outstanding factory-backed
+// highlight parse, while the instance continues to hold the buffer for its lifetime.
 func NewEditorScreen(opts EditorOpts) *EditorScreen {
 	title := opts.Title
 	if title == "" {
@@ -434,9 +463,15 @@ func NewEditorScreen(opts EditorOpts) *EditorScreen {
 		bordered:        opts.Border,
 		focused:         true, // standalone the editor is always focused; a panel blurs it
 		hl:              hl,
+		hlFactory:       nil,
 		hlExplicit:      hlExplicit,
 		resolveLanguage: opts.ResolveLanguage,
 		hlSeq:           -1, // nothing parsed yet, even before the first edit
+		hlPrevSeq:       -1,
+		hlPrevFrom:      -1,
+		hlPrevTo:        -1,
+		hlDirty:         0,
+		hlAnchor:        0,
 		hlDebounce:      editorHighlightDebounce,
 		textSeq:         -1,
 		wrapDirty:       true, // no rows measured yet, even before the first edit
@@ -466,8 +501,8 @@ func (s *EditorScreen) exit(sh *core.Shared) core.Action {
 // Init kicks off the file read when a path is configured; the result arrives as an
 // editorLoadedMsg. No path ⇒ nothing to load.
 //
-// The read happens once per instance. A host that swaps this editor back into a pane
-// calls Init again (ScreenPanel.SetChild does), and re-reading there would hand
+// The file read happens once per instance. A host that swaps this editor back into a
+// pane calls Init again (ScreenPanel.SetChild does), and re-reading there would hand
 // setContent the file — discarding unsaved edits, the undo history and the cursor of the
 // very buffer the swap-back exists to return to. The flag is set before the empty-path
 // return, so a scratch buffer that later gains a path (a save-as, or SetPath after the
@@ -476,11 +511,13 @@ func (s *EditorScreen) exit(sh *core.Shared) core.Action {
 // second Init while the first read is in flight cannot queue a duplicate.
 func (s *EditorScreen) Init(*core.Shared) tea.Cmd {
 	if s.loaded {
-		return nil
+		s.refreshHighlightPreview()
+		return s.startHighlightParse()
 	}
 	s.loaded = true
 	if s.path == "" {
-		return nil
+		s.refreshHighlightPreview()
+		return s.startHighlightParse()
 	}
 	path := s.path
 	return func() tea.Msg {
@@ -625,18 +662,12 @@ func (s *EditorScreen) highlightWait(now time.Time) time.Duration {
 	return max(s.hlChanged.Add(s.highlightDelay()).Sub(now), 0)
 }
 
-func (s *EditorScreen) highlightRefreshCmd(seq int, delay time.Duration) tea.Cmd {
-	return tea.Tick(delay, func(time.Time) tea.Msg {
-		return editorHighlightMsg{target: s, seq: seq}
-	})
-}
-
 func (s *EditorScreen) parseHighlight() {
 	if s.hl == nil || s.hlSeq == s.editSeq {
 		return
 	}
 	s.hl.Parse(s.Text())
-	s.hlSeq = s.editSeq
+	s.acceptHighlight(s.hl, s.editSeq)
 }
 
 // Update handles the async load/save results, mouse presses, and keystrokes — in the
@@ -644,28 +675,33 @@ func (s *EditorScreen) parseHighlight() {
 // repaint at the end of the highlighter's quiet window without replacing another cmd.
 func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, action core.Action) {
 	seq := s.editSeq
+	epoch := s.hlEpoch
+	scroll := s.scrY
 	defer func() {
-		if s.hl != nil && s.hlSeq >= 0 && s.editSeq != seq {
+		if s.hlEpoch != epoch && s.hlFactory != nil {
+			s.refreshHighlightPreview()
+			action.Cmd = tea.Batch(action.Cmd, s.startHighlightParse())
+		} else if s.hl != nil && s.editSeq != seq && !s.hlChanged.IsZero() {
+			s.refreshHighlightPreview()
 			action.Cmd = tea.Batch(action.Cmd, s.highlightRefreshCmd(s.editSeq, s.highlightDelay()))
+		} else if s.hlFactory != nil && s.hlSeq != s.editSeq && s.scrY != scroll {
+			s.refreshHighlightPreview()
 		}
 	}()
 	switch m := msg.(type) {
 	case editorHighlightMsg:
-		if m.target != s || m.seq != s.editSeq || s.hl == nil {
-			return s, core.Action{}
-		}
-		if wait := s.highlightWait(time.Now()); wait > 0 {
-			return s, core.Async(s.highlightRefreshCmd(m.seq, wait))
-		}
-		s.parseHighlight()
-		return s, core.Action{}
+		return s, s.handleHighlightWake(m)
+	case editorHighlightReadyMsg:
+		return s, s.handleHighlightReady(m)
 	case editorLoadedMsg:
 		if m.err == nil {
 			s.setContent(m.content)
+			s.refreshHighlightPreview()
+			action.Cmd = s.startHighlightParse()
 		}
 		// A read error (missing file, permissions) leaves the empty buffer: the first
 		// save creates the file, as nano does.
-		return s, core.Action{}
+		return s, action
 	case editorSavedMsg:
 		if m.err != nil {
 			s.confirmExit = false

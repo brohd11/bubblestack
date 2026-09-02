@@ -555,14 +555,24 @@ func (s *EditorScreen) editorSearchStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(core.Resolve(editorSearchYellow)).Foreground(editorSearchText)
 }
 
-// hlSpans answers the row's validated spans. The first render parses immediately;
-// subsequent edits keep the cached spans until their debounce expires. A changed row
-// whose old spans no longer reconstruct it renders plain in the meantime.
+// hlSpans answers the row from the provisional viewport parse first, then from the
+// structurally rebased exact snapshot. Direct highlighters without a factory retain the
+// original lazy synchronous behavior for compatibility.
 func (s *EditorScreen) hlSpans(row int) []Span {
-	if s.hlSeq != s.editSeq && (s.hlSeq < 0 || s.highlightWait(time.Now()) == 0) {
+	if s.hlFactory == nil && s.hlSeq != s.editSeq && (s.hlSeq < 0 || s.highlightWait(time.Now()) == 0) {
 		s.parseHighlight()
 	}
-	spans := s.hl.HighlightLine(row)
+	if s.hlFactory != nil && s.hlSeq != s.editSeq && row >= s.hlDirty && !s.previewCovers(row) {
+		s.refreshHighlightPreview()
+	}
+	var spans []Span
+	if s.previewCovers(row) {
+		spans = s.hlPreview[row]
+	} else if row >= 0 && row < len(s.hlRows) && s.hlRows[row] >= 0 {
+		spans = s.hl.HighlightLine(s.hlRows[row])
+	} else if s.hlFactory == nil {
+		spans = s.hl.HighlightLine(row)
+	}
 	if spansText(spans) != string(s.lines[row]) {
 		return nil
 	}

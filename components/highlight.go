@@ -22,15 +22,27 @@ type Span struct {
 // adapter the editor's syntax coloring hangs on. A host supplies one explicitly through
 // EditorOpts.Highlighter or from an EditorLanguageConfig factory.
 //
-// Parse is called lazily on the first render and after editing pauses (not per frame or
-// per row), so implementations may reparse the whole document each time.
+// A direct EditorOpts.Highlighter is parsed lazily on first render and after editing
+// pauses. A language factory lets the editor parse fresh instances asynchronously and
+// may also receive bounded document fragments for an immediate viewport preview.
 type Highlighter interface {
-	// Parse ingests the full document text (lines joined with '\n').
+	// Parse ingests document text (lines joined with '\n'). Factory-created instances
+	// may receive either the full document or a row-aligned preview fragment.
 	Parse(text string)
 	// HighlightLine returns styled spans for the 0-based row; nil means the
 	// line renders unstyled. The concatenated span texts must equal the row's
 	// text (see Span).
 	HighlightLine(row int) []Span
+}
+
+// HighlightRestartProvider is the optional fast-preview half of Highlighter. An
+// implementation may point the editor at a preceding row from which a fragment can be
+// parsed in isolation with useful lexical context — the opening row of a multiline
+// string or fenced block, for example. The answer is a hint, not the authoritative
+// parse: the editor bounds synchronous fragment work and follows it with a full parse.
+// Invalid or forward answers are ignored and the edited row is used instead.
+type HighlightRestartProvider interface {
+	HighlightRestartLine(row int) int
 }
 
 // spansText is the concatenated text of spans — the editor's validation of the

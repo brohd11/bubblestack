@@ -65,6 +65,7 @@ var _ PanelUpdater = (*ScreenPanel)(nil)
 var _ Capturing = (*ScreenPanel)(nil)
 var _ panelInitializer = (*ScreenPanel)(nil)
 var _ PaneOriginer = (*ScreenPanel)(nil)
+var _ core.Receiver = (*ScreenPanel)(nil)
 
 // NewScreenPanel wraps child as a panel. The child's Init runs once, from the
 // host ModularScreen's Init.
@@ -106,6 +107,16 @@ func (p *ScreenPanel) Init(sh *core.Shared) tea.Cmd {
 		p.child.SetSize(sh, p.width, p.height)
 	}
 	return p.child.Init(sh)
+}
+
+// Receive forwards framework broadcasts to an embedded child. The router can only see
+// the root screen; relaying here is what lets an async child result survive a menu or
+// dialog temporarily sitting on top of that root.
+func (p *ScreenPanel) Receive(sh *core.Shared, payload any) core.Action {
+	if child, ok := p.child.(core.Receiver); ok {
+		return child.Receive(sh, payload)
+	}
+	return core.Action{}
 }
 
 // syncChild hands the child the two facts only the panel knows. It runs before any
