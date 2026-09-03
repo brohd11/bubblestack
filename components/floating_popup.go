@@ -336,5 +336,19 @@ func (p *PopupList[T]) View() string {
 		}
 		out = append(out, line)
 	}
-	return menuBox().Width(contentW + menuChromeW).Render(strings.Join(out, "\n"))
+	return PopupPanel(strings.Join(out, "\n"), contentW)
+}
+
+// PopupPanel renders body inside the slim bordered box every floating panel in this
+// package draws — the completion list, the context menu, the line edit. width is the
+// INNER content width; the box's own chrome is added on top (lipgloss v2's Width counts
+// the border and padding, which is why callers pass content width rather than the total).
+//
+// The fixed width is not cosmetic. core.Composite splices a popup over the screen below
+// it one line at a time, punching a hole exactly as wide as THAT line — so ragged content
+// lets the background show through beside every short line. Only equal-width lines make
+// an opaque rectangle, and that is what the box's Width supplies. Anything given to a
+// FloatingPopup as bare text will look transparent and misplaced; render it through here.
+func PopupPanel(body string, width int) string {
+	return menuBox().Width(width + menuChromeW).Render(body)
 }

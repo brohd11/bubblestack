@@ -565,9 +565,9 @@ func (s *MenuScreen) View(*core.Shared) string {
 		}
 		rows = append(rows, body)
 	}
-	// lipgloss v2's Width is the whole rendered width, border included, so the box is
-	// asked for exactly contentW+menuChromeW cells — the width place() reports.
-	return menuBox().Width(contentW + menuChromeW).Render(strings.Join(rows, "\n"))
+	// PopupPanel adds the chrome place() already accounts for, so the box is exactly
+	// the width place() reports.
+	return PopupPanel(strings.Join(rows, "\n"), contentW)
 }
 
 // row renders one item into exactly field cells: label left, hint right. A hint is

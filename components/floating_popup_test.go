@@ -134,3 +134,26 @@ func TestPopupListFuzzyUsesFilterAsPrefilterAndKeepsStableTies(t *testing.T) {
 		t.Fatalf("filtered stable ties = %v, want [0 2]", list.visible)
 	}
 }
+
+// TestPopupPanelIsAnOpaqueBox: every floating panel in this package renders through
+// PopupPanel, and both of its guarantees are load-bearing. The border is what makes a
+// panel read as foreground; the EQUAL LINE WIDTHS are what make it opaque, because
+// core.Composite punches a hole per line at that line's own width — ragged content shows
+// the screen through beside every short line.
+func TestPopupPanelIsAnOpaqueBox(t *testing.T) {
+	out := PopupPanel("short\na much longer line", 20)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("PopupPanel rendered %d rows, want 2 content rows plus 2 border rows:\n%s", len(lines), out)
+	}
+	want := 20 + menuChromeW
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got != want {
+			t.Errorf("row %d is %d cells wide, want %d — a ragged row is a transparent row:\n%s",
+				i, got, want, out)
+		}
+	}
+	if !strings.Contains(lines[0], "╭") || !strings.Contains(lines[len(lines)-1], "╯") {
+		t.Errorf("PopupPanel drew no rounded border:\n%s", out)
+	}
+}
