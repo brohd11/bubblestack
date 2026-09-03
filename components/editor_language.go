@@ -44,11 +44,27 @@ type EditorEnterContext struct {
 	IndentUnit    string
 }
 
-// EditorEnterAction describes a structured newline. The editor performs the split and
-// inserts Prefix at the head of the new line, keeping the entire gesture in one undo
-// step. A handler that returns false leaves Enter as a plain line split.
+// EditorEnterAction describes the edit Enter performs. Prefix alone is the ordinary
+// structured newline: the editor splits at the caret and heads the new line with it. The
+// two flags cover the shapes a prefix cannot reach. Whichever shape is used, the whole
+// gesture stays one undo step. A handler that returns false leaves Enter a plain split.
 type EditorEnterAction struct {
+	// Prefix heads the new line, ahead of the text the split carried past the caret.
 	Prefix string
+
+	// Block moves that carried text down one line further and leaves the caret on the
+	// empty line between, so Enter inside a bracket pair opens a block instead of pushing
+	// the closer along. Closer is that further line's own prefix — its indentation; the
+	// delimiter itself is text the split already carried, not something named here. An
+	// empty Closer is meaningful, which is why this takes a flag and not a non-empty test.
+	Block  bool
+	Closer string
+
+	// Rewrite replaces the caret's whole line with Line and inserts no newline at all,
+	// the caret landing at Line's end. It is how a list handler ends a list on an empty
+	// item: leaving one is a deletion, not a split.
+	Rewrite bool
+	Line    string
 }
 
 // EditorEnterHandler returns the structured newline to apply and whether it claims the
@@ -111,9 +127,11 @@ func leadingWhitespace(line []rune) []rune {
 	return line[:i]
 }
 
-// languageEnter asks the active profile for a newline prefix and applies it through the
-// editor's own mutation helpers. It is called inside the key event's existing history
-// boundary, so newline plus prefix remains one undo operation.
+// languageEnter asks the active profile what Enter should do here and applies it through
+// the editor's own mutation helpers. It is called inside the key event's existing history
+// boundary, so however many splices an action costs, they remain one undo operation — each
+// one appends to the same activeEdit. The mutations are ordered so that every later splice
+// sits past the last, which is what makes undo's reverse replay invert them correctly.
 func (s *EditorScreen) languageEnter() bool {
 	if s.onEnter == nil {
 		return false
@@ -129,9 +147,23 @@ func (s *EditorScreen) languageEnter() bool {
 	if !ok {
 		return false
 	}
+	if action.Rewrite {
+		// No split at all: the line the caret is on becomes Line, and the caret lands at
+		// its end. deleteLine empties a lone line the same way.
+		end := s.replaceText(textPos{s.curY, 0}, textPos{s.curY, len(line)}, action.Line)
+		s.curY, s.curX, s.wantX = end.y, end.x, end.x
+		return true
+	}
 	s.newline()
 	if action.Prefix != "" {
 		s.insertText(action.Prefix)
+	}
+	if action.Block {
+		// Open the closer's own line from the caret, then walk the caret back onto the
+		// line it just left — insertText would leave it past the closer instead.
+		at := textPos{s.curY, s.curX}
+		s.replaceText(at, at, "\n"+action.Closer)
+		s.curY, s.curX, s.wantX = at.y, at.x, at.x
 	}
 	return true
 }
