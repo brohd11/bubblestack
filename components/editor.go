@@ -102,6 +102,8 @@ type EditorScreen struct {
 	autoPairs       map[rune]rune          // typed opener → closer; nil ⇒ literal typing
 	surroundPairs   map[rune]rune          // selected opener → closer; nil ⇒ replacement
 	onEnter         EditorEnterHandler     // structured newline; nil ⇒ plain split
+	lineComment     string                 // the profile's line-comment delimiter; "" ⇒ none
+	blockComment    [2]string              // wrapping pair the toggle falls back to
 
 	indentMode          IndentMode // which unit the block gestures use (see editor_indent.go)
 	indentWidth         int        // spaces per level under IndentSpaces
@@ -996,6 +998,11 @@ func (s *EditorScreen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, cor
 		s.shiftSelectionIndent(1)
 	case "alt+,":
 		s.shiftSelectionIndent(-1)
+	// ctrl+_ is what a terminal sends for ctrl+/ — the chord puts byte 0x1f on the wire and
+	// the key decoder names that ctrl+_. Reporting a literal "ctrl+/" needs the Kitty
+	// keyboard protocol, so alt+/ is bound beside it as the form that always arrives.
+	case "ctrl+_", "alt+/":
+		s.toggleComment()
 	case "alt+i":
 		return s, core.SetStatus(s.cycleIndentMode())
 	case "tab", "shift+tab":
@@ -1094,6 +1101,9 @@ func (s *EditorScreen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "redo")),
 		key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "indent block")),
 		key.NewBinding(key.WithKeys("alt+,", "alt+."), key.WithHelp("alt+, .", "dedent/indent")),
+		// Helped as ctrl+/ because that is the chord pressed; ctrl+_ is only the name the
+		// byte it sends decodes to, and nobody reaches for underscore to comment a line.
+		key.NewBinding(key.WithKeys("ctrl+_", "alt+/"), key.WithHelp("ctrl+/", "comment")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "newline")),
 		key.NewBinding(key.WithKeys("up", "down", "left", "right"), key.WithHelp("↑↓←→", "move")),
 		key.NewBinding(key.WithKeys("shift+left", "shift+right", "shift+up", "shift+down",

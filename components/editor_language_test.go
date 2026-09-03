@@ -30,6 +30,21 @@ func testLanguage(path string) *EditorLanguageConfig {
 				}, true
 			},
 		}
+	case "commented.slash":
+		return &EditorLanguageConfig{
+			IndentSpaces: 2,
+			LineComment:  "//",
+			OnEnter: func(ctx EditorEnterContext) (EditorEnterAction, bool) {
+				return EditorEnterAction{Prefix: ctx.LeadingIndent + ctx.IndentUnit}, true
+			},
+		}
+	case "commented.hash":
+		// No OnEnter at all: a profile may declare only a comment (TOML, vimscript).
+		return &EditorLanguageConfig{IndentSpaces: 2, LineComment: "#"}
+	case "commented.block":
+		return &EditorLanguageConfig{IndentSpaces: 2, BlockComment: [2]string{"/*", "*/"}}
+	case "commented.none":
+		return &EditorLanguageConfig{IndentSpaces: 2}
 	case "structured.rewrite":
 		return &EditorLanguageConfig{
 			IndentSpaces: 2,

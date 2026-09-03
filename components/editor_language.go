@@ -1,6 +1,9 @@
 package components
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // EditorLanguageResolver is the host-owned seam between a path and the editing
 // behavior that path should receive. The editor calls it when it is constructed and
@@ -23,6 +26,18 @@ type EditorLanguageConfig struct {
 	SurroundingPairs []EditorPair
 	IndentSpaces     int
 	OnEnter          EditorEnterHandler
+
+	// LineComment is the delimiter that comments out the rest of a line — "//", "#", "--".
+	// It drives both the comment toggle and Enter's continuation of a comment run.
+	//
+	// BlockComment is a wrapping pair the toggle falls back to when LineComment is empty,
+	// because some languages (CSS) have no line form at all. Enter never continues a block
+	// comment: its delimiters are not repeated per line, so there is nothing to carry.
+	//
+	// Either may be unset. A type with neither — JSON, CSV, a diff — has no comment gesture
+	// at all, which is correct rather than a gap.
+	LineComment  string
+	BlockComment [2]string
 }
 
 // EditorPair is an opening and closing delimiter. AutoClosingPairs are inserted at an
@@ -78,6 +93,8 @@ func (s *EditorScreen) applyLanguage(path string) {
 	s.autoPairs = nil
 	s.surroundPairs = nil
 	s.onEnter = nil
+	s.lineComment = ""
+	s.blockComment = [2]string{}
 	s.resolveIndent(0)
 
 	var cfg *EditorLanguageConfig
@@ -88,6 +105,8 @@ func (s *EditorScreen) applyLanguage(path string) {
 		s.autoPairs = pairMap(cfg.AutoClosingPairs)
 		s.surroundPairs = pairMap(cfg.SurroundingPairs)
 		s.onEnter = cfg.OnEnter
+		s.lineComment = cfg.LineComment
+		s.blockComment = cfg.BlockComment
 		s.resolveIndent(cfg.IndentSpaces)
 	}
 
@@ -133,20 +152,61 @@ func leadingWhitespace(line []rune) []rune {
 // one appends to the same activeEdit. The mutations are ordered so that every later splice
 // sits past the last, which is what makes undo's reverse replay invert them correctly.
 func (s *EditorScreen) languageEnter() bool {
-	if s.onEnter == nil {
+	// A line comment is enough on its own: a profile may declare one and no Enter handler
+	// (TOML, vimscript), and continuing its comments is still right.
+	if s.onEnter == nil && s.lineComment == "" {
 		return false
 	}
 	line := s.lines[s.curY]
 	indent := leadingWhitespace(line)
-	action, ok := s.onEnter(EditorEnterContext{
+	ctx := EditorEnterContext{
 		Before:        string(line[:s.curX]),
 		After:         string(line[s.curX:]),
 		LeadingIndent: string(indent),
 		IndentUnit:    string(s.indentUnit()),
-	})
+	}
+	if action, ok := s.commentEnter(ctx, s.curY); ok {
+		return s.applyEnterAction(action, line)
+	}
+	if s.onEnter == nil {
+		return false
+	}
+	action, ok := s.onEnter(ctx)
 	if !ok {
 		return false
 	}
+	return s.applyEnterAction(action, line)
+}
+
+// commentEnter continues a line-comment run onto the next line. It runs BEFORE the profile's
+// own handler because a comment's structure outranks the language's: `// case 1:` is prose
+// that happens to contain a colon, and indenting after it would be reading code that isn't
+// there.
+//
+// An empty comment ends the run by clearing itself, the same exit an empty markdown list item
+// takes — which is what keeps this from ever being something you have to backspace out of.
+func (s *EditorScreen) commentEnter(ctx EditorEnterContext, row int) (EditorEnterAction, bool) {
+	if s.lineComment == "" || !strings.HasPrefix(ctx.Before, ctx.LeadingIndent) {
+		return EditorEnterAction{}, false
+	}
+	rest := strings.TrimPrefix(ctx.Before, ctx.LeadingIndent)
+	if !strings.HasPrefix(rest, s.lineComment) {
+		return EditorEnterAction{}, false
+	}
+	body := rest[len(s.lineComment):]
+	// A shebang is a file header, not the first line of a comment run: continuing it would
+	// put "#" on line two of every script.
+	if row == 0 && strings.HasPrefix(body, "!") {
+		return EditorEnterAction{}, false
+	}
+	gap := body[:len(body)-len(strings.TrimLeft(body, " \t"))]
+	if strings.TrimSpace(body) == "" && strings.TrimSpace(ctx.After) == "" {
+		return EditorEnterAction{Rewrite: true, Line: ctx.LeadingIndent}, true
+	}
+	return EditorEnterAction{Prefix: ctx.LeadingIndent + s.lineComment + gap}, true
+}
+
+func (s *EditorScreen) applyEnterAction(action EditorEnterAction, line []rune) bool {
 	if action.Rewrite {
 		// No split at all: the line the caret is on becomes Line, and the caret lands at
 		// its end. deleteLine empties a lone line the same way.

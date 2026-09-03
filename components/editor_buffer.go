@@ -49,7 +49,7 @@ func editorEditKey(k string, m tea.KeyPressMsg) bool {
 	switch k {
 	case "tab", "shift+tab", "enter", "backspace", "ctrl+h", "delete", "ctrl+d",
 		"alt+backspace", "ctrl+w", "alt+delete", "alt+d", "ctrl+u", "ctrl+k",
-		"alt+,", "alt+.":
+		"alt+,", "alt+.", "ctrl+_", "alt+/":
 		return true
 	}
 	return false
