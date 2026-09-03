@@ -90,7 +90,7 @@ func TestPopupListFiltersAndPreservesSelection(t *testing.T) {
 	}
 }
 
-func TestPopupListFuzzyRanksAndPreservesSelection(t *testing.T) {
+func TestPopupListFuzzyRanksAndSelectsBestOnQueryChange(t *testing.T) {
 	list := NewPopupList(PopupListOpts[int]{
 		Items: []PopupListItem[int]{
 			{Label: "sprint", Value: 1},
@@ -105,8 +105,8 @@ func TestPopupListFuzzyRanksAndPreservesSelection(t *testing.T) {
 	if list.Len() != 3 || list.visible[0] != 2 {
 		t.Fatalf("ranked sources = %v, want print first and three matches", list.visible)
 	}
-	if list.visible[list.sel] != 0 {
-		t.Fatalf("selection did not follow sprint through reranking: visible=%v sel=%d", list.visible, list.sel)
+	if list.sel != 0 || list.visible[list.sel] != 2 {
+		t.Fatalf("selection did not reset to best fuzzy match: visible=%v sel=%d", list.visible, list.sel)
 	}
 
 	list.SetQuery("spt") // a non-prefix subsequence, matched case-insensitively

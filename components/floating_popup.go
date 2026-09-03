@@ -100,8 +100,9 @@ type PopupListItem[T any] struct {
 }
 
 // PopupListOpts configures an input-transparent selectable popup list. Fuzzy matches
-// non-empty queries against FilterText and orders matches by quality; an optional
-// Filter runs first as a prefilter. Empty queries retain source order.
+// non-empty queries against FilterText, orders matches by quality, and selects the new
+// best match whenever the query changes; an optional Filter runs first as a prefilter.
+// Empty queries retain source order.
 type PopupListOpts[T any] struct {
 	Items      []PopupListItem[T]
 	MaxVisible int
@@ -150,6 +151,12 @@ func (p *PopupList[T]) SetQuery(query string) {
 		return
 	}
 	p.query = query
+	if p.fuzzy {
+		// A fuzzy query has a newly ranked best answer. Arrow navigation remains in
+		// force until the query changes, at which point accepting should follow that
+		// new ranking rather than an item selected for an older query.
+		p.sel = -1
+	}
 	p.rebuild()
 }
 
