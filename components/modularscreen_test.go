@@ -1,6 +1,8 @@
 package components
 
 import (
+	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -650,5 +652,198 @@ func TestFocusNotifierOptional(t *testing.T) {
 	}
 	if m.focus != 0 {
 		t.Fatalf("focus should have cycled back to slot 0, got %d", m.focus)
+	}
+}
+
+func TestResizeNilMatchesToday(t *testing.T) {
+	build := func(resize *ResizeOpts) *ModularScreen {
+		return NewModularScreen([][]Slot{
+			{{Panel: &narrowPanel{w: 4, h: 3}, Weight: 1, ExpandH: true},
+				{Panel: &narrowPanel{w: 5, h: 4}, Weight: 2, ExpandH: true}},
+			{{Panel: &narrowPanel{w: 6, h: 5}, ExpandH: true}},
+		}, ModularOpts{ColWidths: []int{30, 0}, Resize: resize})
+	}
+	sh := core.NewShared(nil)
+	plain, enabled := build(nil), build(&ResizeOpts{})
+	plain.SetSize(sh, 81, 21)
+	enabled.SetSize(sh, 81, 21)
+	if !reflect.DeepEqual(plain.rects, enabled.rects) {
+		t.Fatalf("resize defaults changed the grid:\nplain   = %+v\nenabled = %+v", plain.rects, enabled.rects)
+	}
+	if got, want := enabled.View(sh), plain.View(sh); got != want {
+		t.Fatalf("resize-enabled View differs from the plain screen:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestDragColumnBoundary(t *testing.T) {
+	left, right := &capturePanel{}, &capturePanel{}
+	var changed ResizeState
+	m := NewModularScreen([][]Slot{{{Panel: left}}, {{Panel: right}}}, ModularOpts{
+		ColWidths: []int{30, 0},
+		Resize:    &ResizeOpts{OnChange: func(state ResizeState) { changed = state }},
+	})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 81, 12)
+
+	m.Update(sh, tea.MouseClickMsg{X: 29, Y: 2, Button: tea.MouseLeft})
+	m.Update(sh, tea.MouseMotionMsg{X: 34, Y: 2, Button: tea.MouseLeft})
+	m.Update(sh, tea.MouseReleaseMsg{X: 34, Y: 2, Button: tea.MouseNone})
+
+	if got := m.rects[0].w; got != 35 {
+		t.Fatalf("fixed column width = %d, want 35", got)
+	}
+	if got := m.rects[1].w; got != 46 {
+		t.Fatalf("flex neighbor width = %d, want 46", got)
+	}
+	if len(left.got)+len(right.got) != 0 {
+		t.Fatalf("panels received resize gesture: left=%d right=%d", len(left.got), len(right.got))
+	}
+	if len(changed.Cols) != 2 || changed.Cols[0] != 35 {
+		t.Fatalf("OnChange state = %+v, want fixed width 35", changed)
+	}
+}
+
+func TestDragClampsAtMin(t *testing.T) {
+	t.Run("width", func(t *testing.T) {
+		m := NewModularScreen([][]Slot{{{Panel: &capturePanel{}}}, {{Panel: &capturePanel{}}}}, ModularOpts{
+			ColWidths: []int{20, 0}, Resize: &ResizeOpts{MinW: 8},
+		})
+		sh := core.NewShared(nil)
+		m.SetSize(sh, 40, 12)
+		m.Update(sh, tea.MouseClickMsg{X: 19, Y: 2, Button: tea.MouseLeft})
+		m.Update(sh, tea.MouseMotionMsg{X: -100, Y: 2, Button: tea.MouseLeft})
+		if got := m.rects[0].w; got != 8 {
+			t.Fatalf("column shrank to %d, want MinW 8", got)
+		}
+		if got := m.rects[1].w; got != 32 {
+			t.Fatalf("neighbor width = %d, want remaining 32", got)
+		}
+	})
+
+	t.Run("height", func(t *testing.T) {
+		m := NewModularScreen([][]Slot{{{Panel: &capturePanel{}}, {Panel: &capturePanel{}}}}, ModularOpts{
+			Resize: &ResizeOpts{MinH: 3},
+		})
+		sh := core.NewShared(nil)
+		m.SetSize(sh, 30, 20)
+		m.Update(sh, tea.MouseClickMsg{X: 5, Y: 9, Button: tea.MouseLeft})
+		m.Update(sh, tea.MouseMotionMsg{X: 5, Y: 100, Button: tea.MouseLeft})
+		if got := m.rects[0].h; got != 17 {
+			t.Fatalf("upper row height = %d, want 17", got)
+		}
+		if got := m.rects[1].h; got != 3 {
+			t.Fatalf("lower row height = %d, want MinH 3", got)
+		}
+	})
+}
+
+func TestDragRowBoundary(t *testing.T) {
+	m := NewModularScreen([][]Slot{{
+		{Panel: &capturePanel{}, Weight: 1},
+		{Panel: &capturePanel{}, Weight: 1},
+	}}, ModularOpts{Resize: &ResizeOpts{}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 30, 21)
+	before := append([]float64(nil), m.rowFrac[0]...)
+	m.Update(sh, tea.MouseClickMsg{X: 5, Y: 9, Button: tea.MouseLeft})
+	m.Update(sh, tea.MouseMotionMsg{X: 5, Y: 12, Button: tea.MouseLeft})
+
+	if m.rowFrac[0][0] <= before[0] || m.rowFrac[0][1] >= before[1] {
+		t.Fatalf("row fractions did not move across the pair: before=%v after=%v", before, m.rowFrac[0])
+	}
+	if got := m.rowFrac[0][0] + m.rowFrac[0][1]; math.Abs(got-1) > 1e-9 {
+		t.Fatalf("row fractions sum to %g, want 1", got)
+	}
+	if got := m.rects[0].h + m.rects[1].h; got != 21 {
+		t.Fatalf("row heights sum to %d, want body height 21", got)
+	}
+}
+
+func TestResizeStateRoundTrip(t *testing.T) {
+	var state ResizeState
+	build := func(restored ResizeState, onChange func(ResizeState)) *ModularScreen {
+		return NewModularScreen([][]Slot{
+			{{Panel: &capturePanel{}}, {Panel: &capturePanel{}}},
+			{{Panel: &capturePanel{}}},
+		}, ModularOpts{ColWidths: []int{24, 0}, Resize: &ResizeOpts{State: restored, OnChange: onChange}})
+	}
+	sh := core.NewShared(nil)
+	first := build(ResizeState{}, func(got ResizeState) { state = got })
+	first.SetSize(sh, 79, 23)
+	first.Update(sh, tea.MouseClickMsg{X: 23, Y: 4, Button: tea.MouseLeft})
+	first.Update(sh, tea.MouseMotionMsg{X: 30, Y: 4, Button: tea.MouseLeft})
+	first.Update(sh, tea.MouseReleaseMsg{X: 30, Y: 4, Button: tea.MouseNone})
+	first.Update(sh, tea.MouseClickMsg{X: 4, Y: 10, Button: tea.MouseLeft})
+	first.Update(sh, tea.MouseMotionMsg{X: 4, Y: 13, Button: tea.MouseLeft})
+	first.Update(sh, tea.MouseReleaseMsg{X: 4, Y: 13, Button: tea.MouseNone})
+
+	second := build(state, nil)
+	second.SetSize(sh, 79, 23)
+	if !reflect.DeepEqual(first.rects, second.rects) {
+		t.Fatalf("restored rects differ:\nfirst  = %+v\nsecond = %+v\nstate = %+v", first.rects, second.rects, state)
+	}
+}
+
+func TestResizeModeKeys(t *testing.T) {
+	left, right := &capturePanel{capturing: true}, &capturePanel{}
+	changes := 0
+	m := NewModularScreen([][]Slot{{{Panel: left}}, {{Panel: right}}}, ModularOpts{
+		ColWidths: []int{20, 0},
+		Resize:    &ResizeOpts{OnChange: func(ResizeState) { changes++ }},
+	})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 50, 10)
+	m.Update(sh, keyMsg("ctrl+alt+n"))
+	if !m.Resizing() {
+		t.Fatal("mode key did not enter resize mode")
+	}
+	m.Update(sh, keyMsg("right"))
+	if got := m.rects[0].w; got != 21 {
+		t.Fatalf("right nudge made the fixed column %d, want 21", got)
+	}
+	m.Update(sh, keyMsg("="))
+	if got := m.rects[0].w; got != 20 {
+		t.Fatalf("reset restored the fixed column to %d, want declared width 20", got)
+	}
+	m.Update(sh, keyMsg("right"))
+	m.Update(sh, keyMsg("esc"))
+	if m.Resizing() {
+		t.Fatal("esc did not leave resize mode")
+	}
+	if changes != 1 {
+		t.Fatalf("OnChange fired %d times, want once on exit", changes)
+	}
+	if len(left.got)+len(right.got) != 0 {
+		t.Fatalf("panels saw resize-mode keys: left=%d right=%d", len(left.got), len(right.got))
+	}
+}
+
+func TestModifiedClickNearBoundary(t *testing.T) {
+	left, right := &capturePanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{{{Panel: left}}, {{Panel: right}}}, ModularOpts{
+		ColWidths: []int{20, 0}, Resize: &ResizeOpts{},
+	})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 50, 10)
+	m.Update(sh, tea.MouseClickMsg{X: 19, Y: 2, Button: tea.MouseLeft, Mod: tea.ModAlt})
+	if len(left.got) != 1 {
+		t.Fatalf("modified boundary click reached left panel %d times, want once", len(left.got))
+	}
+	if m.dragEdge != -1 {
+		t.Fatal("modified boundary click started a resize drag")
+	}
+}
+
+func TestFlexRemainderAfterDrag(t *testing.T) {
+	m := NewModularScreen([][]Slot{{{Panel: &capturePanel{}}}, {{Panel: &capturePanel{}}}}, ModularOpts{
+		Resize: &ResizeOpts{},
+	})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 51, 10)
+	boundary := m.rects[1].x
+	m.Update(sh, tea.MouseClickMsg{X: boundary, Y: 2, Button: tea.MouseLeft})
+	m.Update(sh, tea.MouseMotionMsg{X: boundary + 4, Y: 2, Button: tea.MouseLeft})
+	if got := m.rects[0].w + m.rects[1].w; got != 51 {
+		t.Fatalf("flex columns sum to %d after drag, want terminal width 51", got)
 	}
 }

@@ -41,6 +41,16 @@ type ModularScreen struct {
 	hitRects    []panelRect // per flat slot, as actually rendered (post-ExpandV/H); rebuilt by View
 	bodyH       int         // post-title body height, stashed by SetSize for ExpandV
 	colWidths   []int
+	resize      *ResizeOpts
+	defaultCols []int
+	flexFrac    []float64
+	rowFrac     [][]float64
+	edges       []resizeEdge
+	dragEdge    int
+	dragFrom    int
+	resizing    bool
+	lastW       int
+	lastH       int
 	focus       int  // index into flat; -1 when no slot is focusable
 	mouseSlot   int  // slot owning the current left/right gesture; -1 when none is active
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
@@ -74,12 +84,14 @@ var _ core.FocusableScreen = (*ModularScreen)(nil)
 // entry per column; 0 (or a missing entry) makes the column flex — flex columns
 // share whatever width the fixed columns leave. Refresh, when set, makes the
 // screen a Receiver (same semantics as PickerOpts.Refresh); Dir advertises a
-// directory to the router's global terminal/open-dir keys (DirLocator).
+// directory to the router's global terminal/open-dir keys (DirLocator). Resize
+// opts into adjustable pane boundaries; nil preserves the fixed layout.
 type ModularOpts struct {
-	Title      string // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
-	Crumb      string // breadcrumb segment; defaults to Title
-	CrumbShort string // optional short breadcrumb segment; defaults to Crumb/Title
-	ColWidths  []int  // per column, cells; 0 = flex
+	Title      string      // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
+	Crumb      string      // breadcrumb segment; defaults to Title
+	CrumbShort string      // optional short breadcrumb segment; defaults to Crumb/Title
+	ColWidths  []int       // per column, cells; 0 = flex
+	Resize     *ResizeOpts // nil disables pane resizing
 	Help       []key.Binding
 	Refresh    func(sh *core.Shared, payload any) bool
 	PopStop    bool   // mark this screen as a PopTo boundary (a command hub)
@@ -108,6 +120,8 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		crumb:       opts.Crumb,
 		crumbShort:  opts.CrumbShort,
 		help:        help,
+		resize:      opts.Resize,
+		dragEdge:    -1,
 		refresh:     opts.Refresh,
 		popStop:     opts.PopStop,
 		dir:         opts.Dir,
@@ -119,6 +133,9 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 			s.flat = append(s.flat, &s.cols[c][i])
 			s.pos = append(s.pos, gridPos{col: c, row: i})
 		}
+	}
+	if s.resize != nil {
+		s.initResize(opts.ColWidths, s.resize.State)
 	}
 	if f := s.firstFocusable(); f >= 0 {
 		s.focus = f
@@ -189,6 +206,29 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		k := km.String()
+		if s.resize != nil {
+			if s.resizing {
+				switch {
+				case s.resizeKeyMatches(k), k == "esc", k == "enter":
+					s.SetResizing(false)
+				case k == "left":
+					s.Nudge(-1, 0)
+				case k == "right":
+					s.Nudge(1, 0)
+				case k == "up":
+					s.Nudge(0, -1)
+				case k == "down":
+					s.Nudge(0, 1)
+				case k == "=":
+					s.resetResize()
+				}
+				return s, core.Action{}
+			}
+			if s.resizeKeyMatches(k) {
+				s.SetResizing(true)
+				return s, core.Action{}
+			}
+		}
 		if cmd, moved := s.moveFocus(k); moved {
 			// The pane key itself is consumed here and never reaches a panel, so
 			// this Action is the newly focused panel's only chance to start work
@@ -218,6 +258,37 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		_, isWheel := mm.(tea.MouseWheelMsg)
 		_, isRelease := mm.(tea.MouseReleaseMsg)
 		m := mm.Mouse()
+		if s.resize != nil {
+			if click, ok := mm.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && click.Mod == 0 {
+				if edge := s.edgeAt(sh, click.X, click.Y); edge >= 0 {
+					s.mouseSlot = -1
+					s.dragEdge = edge
+					if s.edges[edge].vertical {
+						s.dragFrom = click.X
+					} else {
+						s.dragFrom = click.Y
+					}
+					return s, core.Action{}
+				}
+			}
+			if s.dragEdge >= 0 {
+				switch mm.(type) {
+				case tea.MouseMotionMsg:
+					pos := m.Y
+					if s.edges[s.dragEdge].vertical {
+						pos = m.X
+					}
+					s.applyDelta(s.dragEdge, pos-s.dragFrom)
+					s.dragFrom = pos
+					s.relayout()
+					return s, core.Action{}
+				case tea.MouseReleaseMsg:
+					s.dragEdge = -1
+					s.notifyResize()
+					return s, core.Action{}
+				}
+			}
+		}
 		if isClick || isWheel {
 			s.mouseSlot = -1
 			if i := s.slotAt(sh, m.X, m.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
@@ -455,6 +526,9 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 // the focused panel's PanelHelp bindings, and the caller's Help extras, rendered
 // through the shared static-help style.
 func (s *ModularScreen) HelpView(sh *core.Shared) string {
+	if s.resizing {
+		return sh.NoteHelp("resize: ←→ width · ↑↓ height · = reset · esc done")
+	}
 	var hints []key.Binding
 	if s.focusableCount() > 1 {
 		hints = append(hints, core.PaneHint())
@@ -477,6 +551,11 @@ func (s *ModularScreen) HelpView(sh *core.Shared) string {
 // same arithmetic also records each slot's body-relative rect, so Update can
 // hit-test mouse presses (see slotAt).
 func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	if s.resize != nil {
+		s.lastW, s.lastH = width, bodyHeight
+		s.setResizeSize(width, bodyHeight)
+		return
+	}
 	y0 := 0
 	if s.title != "" {
 		y0 = lipgloss.Height(core.RenderTitleBar(s.title))
