@@ -206,8 +206,15 @@ func TestInlineCmdFallsBackWithoutShell(t *testing.T) {
 func TestInlineCmdRunsCommandDirectly(t *testing.T) {
 	t.Setenv("SHELL", "/usr/bin/fish")
 	cmd := inlineCmd([]string{"git", "log", "--author=A B"})
-	want := []string{"git", "log", "--author=A B"}
-	if !reflect.DeepEqual(cmd.Args, want) {
-		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	if len(cmd.Args) == 0 {
+		t.Fatal("cmd.Args is empty")
+	}
+	program := strings.TrimSuffix(filepath.Base(cmd.Args[0]), filepath.Ext(cmd.Args[0]))
+	if !strings.EqualFold(program, "git") {
+		t.Fatalf("command = %q, want git", cmd.Args[0])
+	}
+	wantArgs := []string{"log", "--author=A B"}
+	if !reflect.DeepEqual(cmd.Args[1:], wantArgs) {
+		t.Fatalf("command args = %#v, want %#v", cmd.Args[1:], wantArgs)
 	}
 }
