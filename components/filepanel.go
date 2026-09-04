@@ -27,7 +27,7 @@ import (
 // ListPanel's own (NewListPanel's 3-row delegate, NewCompactListPanel's 1-row), and
 // SetCompact swaps between them in place.
 //
-// Like EditorScreen, every difference between "the whole app is this" and "this is one
+// Like editor.Screen, every difference between "the whole app is this" and "this is one
 // pane" is either a hook the host sets or a bool the instancer chooses: Border is the
 // composing caller's, Root bounds navigation, Include decides what is listed at all, and a
 // nil hook is the sensible standalone default.

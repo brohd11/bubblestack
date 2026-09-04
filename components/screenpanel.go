@@ -15,7 +15,7 @@ import (
 type FocusableScreen = core.FocusableScreen
 
 // PaneOriginer is implemented by a screen that lays something out in absolute
-// terminal cells and therefore needs to know where its pane sits — an EditorScreen
+// terminal cells and therefore needs to know where its pane sits — an editor.Screen
 // anchoring its save-as overlay at the pane's bottom edge. The host ModularScreen
 // pushes each slot's rendered origin to a panel implementing it; ScreenPanel does
 // and forwards to a child that implements it too. Coordinates are the pane's
@@ -84,7 +84,7 @@ func NewScreenPanel(child core.Screen) *ScreenPanel { return &ScreenPanel{child:
 // Init runs on every swap, including a swap back to a child this panel hosted before —
 // the panel keeps no record of what it has already started. A child whose Init performs a
 // one-time load therefore owns making it idempotent, or a pane cycling between children
-// reloads (and resets) each one every time it comes back; EditorScreen.Init is the
+// reloads (and resets) each one every time it comes back; editor.Screen.Init is the
 // worked example.
 func (p *ScreenPanel) SetChild(child core.Screen) tea.Cmd {
 	p.child = child

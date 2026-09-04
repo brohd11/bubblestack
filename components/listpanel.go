@@ -66,7 +66,7 @@ var _ FocusNotifier = (*ListPanel)(nil)
 // is focused.
 //
 // Border opts the panel into the framework's framed look (the one ScrollContainer
-// and a bordered EditorScreen wear): the list's own title bar is dropped and the
+// and a bordered editor.Screen wear): the list's own title bar is dropped and the
 // title becomes the frame's top-edge legend, tinted by focus — so a sidebar denotes
 // which pane is live even when its cursor doesn't. It is a plain option rather than
 // a core.Borderer implementation because a panel only ever lives inside a
@@ -482,7 +482,7 @@ func (p *ListPanel) View(focused bool) string {
 		body = line + "\n" + body
 	}
 	if p.bordered {
-		body = frame(p.title, body, p.innerWidth(), focused)
+		body = Frame(p.title, body, p.innerWidth(), focused)
 	}
 	// A panel's rendered footprint is also ModularScreen's hit-test geometry. Keep
 	// it within the allocation even if an embedded model ever over-renders again;

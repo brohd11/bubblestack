@@ -106,7 +106,7 @@ var Keys = KeyMap{
 	No:  key.NewBinding(key.WithKeys("esc", "n", "N", "c")),
 
 	// The shift+arrows used to alias these. They belong to the focused screen now —
-	// an editor selects text with them (components.EditorScreen.selectMove) — so the
+	// an editor selects text with them (editor.Screen.selectMove) — so the
 	// router must leave them alone rather than claim them here. [ ] and z x remain.
 	NextTab:      key.NewBinding(key.WithKeys("]", "x")),
 	PrevTab:      key.NewBinding(key.WithKeys("[", "z")),

@@ -91,6 +91,16 @@ func (s *LineEditScreen) SetValue(v string) {
 	s.input.SetCursor(len([]rune(v)))
 }
 
+// Value is the current text — the read half of SetValue, for a caller holding the
+// screen while it is up.
+func (s *LineEditScreen) Value() string { return s.input.Value() }
+
+// Anchor is the box geometry the constructor was handed: the top-left corner in
+// absolute terminal cells and the width of the element being covered. OverlayPos
+// answers the same corner; this adds the width, for a caller verifying where a box
+// it positioned actually landed.
+func (s *LineEditScreen) Anchor() (x, y, width int) { return s.x, s.y, s.width }
+
 // SetPrompt replaces textinput's default "> " prefix.
 func (s *LineEditScreen) SetPrompt(prompt string) { s.input.Prompt = prompt }
 
@@ -102,6 +112,9 @@ func (s *LineEditScreen) SetCursorBlink(blink bool) {
 	st.Cursor.Blink = blink
 	s.input.SetStyles(st)
 }
+
+// CursorBlink reports the input cursor's blink state — the read half of SetCursorBlink.
+func (s *LineEditScreen) CursorBlink() bool { return s.input.Styles().Cursor.Blink }
 
 // IsOverlay marks the screen for compositing over the screen below it.
 func (s *LineEditScreen) IsOverlay() bool { return true }
@@ -188,7 +201,7 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 			body = body + "\n" + hint
 		}
 	}
-	return lineEditBox().Width(contentW + 4).Render(body)
+	return LineEditBox().Width(contentW + 4).Render(body)
 }
 
 // HelpView is empty: the hints render inside the box (the popup precedent — the
@@ -197,10 +210,10 @@ func (s *LineEditScreen) HelpView(*core.Shared) string { return "" }
 
 func (s *LineEditScreen) SetSize(_ *core.Shared, width, _ int) { s.termW = width }
 
-// lineEditBox is the slim variant of core's popup box: one input row tall, so it
+// LineEditBox is the slim variant of core's popup box: one input row tall, so it
 // hugs the covered element instead of reading as a dialog. Built per call (like
 // popupStyle) so it tracks the active theme.
-func lineEditBox() lipgloss.Style {
+func LineEditBox() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Padding(0, 1).
 		Border(lipgloss.RoundedBorder()).

@@ -82,7 +82,7 @@ func (s *DialogScreen) CrumbLabel(short bool) string {
 	if s.Overlay {
 		return ""
 	}
-	return crumbSeg(short, s.CrumbShort, s.Crumb, "Conf")
+	return CrumbSegment(short, s.CrumbShort, s.Crumb, "Conf")
 }
 
 func (s *DialogScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {

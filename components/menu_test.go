@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/bubblestack/internal/tuitest"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -35,17 +36,8 @@ func menuItems() []MenuItem {
 	}
 }
 
-// press builds the mouse message for one button at one cell. v2 splits clicks and
-// wheel notches into separate types, so the button picks which — keeping the single
-// call shape these tests already read as "press this button there".
-func press(x, y int, b tea.MouseButton) tea.MouseMsg {
-	m := tea.Mouse{X: x, Y: y, Button: b}
-	switch b {
-	case tea.MouseWheelUp, tea.MouseWheelDown, tea.MouseWheelLeft, tea.MouseWheelRight:
-		return tea.MouseWheelMsg(m)
-	}
-	return tea.MouseClickMsg(m)
-}
+// press is tuitest.Press under the name every test in this package already calls.
+func press(x, y int, b tea.MouseButton) tea.MouseMsg { return tuitest.Press(x, y, b) }
 
 // TestMenuBoxDims pins the invariant every other behavior rests on: what place() reports
 // is exactly what View() renders. Click hit-testing subtracts the placed position from

@@ -78,7 +78,7 @@ type FocusableScreen interface{ SetFocused(bool) }
 //     chrome the screen draws comes out of them (the panel convention).
 //
 // What the screen LOOKS like is not this interface's business: a border is a
-// construction-time option of the screen itself (EditorOpts.Border, mirroring
+// construction-time option of the screen itself (editor.Opts.Border, mirroring
 // ListPanelOpts.Border), so the instancer composes it, embedded or not. Focus is
 // likewise separate — a screen implementing FocusableScreen has SetFocused
 // forwarded by the panel and denotes focus however suits it.

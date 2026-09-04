@@ -12,7 +12,7 @@ import (
 // The framework's one framed-element look, shared by every element that draws a
 // box: a NormalBorder whose top edge is hand-drawn so a title legend can sit
 // mid-line, tinted muted or accent by focus. ScrollContainer wore it first (the
-// LogPane idiom); the bordered EditorScreen and ListPanel reuse it verbatim, so a
+// LogPane idiom); the bordered editor.Screen and ListPanel reuse it verbatim, so a
 // detail pane, a sidebar list and an editor pane all read as the same kind of
 // element.
 
@@ -61,9 +61,9 @@ func frameBox(innerWidth int, focused bool) lipgloss.Style {
 		Width(innerWidth + 2)
 }
 
-// frame is the whole element: the legend top edge over body in the box. The
+// Frame is the whole element: the legend top edge over body in the box. The
 // unpadded common case — a caller needing padding composes frameTop and frameBox
 // itself (ScrollContainer does).
-func frame(legend, body string, innerWidth int, focused bool) string {
+func Frame(legend, body string, innerWidth int, focused bool) string {
 	return frameTop(legend, innerWidth, focused) + "\n" + frameBox(innerWidth, focused).Render(body)
 }

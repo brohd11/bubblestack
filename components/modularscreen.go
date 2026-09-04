@@ -30,7 +30,7 @@ import (
 //     are not chosen yet — see core.Keys.PaneLeft.
 //
 // Either way the cost to the panels is only the reserved keys themselves, which
-// is what lets a pane that types everything else (an embedded EditorScreen) still
+// is what lets a pane that types everything else (an embedded editor.Screen) still
 // be left from the keyboard.
 type ModularScreen struct {
 	cols        [][]Slot
@@ -341,7 +341,7 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 // Keeping this translation for a full left- or right-button gesture lets a drag leave
 // its pane without changing owners or exposing absolute terminal coordinates to the
 // panel that began it. A panel that needs absolute cells anyway — one anchoring an
-// overlay at the pointer, as EditorScreen's context menu does — adds back the origin
+// overlay at the pointer, as editor.Screen's context menu does — adds back the origin
 // this subtracts, which it receives through PaneOriginer.
 func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {
 	r := s.slotRect(i)
@@ -434,7 +434,7 @@ func (s *ModularScreen) Receive(sh *core.Shared, payload any) core.Action {
 // CrumbLabel contributes the screen's breadcrumb segment: the short form when
 // set, else the explicit crumb, else the title.
 func (s *ModularScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.crumbShort, s.crumb, s.title)
+	return CrumbSegment(short, s.crumbShort, s.crumb, s.title)
 }
 
 // View stacks each column's panels vertically and joins the columns side by

@@ -64,7 +64,7 @@ func TestFrameColorTracksFocus(t *testing.T) {
 // TestFrameBoxSizing: the box under the legend renders at the same width as the top
 // edge, so the two edges line up.
 func TestFrameBoxSizing(t *testing.T) {
-	f := frame("t", "body", 12, false)
+	f := Frame("t", "body", 12, false)
 	lines := strings.Split(f, "\n")
 	if len(lines) != 3 { // top edge, the one body row, bottom border
 		t.Fatalf("frame lines = %d, want 3: %q", len(lines), f)

@@ -100,7 +100,7 @@ func (s *PickerScreen) Receive(sh *core.Shared, payload any) core.Action {
 // CrumbLabel contributes the picker's breadcrumb segment: the short form when set,
 // else the explicit crumb, else the list title (the default — crumb and title agree).
 func (s *PickerScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.crumbShort, s.crumb, s.list.Title)
+	return CrumbSegment(short, s.crumbShort, s.crumb, s.list.Title)
 }
 
 func (s *PickerScreen) Init(*core.Shared) tea.Cmd { return nil }

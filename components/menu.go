@@ -73,8 +73,8 @@ import (
 //     runs the consumer's HeaderPane.OnClick, which could push over a live menu; an
 //     output-pane click moves keyboard focus, leaving the menu drawn but keyless until
 //     esc. All three are call-site concerns.
-//  5. Right-click is claimed per call site, not globally. EditorScreen takes it when its
-//     host sets EditorOpts.ContextMenu — the first in-tree consumer, and the worked
+//  5. Right-click is claimed per call site, not globally. editor.Screen takes it when its
+//     host sets editor.Opts.ContextMenu — the first in-tree consumer, and the worked
 //     example of anchoring with AnchorAt in absolute cells from inside a pane. Everywhere
 //     else the button is still up for grabs, and two screens on one stack must not both
 //     claim it; this component arbitrates nothing.
@@ -101,6 +101,11 @@ type MenuScreen struct {
 	// OnCancel runs on esc/left and on a dismissing click; nil ⇒ a plain core.Pop.
 	OnCancel func(*core.Shared) core.Action
 }
+
+// Items are the menu's rows as built, including any separators — the finished row set
+// a caller assembled through MenuOpts plus whatever the constructor added. Read-only:
+// the slice backs the live menu, so callers must not mutate it.
+func (s *MenuScreen) Items() []MenuItem { return s.items }
 
 var _ core.Overlayer = (*MenuScreen)(nil)
 var _ core.OverlayPositioner = (*MenuScreen)(nil)
@@ -612,4 +617,4 @@ func fitCells(text string, w int) string {
 // menuBox is the menu's frame. It is lineEditBox deliberately and not by accident: the
 // floating overlays are one family and should read as one, so the border lives in a
 // single place and a change to it moves them together.
-func menuBox() lipgloss.Style { return lineEditBox() }
+func menuBox() lipgloss.Style { return LineEditBox() }

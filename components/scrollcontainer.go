@@ -205,7 +205,7 @@ func (p *ScrollContainer) View(focused bool) string {
 	}
 	// The run between the corners is the same width as the bottom border: the
 	// inner text plus the 1-col padding on each side. Composed from the frame
-	// helpers rather than frame() because of that padding.
+	// helpers rather than Frame() because of that padding.
 	inner := p.innerWidth() + 2
 	content := frameBox(inner, focused).Padding(0, 1).Render(p.vp.View())
 	return frameTop(label, inner, focused) + "\n" + content

@@ -39,7 +39,7 @@ func NewLoadingScreen(Title, Label string, Run func(context.Context) tea.Cmd, On
 // CrumbLabel contributes the loading screen's breadcrumb segment: the short form when
 // set, else the explicit crumb, else the title.
 func (s *LoadingScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.CrumbShort, s.Crumb, s.Title)
+	return CrumbSegment(short, s.CrumbShort, s.Crumb, s.Title)
 }
 
 func (s *LoadingScreen) Init(sh *core.Shared) tea.Cmd {

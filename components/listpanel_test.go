@@ -247,7 +247,7 @@ func TestListPanelClampsOvertallList(t *testing.T) {
 	p.SetSize(30, height)
 	p.List().Paginator.PerPage += 3 // synthesize an upstream over-render
 
-	raw := frame(p.title, p.List().View(), p.innerWidth(), true)
+	raw := Frame(p.title, p.List().View(), p.innerWidth(), true)
 	if got := lipgloss.Height(raw); got <= height {
 		t.Fatalf("test setup did not produce an over-tall list: got %d rows", got)
 	}

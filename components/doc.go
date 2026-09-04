@@ -58,7 +58,7 @@ func NewDocScreen(opts DocOpts) *DocScreen {
 // CrumbLabel contributes the page's breadcrumb segment: the short form when set, else
 // the explicit crumb, else the title.
 func (s *DocScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.CrumbShort, s.Crumb, s.Title)
+	return CrumbSegment(short, s.CrumbShort, s.Crumb, s.Title)
 }
 
 func (s *DocScreen) Init(*core.Shared) tea.Cmd { return nil }

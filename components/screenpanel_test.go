@@ -28,7 +28,7 @@ func (s *stubScreen) SetSize(_ *core.Shared, w, h int) {
 }
 
 // paneStub is a child that answers both embed-time capabilities, recording what it
-// was told and the dims it was sized with — the shape of an embedded EditorScreen.
+// was told and the dims it was sized with — the shape of an embedded editor.Screen.
 // It starts focused, as a real screen does (standalone always is).
 type paneStub struct {
 	stubScreen
@@ -223,7 +223,7 @@ func TestScreenPanelForwardsPaneOrigin(t *testing.T) {
 	}
 }
 
-// originStubScreen records the pushed pane origin (EditorScreen's shape).
+// originStubScreen records the pushed pane origin (editor.Screen's shape).
 type originStubScreen struct {
 	stubScreen
 	x, y int

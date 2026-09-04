@@ -7,6 +7,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -35,6 +36,12 @@ var lineEditValues = map[string]string{
 // forces a color profile because the caret's reverse attribute is what the wrap keys
 // on, and the default renderer strips styling with no TTY attached, which hides the
 // whole defect.
+// lineEditKey drives one key into the screen and returns the action it answers with.
+func lineEditKey(s *LineEditScreen, sh *core.Shared, msg tea.KeyPressMsg) core.Action {
+	_, act := s.Update(sh, msg)
+	return act
+}
+
 func TestLineEditBoxGeometry(t *testing.T) {
 	const width = 30
 	for name, value := range lineEditValues {

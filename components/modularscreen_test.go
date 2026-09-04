@@ -371,7 +371,7 @@ func TestPaneNavOverUnevenGrid(t *testing.T) {
 
 // TestPaneNavEscapesCapturingPanel is the reason the pane keys are matched above
 // the capture gate rather than falling out of it: a panel that claims every
-// keystroke (an embedded EditorScreen, whose whole job is to type them) would
+// keystroke (an embedded editor.Screen, whose whole job is to type them) would
 // otherwise be a trap with no keyboard exit. A reserved key must move focus off it
 // while everything else still reaches it.
 func TestPaneNavEscapesCapturingPanel(t *testing.T) {
@@ -436,7 +436,7 @@ func TestFocusSlot(t *testing.T) {
 }
 
 // originPanel records the pane origin the host pushes from View (ScreenPanel's
-// shape; EditorScreen is the real consumer).
+// shape; editor.Screen is the real consumer).
 type originPanel struct {
 	x, y int
 	has  bool
@@ -467,7 +467,7 @@ func TestModularScreenPushesPaneOrigin(t *testing.T) {
 }
 
 // narrowPanel renders a fixed-width block regardless of its allocation — the shape
-// an EditorScreen has on a short document, whose body is only as wide as its longest
+// an editor.Screen has on a short document, whose body is only as wide as its longest
 // line and leaves the column a ragged right edge.
 type narrowPanel struct{ w, h int }
 

@@ -58,7 +58,7 @@ var _ FocusableScreen = (*FormScreen)(nil)
 // CrumbLabel contributes the form's breadcrumb segment, defaulting to "Form" when no
 // Crumb is declared.
 func (f *FormScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, f.crumbShort, f.crumb, "Form")
+	return CrumbSegment(short, f.crumbShort, f.crumb, "Form")
 }
 
 func NewForm(opts FormOpts) *FormScreen {
@@ -243,7 +243,7 @@ func (f *FormScreen) FocusedKey() string { return f.current().Key() }
 //
 // Only correct for a form that owns the whole body: the anchor is Shared.BodyY() plus
 // the box's own origin, where a form nested in a ScreenPanel would need its pane origin
-// instead. That's the same seam EditorScreen crosses with absCell.
+// instead. That's the same seam editor.Screen crosses with absCell.
 func (f *FormScreen) FieldAnchor(sh *core.Shared, key string) (MenuAnchor, bool) {
 	bx, by := core.BoxOrigin()
 	// Measured, matching chromeRows: WithTitle on an empty body is the title bar plus

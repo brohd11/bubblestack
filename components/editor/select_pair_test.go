@@ -1,0 +1,503 @@
+package editor
+
+import (
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+var editorTestAutoPairs = []Pair{
+	{Open: '(', Close: ')'},
+	{Open: '[', Close: ']'},
+	{Open: '{', Close: '}'},
+	{Open: '\'', Close: '\''},
+	{Open: '"', Close: '"'},
+	{Open: '`', Close: '`'},
+}
+
+func editorTestPairOpts(path string) Opts {
+	surround := append([]Pair(nil), editorTestAutoPairs...)
+	surround = append(surround,
+		Pair{Open: '*', Close: '*'},
+		Pair{Open: '_', Close: '_'},
+	)
+	return Opts{
+		Path: path,
+		ResolveLanguage: func(string) *LanguageConfig {
+			return &LanguageConfig{
+				AutoClosingPairs: editorTestAutoPairs,
+				SurroundingPairs: surround,
+			}
+		},
+	}
+}
+
+func TestEditorWordBoundsAt(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		col      int
+		from, to int
+	}{
+		{"word", "foo.bar(baz_qux)", 1, 0, 3},
+		{"dot alone", "foo.bar(baz_qux)", 3, 3, 4},
+		{"paren alone", "foo.bar(baz_qux)", 7, 7, 8},
+		{"underscore joins", "foo.bar(baz_qux)", 10, 8, 15},
+		{"closing paren", "foo.bar(baz_qux)", 15, 15, 16},
+		{"space run", "ab  cd", 2, 2, 4},
+		{"digits are word chars", "v2 x", 1, 0, 2},
+		{"past end takes last run", "abc", 3, 0, 3},
+		{"empty line", "", 0, 0, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			from, to := wordBoundsAt([]rune(tc.line), tc.col)
+			if from != tc.from || to != tc.to {
+				t.Fatalf("wordBoundsAt(%q, %d) = %d,%d, want %d,%d", tc.line, tc.col, from, to, tc.from, tc.to)
+			}
+		})
+	}
+}
+
+func TestEditorDoubleClickSelectsWord(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo.bar baz")
+	y := s.titleH()
+	now := time.Now()
+
+	s.pressSelection(sh, 5, y, now)
+	if s.selectionActive() {
+		t.Fatal("a single press should not select")
+	}
+	s.pressSelection(sh, 5, y, now.Add(10*time.Millisecond))
+	text := s.selectedText()
+	if text != "bar" {
+		t.Fatalf("double click selected %q, want %q", text, "bar")
+	}
+	if s.selStart != (textPos{0, 4}) || s.selEnd != (textPos{0, 7}) {
+		t.Fatalf("selection = %v..%v, want {0 4}..{0 7}", s.selStart, s.selEnd)
+	}
+	if s.curX != 7 {
+		t.Fatalf("caret at %d, want the selection end 7", s.curX)
+	}
+	if s.dragging {
+		t.Fatal("a multi-click ends the gesture: dragging must be off so the release cannot clear it")
+	}
+}
+
+func TestEditorSlowSecondClickStaysCaret(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo bar")
+	y := s.titleH()
+	now := time.Now()
+
+	s.pressSelection(sh, 1, y, now)
+	s.pressSelection(sh, 1, y, now.Add(2*time.Second))
+	if s.selectionActive() {
+		t.Fatal("two presses two seconds apart are two caret clicks, not a double click")
+	}
+}
+
+func TestEditorSecondClickElsewhereStaysCaret(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo bar")
+	y := s.titleH()
+	now := time.Now()
+
+	s.pressSelection(sh, 1, y, now)
+	s.pressSelection(sh, 5, y, now.Add(10*time.Millisecond))
+	if s.selectionActive() {
+		t.Fatal("a fast press on a different cell is a fresh first click")
+	}
+}
+
+func TestEditorLeftDoubleClickSurvivesReleaseWithoutCopy(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo bar")
+	oldWrite := writeEditorClipboard
+	defer func() { writeEditorClipboard = oldWrite }()
+	var copied string
+	writeEditorClipboard = func(text string) error { copied = text; return nil }
+	y := s.titleH()
+
+	down := tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseLeft}
+	s.Update(sh, down)
+	_, act := s.Update(sh, down)
+	if act.Cmd != nil || copied != "" {
+		t.Fatal("a left double click should select without copying")
+	}
+	s.Update(sh, tea.MouseReleaseMsg{X: 1, Y: y, Button: tea.MouseNone})
+	if !s.selectionActive() || s.selectedText() != "foo" {
+		t.Fatalf("the release cleared the word selection: active=%v text=%q", s.selectionActive(), s.selectedText())
+	}
+}
+
+// TestEditorRightPressNeverMultiSelects: right presses are one-shot menu gestures, so
+// repeating one on the same cell must never promote to the word/line selection a repeated
+// LEFT press does.
+func TestEditorRightPressNeverMultiSelects(t *testing.T) {
+	s, sh := newEditor(Opts{ContextMenu: true})
+	s.setContent("foo bar\nnext")
+	y := s.titleH()
+	down := tea.MouseClickMsg{X: 1, Y: y, Button: tea.MouseRight}
+
+	for i := 0; i < 3; i++ {
+		if _, act := s.Update(sh, down); act.Msg == nil {
+			t.Fatalf("right press %d should open the menu", i+1)
+		}
+		if s.selectionActive() {
+			t.Fatalf("right press %d selected %q; repeated right presses must not promote",
+				i+1, s.selectedText())
+		}
+	}
+}
+
+func TestEditorTripleClickSelectsLine(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("alpha\nbeta\ngamma")
+	now := time.Now()
+	y := s.titleH() + 1 // "beta"
+
+	s.pressSelection(sh, 1, y, now)
+	s.pressSelection(sh, 1, y, now.Add(10*time.Millisecond))
+	s.pressSelection(sh, 1, y, now.Add(20*time.Millisecond))
+	text := s.selectedText()
+	if text != "beta\n" {
+		t.Fatalf("triple click selected %q, want the line and its newline", text)
+	}
+	if s.selStart != (textPos{1, 0}) || s.selEnd != (textPos{2, 0}) {
+		t.Fatalf("selection = %v..%v, want {1 0}..{2 0}", s.selStart, s.selEnd)
+	}
+
+	// The last line has no newline to take.
+	s.clickCount = 0
+	last := s.titleH() + 2
+	s.pressSelection(sh, 1, last, now)
+	s.pressSelection(sh, 1, last, now.Add(10*time.Millisecond))
+	s.pressSelection(sh, 1, last, now.Add(20*time.Millisecond))
+	if text := s.selectedText(); text != "gamma" {
+		t.Fatalf("triple click on the last line selected %q, want %q", text, "gamma")
+	}
+	if s.selEnd != (textPos{2, 5}) {
+		t.Fatalf("last-line selection ends at %v, want {2 5}", s.selEnd)
+	}
+}
+
+func TestEditorFourthClickStartsOver(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo bar")
+	y := s.titleH()
+	now := time.Now()
+
+	for i := 0; i < 3; i++ {
+		s.pressSelection(sh, 1, y, now.Add(time.Duration(i)*10*time.Millisecond))
+	}
+	s.pressSelection(sh, 1, y, now.Add(30*time.Millisecond))
+	if s.selectionActive() || s.clickCount != 1 {
+		t.Fatalf("fourth click: active=%v count=%d, want a fresh first click", s.selectionActive(), s.clickCount)
+	}
+}
+
+func TestEditorTypingBreaksTheClickRun(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent("foo bar")
+	y := s.titleH()
+	now := time.Now()
+
+	s.pressSelection(sh, 1, y, now)
+	typeRunes(s, 'x')
+	s.pressSelection(sh, 1, y, now.Add(10*time.Millisecond))
+	if s.selectionActive() {
+		t.Fatal("typing between two clicks must break the multi-click run")
+	}
+}
+
+func TestEditorSurroundSelectionNests(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts(""))
+	s.setContent("abcdef")
+	selectRange(s, 0, 1, 0, 4)
+
+	typeRunes(s, '*')
+	if got := buffer(s); got != "a*bcd*ef" {
+		t.Fatalf("buffer = %q, want %q", got, "a*bcd*ef")
+	}
+	if got := s.selectedText(); got != "bcd" {
+		t.Fatalf("selection after wrapping = %q, want the original text %q", got, "bcd")
+	}
+
+	typeRunes(s, '*')
+	if got := buffer(s); got != "a**bcd**ef" {
+		t.Fatalf("second wrap = %q, want %q", got, "a**bcd**ef")
+	}
+	if got := s.selectedText(); got != "bcd" {
+		t.Fatalf("selection after the second wrap = %q, want %q", got, "bcd")
+	}
+	if s.curX != s.selEnd.x || s.curY != s.selEnd.y {
+		t.Fatalf("caret at %d,%d, want the selection end %v", s.curY, s.curX, s.selEnd)
+	}
+}
+
+func TestEditorSurroundIsOneUndoStepEach(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts(""))
+	s.setContent("abcdef")
+	selectRange(s, 0, 1, 0, 4)
+	typeRunes(s, '(')
+	typeRunes(s, '[')
+	if got := buffer(s); got != "a([bcd])ef" {
+		t.Fatalf("buffer = %q, want %q", got, "a([bcd])ef")
+	}
+	if len(s.undoStack) != 2 {
+		t.Fatalf("undo stack has %d entries, want one per wrap", len(s.undoStack))
+	}
+	s.key(nil, keyMsg("ctrl+z"))
+	if got := buffer(s); got != "a(bcd)ef" {
+		t.Fatalf("after undo = %q, want one wrap removed: %q", got, "a(bcd)ef")
+	}
+}
+
+func TestEditorSurroundMultilineSelection(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts(""))
+	s.setContent("abc\ndef")
+	selectRange(s, 0, 1, 1, 2)
+
+	typeRunes(s, '(')
+	if got := buffer(s); got != "a(bc\nde)f" {
+		t.Fatalf("buffer = %q, want %q", got, "a(bc\nde)f")
+	}
+	if got := s.selectedText(); got != "bc\nde" {
+		t.Fatalf("selection = %q, want the original text %q", got, "bc\nde")
+	}
+}
+
+func TestEditorSurroundWrapsTextNotTheLineBreak(t *testing.T) {
+	// A triple click selects the line's newline too; the closer belongs at the end of
+	// the text, not at the head of the following line.
+	s, _ := newEditor(editorTestPairOpts(""))
+	s.setContent("abc\ndef")
+	selectRange(s, 0, 0, 1, 0)
+
+	typeRunes(s, '(')
+	if got := buffer(s); got != "(abc)\ndef" {
+		t.Fatalf("buffer = %q, want %q", got, "(abc)\ndef")
+	}
+	if got := s.selectedText(); got != "abc" {
+		t.Fatalf("selection = %q, want the wrapped text %q", got, "abc")
+	}
+	typeRunes(s, '(')
+	if got := buffer(s); got != "((abc))\ndef" {
+		t.Fatalf("second wrap = %q, want %q", got, "((abc))\ndef")
+	}
+}
+
+func TestEditorSurroundWorksInEveryFileType(t *testing.T) {
+	// '*' does not auto-close in a .go buffer, but wrapping a selection in it is a
+	// deliberate gesture and stays available.
+	s, _ := newEditor(editorTestPairOpts("x.go"))
+	s.setContent("abcdef")
+	selectRange(s, 0, 1, 0, 4)
+	typeRunes(s, '*')
+	if got := buffer(s); got != "a*bcd*ef" {
+		t.Fatalf("buffer = %q, want %q", got, "a*bcd*ef")
+	}
+}
+
+func TestEditorAutoPair(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		r    rune
+		want string
+		curX int
+	}{
+		{"paren in code", "x.go", '(', "()", 1},
+		{"bracket in code", "x.go", '[', "[]", 1},
+		{"brace in code", "x.go", '{', "{}", 1},
+		{"single quote in code", "x.go", '\'', "''", 1},
+		{"double quote in code", "x.go", '"', "\"\"", 1},
+		{"backtick in code", "x.go", '`', "``", 1},
+		{"star in code stays bare", "x.go", '*', "*", 1},
+		{"underscore in code stays bare", "x.go", '_', "_", 1},
+		{"star in markdown stays bare", "x.md", '*', "*", 1},
+		{"underscore in markdown stays bare", "x.md", '_', "_", 1},
+		{"backtick in markdown", "x.md", '`', "``", 1},
+		{"paren in markdown", "x.md", '(', "()", 1},
+		{"star in yaml stays bare", "x.yaml", '*', "*", 1},
+		{"unpaired rune", "x.go", 'a', "a", 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(editorTestPairOpts(tc.path))
+			typeRunes(s, tc.r)
+			if got := buffer(s); got != tc.want {
+				t.Fatalf("typing %q into %s gave %q, want %q", tc.r, tc.path, got, tc.want)
+			}
+			if s.curX != tc.curX {
+				t.Fatalf("caret at %d, want %d (between the pair)", s.curX, tc.curX)
+			}
+			if s.wantX != s.curX {
+				t.Fatalf("wantX %d out of sync with curX %d", s.wantX, s.curX)
+			}
+		})
+	}
+}
+
+func TestEditorAutoPairLeavesPasteAlone(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.go"))
+	s.Update(nil, tea.PasteMsg{Content: "f(a, b)"})
+	if got := buffer(s); got != "f(a, b)" {
+		t.Fatalf("pasted %q, want it verbatim with no added closers", got)
+	}
+}
+
+func TestEditorAutoPairIsOneUndoStep(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.go"))
+	typeRunes(s, '(')
+	if len(s.undoStack) != 1 {
+		t.Fatalf("undo stack has %d entries, want 1 for the pair", len(s.undoStack))
+	}
+	s.key(nil, keyMsg("ctrl+z"))
+	if got := buffer(s); got != "" {
+		t.Fatalf("undo left %q, want the pair fully removed", got)
+	}
+}
+
+func TestEditorBackspaceDeletesEmptyAutoPairs(t *testing.T) {
+	for _, pair := range editorTestAutoPairs {
+		t.Run(string(pair.Open), func(t *testing.T) {
+			s, _ := newEditor(editorTestPairOpts("x.code"))
+			typeRunes(s, pair.Open)
+			s.key(nil, keyMsg("backspace"))
+			if got := buffer(s); got != "" {
+				t.Fatalf("Backspace between %q%q left %q, want empty", pair.Open, pair.Close, got)
+			}
+			if s.curX != 0 || s.wantX != 0 {
+				t.Fatalf("caret/wantX = %d/%d, want 0/0", s.curX, s.wantX)
+			}
+		})
+	}
+}
+
+func TestEditorBackspaceDeletesManuallyFormedAndNestedPairs(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.code"))
+	s.setContent("[]")
+	s.curX, s.wantX = 1, 1
+	s.key(nil, keyMsg("ctrl+h"))
+	if got := buffer(s); got != "" {
+		t.Fatalf("ctrl+h between a manually formed pair left %q, want empty", got)
+	}
+
+	s.setContent("")
+	typeRunes(s, '(')
+	typeRunes(s, '[')
+	if got := buffer(s); got != "([])" {
+		t.Fatalf("nested insertion = %q, want ([])", got)
+	}
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "()" || s.curX != 1 {
+		t.Fatalf("first nested Backspace = %q at %d, want () at 1", got, s.curX)
+	}
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "" || s.curX != 0 {
+		t.Fatalf("second nested Backspace = %q at %d, want empty at 0", got, s.curX)
+	}
+}
+
+func TestEditorBackspacePairLeavesOtherDeletionModesAlone(t *testing.T) {
+	t.Run("selection", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("[ab]")
+		selectRange(s, 0, 1, 0, 3)
+		s.key(nil, keyMsg("backspace"))
+		if got := buffer(s); got != "[]" || s.curX != 1 {
+			t.Fatalf("Backspace over selection = %q at %d, want [] at 1", got, s.curX)
+		}
+	})
+
+	t.Run("line join", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("left\nright")
+		s.curY, s.curX, s.wantX = 1, 0, 0
+		s.key(nil, keyMsg("backspace"))
+		if got := buffer(s); got != "leftright" || s.curY != 0 || s.curX != 4 {
+			t.Fatalf("Backspace at line start = %q at %d,%d, want leftright at 0,4", got, s.curY, s.curX)
+		}
+	})
+
+	t.Run("forward delete", func(t *testing.T) {
+		s, _ := newEditor(editorTestPairOpts("x.code"))
+		s.setContent("[]")
+		s.key(nil, keyMsg("delete"))
+		if got := buffer(s); got != "]" || s.curX != 0 {
+			t.Fatalf("Delete before pair = %q at %d, want ] at 0", got, s.curX)
+		}
+	})
+}
+
+func TestEditorBackspacePairRequiresConfiguredExactMatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, want string
+		opts                Opts
+	}{
+		{"mismatched", "[)", ")", editorTestPairOpts("x.code")},
+		{"surrounding only", "**", "*", editorTestPairOpts("x.code")},
+		{"unconfigured editor", "[]", "]", Opts{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newEditor(tc.opts)
+			s.setContent(tc.content)
+			s.curX, s.wantX = 1, 1
+			s.key(nil, keyMsg("backspace"))
+			if got := buffer(s); got != tc.want {
+				t.Fatalf("Backspace in %q = %q, want ordinary deletion %q", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEditorBackspacePairIsOneUndoStep(t *testing.T) {
+	s, _ := newEditor(editorTestPairOpts("x.code"))
+	s.setContent("[]")
+	s.curX, s.wantX = 1, 1
+	s.key(nil, keyMsg("backspace"))
+	if got := buffer(s); got != "" || len(s.undoStack) != 1 {
+		t.Fatalf("paired deletion = %q with %d undo entries, want empty/1", got, len(s.undoStack))
+	}
+	s.key(nil, keyMsg("ctrl+z"))
+	if got := buffer(s); got != "[]" || s.curX != 1 {
+		t.Fatalf("undo paired deletion = %q at %d, want [] at 1", got, s.curX)
+	}
+	s.key(nil, keyMsg("ctrl+y"))
+	if got := buffer(s); got != "" || s.curX != 0 {
+		t.Fatalf("redo paired deletion = %q at %d, want empty at 0", got, s.curX)
+	}
+}
+
+func TestEditorSelectionOnlyPairsWrapInEveryFileType(t *testing.T) {
+	for _, path := range []string{"notes.md", "main.go", "config.yaml"} {
+		for _, r := range []rune{'*', '_'} {
+			s, _ := newEditor(editorTestPairOpts(path))
+			s.setContent("word")
+			selectRange(s, 0, 0, 0, 4)
+			typeRunes(s, r)
+			if got, want := buffer(s), string(r)+"word"+string(r); got != want {
+				t.Errorf("%s %q wrap = %q, want %q", path, r, got, want)
+			}
+		}
+	}
+}
+
+func TestEditorQuotePairsSurroundSelection(t *testing.T) {
+	for _, r := range []rune{'\'', '"', '`'} {
+		s, _ := newEditor(editorTestPairOpts("main.go"))
+		s.setContent("word")
+		selectRange(s, 0, 0, 0, 4)
+		typeRunes(s, r)
+		if got, want := buffer(s), string(r)+"word"+string(r); got != want {
+			t.Errorf("%q wrap = %q, want %q", r, got, want)
+		}
+		if got := s.selectedText(); got != "word" {
+			t.Errorf("%q selection after wrap = %q, want word", r, got)
+		}
+	}
+}

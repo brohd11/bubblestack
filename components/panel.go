@@ -66,7 +66,7 @@ type PanelUpdater interface {
 // which the host matches above every panel: capture is total for everything a
 // panel could plausibly want, and the handful of reserved keys are what keeps
 // the pane escapable from the keyboard. Without that a full-capture panel
-// (an embedded EditorScreen, whose whole job is to type every key) would be a
+// (an embedded editor.Screen, whose whole job is to type every key) would be a
 // trap needing a bespoke exit hook.
 type Capturing interface{ Capturing() bool }
 
@@ -102,7 +102,7 @@ type Slot struct {
 	// ExpandH pads the slot's render out to its column's allocated WIDTH. Where
 	// ExpandV redistributes rows nobody claimed, this claims nothing new — the
 	// column's width is already assigned — it only stops a panel that renders
-	// narrower than it was given (an EditorScreen showing a short document, whose
+	// narrower than it was given (an editor.Screen showing a short document, whose
 	// block is as wide as its longest line) from leaving the column a ragged right
 	// edge. Padding is with spaces and never truncates, so it is invisible except
 	// where it fixes the gap.

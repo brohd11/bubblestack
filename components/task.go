@@ -48,7 +48,7 @@ var _ core.DirLocator = (*TaskScreen)(nil)
 
 // CrumbLabel contributes the task's label as its breadcrumb segment.
 func (s *TaskScreen) CrumbLabel(short bool) string {
-	return crumbSeg(short, s.CrumbShort, "Task", "Task")
+	return CrumbSegment(short, s.CrumbShort, "Task", "Task")
 }
 
 // LocateDir reports the directory this task concerns (Dir), so the global Terminal key
