@@ -2,10 +2,12 @@ package components
 
 import (
 	"io/fs"
+	"path"
 	"regexp"
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/bubblestack/sysopen"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
@@ -31,6 +33,7 @@ import (
 // the markdown) and the body the renderer folds to width.
 type DocPage struct {
 	Title string
+	File  string // the page's filename in the embedded set — what a link between pages names
 	Desc  string
 	Body  string // everything after the title line (the description is its first paragraph)
 }
@@ -48,7 +51,9 @@ func ParseDocPages(fsys fs.FS, dir string) []DocPage {
 		if err != nil {
 			continue
 		}
-		pages = append(pages, parseDocPage(string(data)))
+		page := parseDocPage(string(data))
+		page.File = e.Name()
+		pages = append(pages, page)
 	}
 	return pages
 }
@@ -90,18 +95,59 @@ func DocsIndex(title, crumb string, pages []DocPage) *PickerScreen {
 		items = append(items, Item{
 			Name: p.Title,
 			Desc: p.Desc,
-			Pick: func(*core.Shared) core.Action { return core.Push(newDocPage(p)) },
+			Pick: func(*core.Shared) core.Action { return core.Push(newDocPage(p, pages)) },
 		})
 	}
 	items = EnsurePlaceholder(items, "(no pages)", "the docs pages didn't compile into this build")
 	return NewPicker(items, PickerOpts{Title: title, Crumb: crumb})
 }
 
-func newDocPage(p DocPage) *DocScreen {
+// newDocPage builds one page's screen, links included: a link to another page pushes
+// that page, and a URL goes to the browser.
+//
+// The page hook resolves against the PAGE SET, never the filesystem — a manual is
+// compiled into the binary, so "the file next to this one" only means anything as a
+// name in that set, and matching there is also what stops a page from reaching out of
+// its embedded FS at all. A target naming nothing in the set does nothing.
+func newDocPage(p DocPage, pages []DocPage) *DocScreen {
 	return NewDocScreen(DocOpts{
 		Title:  p.Title,
 		Render: func(width int) string { return RenderMarkdown(p.Body, width) },
+		Links: LinkHooks{
+			URL: func(_ *core.Shared, l Link) core.Action { return sysopen.URL(l.Target) },
+			Text: func(_ *core.Shared, l Link) core.Action {
+				next, ok := findDocPage(pages, l.Target)
+				if !ok {
+					return core.Action{}
+				}
+				return core.Push(newDocPage(next, pages))
+			},
+		},
 	})
+}
+
+// findDocPage resolves a link between manual pages: the target's last segment against
+// each page's filename, then against its title, so both "02-config.md" and "Config"
+// reach the same page. Any leading path and any "#fragment" are dropped — a manual has
+// no directories to walk and the renderer re-flows a page, so there is nothing to
+// anchor to.
+func findDocPage(pages []DocPage, target string) (DocPage, bool) {
+	name, _, _ := strings.Cut(target, "#")
+	name = path.Base(strings.TrimSpace(name))
+	if name == "" || name == "." || name == "/" {
+		return DocPage{}, false
+	}
+	for _, p := range pages {
+		if p.File == name {
+			return p, true
+		}
+	}
+	for _, p := range pages {
+		if strings.EqualFold(p.Title, name) {
+			return p, true
+		}
+	}
+	return DocPage{}, false
 }
 
 // DocsItem is the standard Actions-menu docs row: "? Docs" with a desc derived
@@ -151,7 +197,7 @@ func docTopics(pages []DocPage) string {
 //	`code`          accent on a tinted background, inline, a cell of tint each side
 //	**bold**        bold
 //	*em* / _em_     italic
-//	[text](url)     the text, underlined; the target is dropped
+//	[text](url)     the text, underlined, carrying the target as an OSC 8 hyperlink
 //	anything else   a paragraph: consecutive lines join, then wrap as one block
 //
 // Images (![alt](url)) and HTML pass through as their literal source text — the
@@ -1023,7 +1069,23 @@ func inlineOver(s string, base lipgloss.Style) string {
 		case inlineKindEm:
 			b.WriteString(inlineOver(p.text, italicStyle().Inherit(base)))
 		case inlineKindLink:
-			b.WriteString(inlineOver(p.text, linkStyle().Inherit(base)))
+			// The target rides out of the renderer as an OSC 8 hyperlink wrapped around
+			// the finished label. It costs no display cells, so every later transform —
+			// ansi.Wrap, the table's width measurements, a quote's bar — is unaffected,
+			// and it is the only way a link's finished row and column can be recovered:
+			// spans are styled HERE, long before wrapText decides where the rows break.
+			// ScanLinks reads them back (links.go); a terminal that speaks OSC 8 also
+			// makes the link natively clickable, and one that doesn't ignores it.
+			//
+			// Written around the recursion rather than as linkStyle().Hyperlink(dest):
+			// lipgloss does not inherit the link property (its key sorts past the range
+			// Style.Inherit walks), so a construct nested in the label — [**bold**
+			// link](x) — would come out of its own recursion unlinked.
+			styled := inlineOver(p.text, linkStyle().Inherit(base))
+			if p.dest != "" {
+				styled = ansi.SetHyperlink(p.dest) + styled + ansi.ResetHyperlink()
+			}
+			b.WriteString(styled)
 		default:
 			write(p.text) // an image: its literal source, in the base style
 		}
@@ -1051,6 +1113,7 @@ type inlinePart struct {
 	kind           int
 	prefix, suffix string
 	text           string
+	dest           string // a link's target, the one construct whose payload outlives its delimiters
 }
 
 // inlineParts classifies one inlineAny match by which named group fired, and splits
@@ -1066,7 +1129,14 @@ func inlineParts(m string) inlinePart {
 	case strings.HasPrefix(m, "!"):
 		return inlinePart{kind: inlineKindImage, text: m}
 	case strings.HasPrefix(m, "["):
-		return inlinePart{kind: inlineKindLink, text: m[1:strings.Index(m, "]")]}
+		// The regexp matched "[label](target)" whole, so the split is arithmetic: the
+		// label ends at the first "]", and the target is what the parens hold after it.
+		close := strings.Index(m, "]")
+		return inlinePart{
+			kind: inlineKindLink,
+			text: m[1:close],
+			dest: strings.TrimSuffix(m[close+2:], ")"),
+		}
 	}
 	// The underscore form: everything outside the outermost pair of "_" is boundary.
 	lo, hi := strings.Index(m, "_"), strings.LastIndex(m, "_")

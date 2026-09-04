@@ -25,9 +25,12 @@ type DocScreen struct {
 	Render     func(width int) string
 	Help       []key.Binding                                  // help-bar hints; nil ⇒ the default scroll/back pair
 	OnKey      func(*core.Shared, string) (core.Action, bool) // extra keys; handled=true consumes the key
+	Links      LinkHooks                                      // what a click on a link does; zero ⇒ links are inert
 
-	vp    viewport.Model
-	width int // last laid-out terminal width; -1 until the first SetSize
+	vp       viewport.Model
+	width    int // last laid-out terminal width; -1 until the first SetSize
+	links    LinkMap
+	embedded bool // this page is one pane of a layout (core.Embeddable), not the whole body
 }
 
 // DocOpts configures a DocScreen. Only Render is required.
@@ -38,9 +41,11 @@ type DocOpts struct {
 	Render     func(width int) string
 	Help       []key.Binding
 	OnKey      func(*core.Shared, string) (core.Action, bool)
+	Links      LinkHooks
 }
 
 var _ core.Crumber = (*DocScreen)(nil)
+var _ core.Embeddable = (*DocScreen)(nil)
 
 func NewDocScreen(opts DocOpts) *DocScreen {
 	return &DocScreen{
@@ -50,6 +55,7 @@ func NewDocScreen(opts DocOpts) *DocScreen {
 		Render:     opts.Render,
 		Help:       opts.Help,
 		OnKey:      opts.OnKey,
+		Links:      opts.Links,
 		vp:         viewport.New(),
 		width:      -1,
 	}
@@ -84,7 +90,38 @@ func (s *DocScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 		return
 	}
 	s.width = width
-	s.vp.SetContent(core.IndentLines(s.Render(s.textWidth()), gutter))
+	body := s.Render(s.textWidth())
+	// The map belongs to THIS render: the rows it indexes are the ones just laid out,
+	// and a re-wrap at a new width moves every one of them.
+	s.links = ScanLinks(body)
+	s.vp.SetContent(core.IndentLines(body, gutter))
+}
+
+// SetEmbedded implements core.Embeddable: hosted as a pane (components.ScreenPanel) the
+// page is handed pane-relative mouse coordinates, so it must not subtract the router's
+// body offset the way a standalone pushed page must. Geometry only — nothing about how
+// the page looks changes.
+func (s *DocScreen) SetEmbedded(v bool) { s.embedded = v }
+
+// clickLink answers the link under a click, in the page's own content coordinates: the
+// gutter off the left, the title bar and the scroll offset off the top, and the chrome
+// above the body only when this page IS the body. hit=false means the click landed on
+// ordinary text and belongs to the viewport.
+func (s *DocScreen) clickLink(sh *core.Shared, x, y int) (core.Action, bool) {
+	if len(s.links) == 0 {
+		return core.Action{}, false
+	}
+	if !s.embedded {
+		y -= sh.BodyY()
+	}
+	if s.Title != "" {
+		y -= lipgloss.Height(core.RenderTitleBar(s.Title))
+	}
+	l, ok := s.links.At(y+s.vp.YOffset(), x-len(gutter))
+	if !ok {
+		return core.Action{}, false
+	}
+	return s.Links.Do(sh, l), true
 }
 
 // textWidth is the width handed to Render: the terminal minus a gutter on each side.
@@ -120,6 +157,13 @@ func (s *DocScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Acti
 		case core.MatchKey(k, core.Keys.Down):
 			s.vp.ScrollDown(1)
 			return s, core.Action{}
+		}
+	}
+	// A plain left click on a link, before the viewport (which only wants the wheel).
+	// Modified clicks are left alone: the terminal and the host claim those.
+	if m, ok := msg.(tea.MouseClickMsg); ok && m.Button == tea.MouseLeft && m.Mod == 0 {
+		if act, hit := s.clickLink(sh, m.X, m.Y); hit {
+			return s, act
 		}
 	}
 	var cmd tea.Cmd

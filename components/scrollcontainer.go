@@ -20,7 +20,13 @@ import (
 // no nav keys, no Push/Pop, no domain type; the caller owns the content via
 // SetLines/SetStatus.
 type ScrollContainer struct {
+	// OnLink is what a left click on a hyperlink in the content does; nil ⇒ nothing.
+	// The spans come from SetLinks, so a pane showing rendered markdown wires the two
+	// together and a pane showing plain lines sets neither.
+	OnLink func(*core.Shared, Link) core.Action
+
 	vp         viewport.Model
+	links      LinkMap
 	title      string
 	focused    bool
 	pinned     bool // content has been set once (the first set opens at the top)
@@ -76,13 +82,34 @@ func (p *ScrollContainer) SetStatus(status string) {
 	p.vp.GotoTop()
 }
 
+// SetLinks gives the pane the hyperlink spans of the content it was just handed
+// (components.ScanLinks over the same rendered string), making them clickable through
+// OnLink. Set it beside SetLines or not at all: the rows a map indexes are the rows of
+// one particular render, so a stale map points at text that has moved.
+func (p *ScrollContainer) SetLinks(links LinkMap) { p.links = links }
+
+// clickLink answers the link under a click, in content coordinates: the box's left
+// border and its 1-col padding off the left, its hand-drawn top edge off the top, and
+// the scroll offset added back. Coordinates arrive pane-relative (ModularScreen
+// translates them), so there is no body offset to subtract here.
+func (p *ScrollContainer) clickLink(sh *core.Shared, x, y int) (core.Action, bool) {
+	if len(p.links) == 0 || p.OnLink == nil {
+		return core.Action{}, false
+	}
+	l, ok := p.links.At(y-1+p.vp.YOffset(), x-2)
+	if !ok {
+		return core.Action{}, false
+	}
+	return p.OnLink(sh, l), true
+}
+
 // UpdatePanel scrolls the viewport on the nav keys and the wheel, and nothing
 // else: esc/back returns handled=false so the host ModularScreen keeps its pop
 // fallback. The page keys match against the
 // viewport's own keymap (they have no core.Keys binding). The wheel only scrolls
 // while focused — mouse msgs are broadcast to every panel, and a wheel that
 // rolled every pane at once would read as a bug.
-func (p *ScrollContainer) UpdatePanel(_ *core.Shared, msg tea.Msg) (core.Action, bool) {
+func (p *ScrollContainer) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	if m, ok := msg.(tea.MouseMsg); ok {
 		if !p.focused {
 			return core.Action{}, false
@@ -92,6 +119,13 @@ func (p *ScrollContainer) UpdatePanel(_ *core.Shared, msg tea.Msg) (core.Action,
 			var cmd tea.Cmd
 			p.vp, cmd = p.vp.Update(w)
 			return core.Async(cmd), true
+		}
+		// A plain left click on a link. Modified clicks are left alone — the host
+		// rewrites those (gote's retargetClick) and the terminal claims some itself.
+		if c, isClick := m.(tea.MouseClickMsg); isClick && c.Button == tea.MouseLeft && c.Mod == 0 {
+			if act, hit := p.clickLink(sh, c.X, c.Y); hit {
+				return act, true
+			}
 		}
 		return core.Action{}, false
 	}
