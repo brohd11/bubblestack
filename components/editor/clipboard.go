@@ -21,7 +21,7 @@ func copySelectionCmd(text string, cut bool) core.Action {
 }
 
 // pasteClipboardCmd is the reading half, addressed to the editor that asked for it (see
-// editorPastedMsg). clipboard.ReadAll shells out the same way the write does.
+// editorPastedMsg). The platform clipboard read stays off the update/render path.
 func pasteClipboardCmd(target *Screen) core.Action {
 	return core.Async(func() tea.Msg {
 		text, err := readEditorClipboard()
@@ -34,8 +34,8 @@ func pasteClipboardCmd(target *Screen) core.Action {
 // terminal cells (absCell converts); AnchorBelow is what keeps the box off that cell.
 //
 // Copy and Cut are disabled without a selection, because that state is free to know. Paste
-// never is: finding out whether the clipboard holds anything means READING it, which shells
-// out to pbpaste/xclip and so cannot happen on the render tick. An empty clipboard is
+// never is: finding out whether the clipboard holds anything means platform IO and so
+// cannot happen on the render tick. An empty clipboard is
 // therefore a live row that pastes nothing.
 func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 	sel := s.selectionActive()

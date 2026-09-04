@@ -17,6 +17,13 @@ import (
 // setContent replaces the buffer with loaded file content, marking it clean.
 func (s *Screen) setContent(content string) {
 	s.cancelCompletionSession()
+	s.lineEnding = "\n"
+	if strings.Contains(content, "\r\n") {
+		withoutCRLF := strings.ReplaceAll(content, "\r\n", "")
+		if !strings.Contains(withoutCRLF, "\n") {
+			s.lineEnding = "\r\n"
+		}
+	}
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	raw := strings.Split(content, "\n")
 	s.lines = make([][]rune, len(raw))

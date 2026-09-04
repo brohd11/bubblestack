@@ -1362,6 +1362,7 @@ func TestEditorSaveAsConfirm(t *testing.T) {
 func TestEditorSaveAsExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	var saved string
 	s, sh := newEditor(Opts{OnSaved: func(_ *core.Shared, p string) core.Action {
 		saved = p

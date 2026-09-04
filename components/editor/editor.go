@@ -24,11 +24,11 @@ import (
 
 	"github.com/brohd11/bubblestack/components"
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/bubblestack/internal/clipboard"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 )
 
 // Screen is the simple nano-like text editor: it loads a file (or starts empty),
@@ -112,6 +112,7 @@ type Screen struct {
 	hlDebounce time.Duration
 	textCache  string // lines joined for text consumers at textSeq
 	textSeq    int    // editSeq represented by textCache (-1 ⇒ stale)
+	lineEnding string // serialized newline: "\r\n" for a pure CRLF load, otherwise "\n"
 
 	resolveLanguage LanguageResolver // host-owned path → behavior seam
 	autoPairs       map[rune]rune    // typed opener → closer; nil ⇒ literal typing
@@ -613,9 +614,9 @@ func (s *Screen) SetEmbedded(on bool) { s.embedded = on }
 // the same transition on a standalone editor when the output pane takes the keys.
 func (s *Screen) SetFocused(focused bool) { s.focused = focused }
 
-// Text is the live buffer as one string, lines joined with '\n' — what a save
-// would write, and what a host reads to do something with the content while it is
-// still being edited (a rendered preview beside the pane, a word count).
+// Text is the live buffer as one string, lines joined with '\n'. Hosts use this
+// normalized form while the document is being edited (for previews, LSPs, or word
+// counts); saveCmd restores a pure CRLF file's original line endings on disk.
 func (s *Screen) Text() string {
 	if s.textSeq == s.editSeq {
 		return s.textCache

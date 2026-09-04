@@ -28,6 +28,9 @@ func stubEmulator(t *testing.T, bin, cwdFile string) string {
 }
 
 func TestProbeTerminalDirOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux terminal probing")
+	}
 	stub := stubEmulator(t, "konsole", "")
 	cmd := probeTerminal("/tmp/work", nil)
 	if cmd == nil {
@@ -43,6 +46,9 @@ func TestProbeTerminalDirOnly(t *testing.T) {
 }
 
 func TestProbeTerminalCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux terminal probing")
+	}
 	tests := []struct {
 		bin     string
 		command []string
@@ -69,6 +75,9 @@ func TestProbeTerminalCommand(t *testing.T) {
 }
 
 func TestProbeTerminalNone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux terminal probing")
+	}
 	t.Setenv("PATH", t.TempDir()) // empty dir: nothing to find
 	if cmd := probeTerminal("/tmp/work", nil); cmd != nil {
 		t.Fatalf("expected nil with no emulator on PATH, got %v", cmd.Args)
@@ -81,6 +90,9 @@ func TestProbeTerminalNone(t *testing.T) {
 // the linux path, exercised on any host), drops every arg — what x-terminal-emulator's
 // gnome-terminal wrapper does — and records where it actually ran.
 func TestProbeTerminalWorkingDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux terminal probing")
+	}
 	home := t.TempDir()
 	out := filepath.Join(home, "cwd.txt")
 	stubEmulator(t, "gnome-terminal", out)
@@ -137,13 +149,13 @@ func TestDarwinTerminal(t *testing.T) {
 
 func TestWindowsTerminal(t *testing.T) {
 	cmd := windowsTerminal(`C:\work`, nil)
-	want := []string{"cmd", "/c", "start", "cmd", "/k", `cd /d C:\work`}
+	want := []string{"cmd.exe", "/d", "/v:off", "/k"}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("dir-only cmd.Args = %#v, want %#v", cmd.Args, want)
 	}
 
 	cmd = windowsTerminal(`C:\work`, []string{"ssh", "host"})
-	want = []string{"cmd", "/c", "start", "cmd", "/k", `cd /d C:\work && ssh host`}
+	want = []string{"cmd.exe", "/d", "/v:off", "/k", `ssh ^"host^"`}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("command cmd.Args = %#v, want %#v", cmd.Args, want)
 	}

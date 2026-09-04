@@ -150,6 +150,9 @@ func (s *Screen) saveCmd() tea.Cmd {
 	path := s.path
 	revision := s.revision
 	content := s.Text()
+	if s.lineEnding == "\r\n" {
+		content = strings.ReplaceAll(content, "\n", "\r\n")
+	}
 	return func() tea.Msg {
 		if path == "" {
 			return editorSavedMsg{err: errors.New("no file path"), revision: revision}

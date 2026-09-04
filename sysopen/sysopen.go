@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
+	"github.com/brohd11/goutil/executil"
 	"github.com/brohd11/goutil/shellquote"
 	goutilsysopen "github.com/brohd11/goutil/sysopen"
 
@@ -63,7 +64,10 @@ func URL(target string) core.Action {
 	return core.Seq(
 		core.SetStatus("opening "+target),
 		core.Async(func() tea.Msg {
-			return start(urlCmd(target), target)
+			if err := goutilsysopen.OpenURL(target); err != nil {
+				return core.SetStatusAndLog("could not " + err.Error()).Msg
+			}
+			return nil
 		}),
 	)
 }
@@ -125,7 +129,15 @@ func TerminalInline(dir string, command ...string) core.Action {
 // passing them is how a login-only rc file ends up sourced twice or not at all.
 func inlineCmd(command []string) *exec.Cmd {
 	if len(command) > 0 {
-		return exec.Command(command[0], command[1:]...)
+		cmd, err := executil.Command(command...)
+		if err == nil {
+			return cmd
+		}
+		// Preserve tea.ExecProcess's error-reporting path without changing this
+		// internal builder's shape: Run returns Cmd.Err before starting anything.
+		failed := exec.Command(command[0], command[1:]...)
+		failed.Err = err
+		return failed
 	}
 	return exec.Command(userShell())
 }
@@ -245,21 +257,17 @@ func darwinTerminal(dir string, command []string) *exec.Cmd {
 	return exec.Command("osascript", "-e", `tell application "Terminal" to do script `+appleScriptQuote(script))
 }
 
-// windowsTerminal opens a cmd window. /k keeps it open after the command exits so the
-// user can read the output (matching an interactive shell).
-func windowsTerminal(dir string, command []string) *exec.Cmd {
-	inner := "cd /d " + dir
+// windowsTerminalArgs builds the command prompt invocation independently of the
+// CREATE_NEW_CONSOLE flag used on Windows, so its quoting stays unit-testable on every
+// host. cmd.Dir supplies the working directory; no path is interpolated into a shell
+// fragment.
+func windowsTerminalArgs(command []string) []string {
+	args := []string{"cmd.exe", "/d", "/v:off", "/k"}
 	if len(command) > 0 {
-		inner += " && " + strings.Join(command, " ")
+		line, _ := executil.CmdJoin(command)
+		args = append(args, line)
 	}
-	return exec.Command("cmd", "/c", "start", "cmd", "/k", inner)
-}
-
-// urlCmd is goutil/sysopen's builder; the switch lived here too until the darwin and
-// linux arms were found to be identical. It stays a named function because URL runs the
-// command through this package's own detached start helper rather than goutil's.
-func urlCmd(target string) *exec.Cmd {
-	return goutilsysopen.URLCommand(runtime.GOOS, target)
+	return args
 }
 
 // ShellQuote wraps s in single quotes for a POSIX shell as a single-quoted literal, so

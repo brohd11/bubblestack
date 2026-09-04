@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -506,6 +507,9 @@ func TestClassifyFile(t *testing.T) {
 		"src.zip":  KindArchive,
 		"LICENSE":  KindFile, // no extension, no bit: an ordinary file
 	}
+	if runtime.GOOS == "windows" {
+		want["run.sh"] = KindCode // Windows does not expose POSIX execute bits.
+	}
 	for _, d := range des {
 		var info fs.FileInfo
 		if !d.IsDir() {
@@ -566,6 +570,9 @@ func TestFilePanelRowColors(t *testing.T) {
 		"main.go":  KindCode,
 		"notes.md": KindDoc,
 		"LICENSE":  KindFile,
+	}
+	if runtime.GOOS == "windows" {
+		want["run.sh"] = KindCode
 	}
 	for _, it := range p.List().VisibleItems() {
 		fi, ok := it.(fileItem)
