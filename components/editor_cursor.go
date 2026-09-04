@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/brohd11/bubblestack/core"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // Cursor movement, mouse gestures and selection for EditorScreen: arrow/click positioning,
@@ -124,7 +126,7 @@ func (s *EditorScreen) clickAt(sh *core.Shared, x, y int) {
 	s.resetMouseGesture()
 	s.clearSelection()
 	s.curY, s.curX, s.wantX = p.y, p.x, p.x
-	s.clampScroll()
+	s.clampScrollVisible()
 }
 
 // pressSelection handles a left selection press. Repeated presses on the same character
@@ -247,13 +249,113 @@ func (s *EditorScreen) startDrag(sh *core.Shared, x, y int) {
 func (s *EditorScreen) startDragAt(p textPos) {
 	s.clearSelection()
 	s.curY, s.curX, s.wantX = p.y, p.x, p.x
-	s.clampScroll()
+	s.clampScrollVisible()
 	s.dragAnchor = p
 	s.dragAnchorEnd = s.cellEnd(p)
 	s.dragging = true
 }
 
-func (s *EditorScreen) resetMouseGesture() { s.dragging = false }
+// resetMouseGesture ends the active mouse gesture. It is the single kill switch for the
+// auto-scroll clock too: every path that abandons a drag — release, any key press, a paste,
+// a click on the search bar or scrollbar, the context menu — already calls it, and bumping
+// the generation makes whichever tick is still in flight land as stale rather than needing
+// each of those sites to know the clock exists.
+func (s *EditorScreen) resetMouseGesture() {
+	s.dragging, s.dragScrolling = false, false
+	s.dragSeq++
+}
+
+// dragScrollCmd schedules one auto-scroll frame for the current gesture. PropagateAll, as
+// the highlight clock uses, so the tick still reaches this editor while it sits under a
+// dialog — a drag can outlive a focus change.
+func (s *EditorScreen) dragScrollCmd() tea.Cmd {
+	seq := s.dragSeq
+	return tea.Tick(editorDragScrollInterval, func(time.Time) tea.Msg {
+		return core.PropagateAll(editorDragScrollMsg{target: s, seq: seq})
+	})
+}
+
+// trackDrag records where the pointer is and extends the selection to it, then arms the
+// auto-scroll clock if that cell sits in an edge band. The clock is armed at most once —
+// each frame re-arms itself — and stops on its own the moment the pointer comes back inside
+// or the gesture ends, so nothing here needs a release path of its own.
+func (s *EditorScreen) trackDrag(sh *core.Shared, x, y int) tea.Cmd {
+	s.dragX, s.dragY = x, y
+	s.extendDrag(sh, x, y)
+	if s.dragScrolling {
+		return nil
+	}
+	if dx, dy := s.dragEdgeScroll(sh, x, y); dx == 0 && dy == 0 {
+		return nil
+	}
+	s.dragScrolling = true
+	return s.dragScrollCmd()
+}
+
+// handleDragScroll runs one auto-scroll frame: roll the view, then re-extend the selection
+// over the cells that roll revealed. scrollLines and scrollCells are the browse-mode
+// primitives, which is exactly right here — they are bounds-clamped and they leave the caret
+// alone, so the selection still follows the POINTER rather than the view running away with
+// it. extendDrag keeps its clampScrollBounds for the same reason (see clampScrollBounds).
+func (s *EditorScreen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.Action {
+	if m.target != s || m.seq != s.dragSeq || !s.dragging {
+		return core.Action{} // a stale frame, or the gesture is over: the clock stops here
+	}
+	dx, dy := s.dragEdgeScroll(sh, s.dragX, s.dragY)
+	if dx == 0 && dy == 0 {
+		s.dragScrolling = false // back inside the pane; the next motion re-arms
+		return core.Action{}
+	}
+	s.scrollLines(dy)
+	s.scrollCells(dx)
+	s.extendDrag(sh, s.dragX, s.dragY)
+	return core.Async(s.dragScrollCmd())
+}
+
+// dragEdgeScroll reports the per-frame scroll deltas for a pointer at (x, y), and (0, 0)
+// when it is nowhere near an edge. Everything is measured against the CONTENT window —
+// insets and gutter off, contentW wide — because that is the window scrX indexes and
+// renderLine cuts. Coordinates outside the pane are the ordinary case rather than an error:
+// ModularScreen keeps a gesture with the slot that started it, so a drag off the pane keeps
+// arriving with negative or oversized cells, and that overshoot — which positionAt's clamp
+// throws away — is the whole input to the ramp.
+func (s *EditorScreen) dragEdgeScroll(sh *core.Shared, x, y int) (dx, dy int) {
+	cy := y - s.insetY()
+	if !s.embedded {
+		cy -= sh.BodyY() // absolute coordinates: the chrome rows come off too
+	}
+	zy := max(s.h*editorDragEdgePct/100, 1)
+	switch {
+	case cy < zy:
+		dy = -editorDragStep(zy-cy, zy, editorDragScrollUnitY)
+	case cy >= s.h-zy:
+		dy = editorDragStep(cy-(s.h-zy)+1, zy, editorDragScrollUnitY)
+	}
+	// Wrapped, there is nowhere to roll sideways: every cell of a line is on screen and
+	// scrX is inert (scrollCells).
+	if s.wrap {
+		return 0, dy
+	}
+	cx := x - s.insetX() - s.leftGutterWidth()
+	w := s.contentW()
+	zx := max(w*editorDragEdgePct/100, 2)
+	switch {
+	case cx < zx:
+		dx = -editorDragStep(zx-cx, zx, editorDragScrollUnitX)
+	case cx >= w-zx:
+		dx = editorDragStep(cx-(w-zx)+1, zx, editorDragScrollUnitX)
+	}
+	return dx, dy
+}
+
+// editorDragStep turns an overshoot into one frame's step: one unit anywhere inside the
+// band, one more for every further band-width past it, capped. over runs 1..zone inside the
+// band and grows without bound off the pane, so a nudge at the edge crawls at the unit rate
+// and a pointer flung into the next pane runs at the ceiling.
+func editorDragStep(over, zone, unit int) int {
+	zone = max(zone, 1)
+	return unit * min(1+(over-1)/zone, editorDragScrollMaxUnits)
+}
 
 func (s *EditorScreen) extendDrag(sh *core.Shared, x, y int) {
 	p, ok := s.positionAt(sh, x, y, true)
@@ -321,8 +423,15 @@ func (s *EditorScreen) selectionAnchor() textPos {
 // "anchor at the caret".
 //
 // clampScroll, not clampScrollBounds: a shifted motion is a caret move and the view has
-// to follow it, unlike a drag whose off-pane endpoints are clamped in place instead.
+// to follow it, unlike a drag whose off-pane endpoints are clamped in place instead. The
+// range itself is split out because shift+CLICK wants the same span under the mouse clamp
+// (extendSelectionTo) — the two gestures differ in nothing but which clamp ends them.
 func (s *EditorScreen) selectFrom(anchor textPos) {
+	s.selectRangeFrom(anchor)
+	s.clampScroll()
+}
+
+func (s *EditorScreen) selectRangeFrom(anchor textPos) {
 	caret := textPos{s.curY, s.curX}
 	switch {
 	case posLess(caret, anchor):
@@ -332,7 +441,6 @@ func (s *EditorScreen) selectFrom(anchor textPos) {
 	default:
 		s.clearSelection()
 	}
-	s.clampScroll()
 }
 
 // extendSelection runs an ordinary caret move as a selection gesture: read the anchor
@@ -393,7 +501,8 @@ func (s *EditorScreen) extendSelectionTo(sh *core.Shared, x, y int) {
 	anchor := s.selectionAnchor()
 	s.clickCount = 0 // an extend is never a step in a multi-click run
 	s.curY, s.curX, s.wantX = p.y, p.x, p.x
-	s.selectFrom(anchor)
+	s.selectRangeFrom(anchor)
+	s.clampScrollVisible()
 	s.dragAnchor, s.dragAnchorEnd = anchor, anchor
 	s.dragging = true
 }

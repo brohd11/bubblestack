@@ -1526,11 +1526,12 @@ func TestEditorHorizontalWheel(t *testing.T) {
 		t.Fatalf("SetSize undid the horizontal scroll: scrX %d, want %d", s.scrX, want)
 	}
 
-	// The caret sits far left of the view; one arrow snaps the view back to it. Landing
-	// ON the caret's cell rather than at column 0 is clampScroll's "just enough" rule.
+	// The caret sits far left of the view; one arrow snaps the view back to it. It lands at
+	// column 0 rather than on the caret's own cell: the caret is inside the left margin, so
+	// clampScroll's leftward rule pulls the whole start of the line back into view with it.
 	s.key(nil, keyMsg("right"))
-	if s.curX != 1 || s.scrX != 1 {
-		t.Fatalf("right with the caret off-screen → (curX %d, scrX %d), want (1, 1)", s.curX, s.scrX)
+	if s.curX != 1 || s.scrX != 0 {
+		t.Fatalf("right with the caret off-screen → (curX %d, scrX %d), want (1, 0)", s.curX, s.scrX)
 	}
 }
 

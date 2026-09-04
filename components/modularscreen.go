@@ -289,6 +289,14 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 				}
 			}
 		}
+		// A wheel notch arriving mid-gesture belongs to the slot HOLDING the gesture, not
+		// to whatever the pointer happens to be over. Falling into the branch below would
+		// clear mouseSlot — and never restore it, since a wheel button is neither left nor
+		// right — so one notch during an editor drag-select would orphan every motion event
+		// that followed it.
+		if isWheel && s.mouseSlot >= 0 {
+			return s, s.updateMouseSlot(sh, s.mouseSlot, mm)
+		}
 		if isClick || isWheel {
 			s.mouseSlot = -1
 			if i := s.slotAt(sh, m.X, m.Y); i >= 0 && isFocusable(s.flat[i].Panel) {

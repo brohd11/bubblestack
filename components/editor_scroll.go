@@ -118,13 +118,52 @@ func (s *EditorScreen) clampScrollBounds() {
 	}
 }
 
-// clampScroll scrolls the viewport just enough to keep the cursor visible. In normal
-// mode it tracks the cursor in both axes; with wrap enabled it keeps only the row on
-// screen (soft wrap means the whole wrapped line is visible horizontally).
+// hCaretBand is the range of screen columns the caret may occupy: the view scrolls right
+// once the caret passes hi, and left once it falls behind lo. Both ends are measured from the
+// RIGHT edge of the content window, because the half of the window that matters is the one
+// BEHIND the caret — the text already read. The gap between them is the hysteresis, and the
+// floor at column 0 the two clamps apply is what makes a caret walking back leftwards restore
+// the start of the line long before it reaches it.
+//
+// Since both clamps floor at 0, the band only ever engages on lines longer than roughly the
+// window: ordinary short-line editing never sees it.
+func (s *EditorScreen) hCaretBand() (lo, hi int) {
+	w := s.contentW()
+	return w - 1 - w*editorHCaretFarPct/100, w - 1 - w*editorHCaretNearPct/100
+}
+
+// clampScroll scrolls the viewport to keep the cursor visible, and horizontally to park it
+// inside hCaretBand. It is the KEY navigation clamp: typing, arrows, completion and Reveal.
+// With wrap enabled it keeps only the row on screen (soft wrap means the whole wrapped line
+// is visible horizontally).
 func (s *EditorScreen) clampScroll() {
 	if s.w < 1 || s.h < 1 {
 		return
 	}
+	if s.clampScrollRow() {
+		return
+	}
+	s.clampScrollBand()
+}
+
+// clampScrollVisible is the MOUSE clamp: it keeps the caret on screen and otherwise leaves the
+// view exactly where it is. A press puts the caret on text the user was already pointing at, so
+// re-parking it inside the band would slide that text out from under the pointer — and, on the
+// press that opens a drag, out from under the gesture that is about to extend from it.
+// Vertically there is no band, so the two clamps are the same clamp there.
+func (s *EditorScreen) clampScrollVisible() {
+	if s.w < 1 || s.h < 1 {
+		return
+	}
+	if s.clampScrollRow() {
+		return
+	}
+	s.clampScrollCell()
+}
+
+// clampScrollRow keeps the caret's row on screen, and reports whether that was the whole job:
+// wrapped, it is.
+func (s *EditorScreen) clampScrollRow() bool {
 	if s.wrap {
 		row := s.wrapRowForCursor()
 		if row < s.scrY {
@@ -133,7 +172,7 @@ func (s *EditorScreen) clampScroll() {
 		if row >= s.scrY+s.h {
 			s.scrY = row - s.h + 1
 		}
-		return
+		return true
 	}
 	if s.curY < s.scrY {
 		s.scrY = s.curY
@@ -141,19 +180,52 @@ func (s *EditorScreen) clampScroll() {
 	if s.curY >= s.scrY+s.h {
 		s.scrY = s.curY - s.h + 1
 	}
+	return false
+}
+
+// clampScrollBand parks the caret inside hCaretBand.
+func (s *EditorScreen) clampScrollBand() {
+	line := s.lines[s.curY]
+	curCell := cellOfCol(line, s.curX)
+	lo, hi := s.hCaretBand()
+	switch p := curCell - s.scrX; {
+	case p > hi:
+		// Scrolling right stops at the end of the CURRENT line: with nothing further to
+		// reveal, the gap the band would hold open would be blank, so the caret takes the
+		// last text cell instead — which is exactly where the minimal clamp leaves it, and
+		// what keeps typing at the end of a long line feeling as it always did. Capping
+		// against this line rather than maxScrollX is also what keeps the clamp off a
+		// whole-buffer scan on every keystroke, and it lands at or below maxScrollX either
+		// way, so the bounds clamp never has to disagree with this one.
+		s.scrX = min(curCell-hi, max(cellOfCol(line, len(line))-s.contentW()+1, 0))
+	case p < lo:
+		s.scrX = max(curCell-lo, 0)
+	}
+	s.nudgeOffMarker(curCell)
+}
+
+// clampScrollCell scrolls the minimum that puts the caret's cell on screen, and no more.
+func (s *EditorScreen) clampScrollCell() {
 	curCell := cellOfCol(s.lines[s.curY], s.curX)
 	if curCell < s.scrX {
 		s.scrX = curCell
 	}
-	w := s.contentW()
-	if curCell >= s.scrX+w {
+	if w := s.contentW(); curCell >= s.scrX+w {
 		s.scrX = curCell - w + 1
 	}
-	// One more column when the overflow marker is about to claim the last one and the
-	// caret is standing in it — walking right along a long line lands there on every
-	// keystroke, and the marker would paint over the caret. Scrolling one further leaves
-	// the caret second from the right; whether the marker still draws after the nudge,
-	// the state is stable, so this never runs twice.
+	s.nudgeOffMarker(curCell)
+}
+
+// nudgeOffMarker takes one more column when the overflow marker is about to claim the caret's
+// own and the caret is standing in it — the marker would paint over the caret, which is a lie
+// about where typing lands. Scrolling one further leaves the caret second from the right;
+// whether the marker still draws after the nudge, the state is stable, so this never runs twice.
+//
+// The band cannot reach this case: it only lets the caret take the last column when the line
+// ENDS there, and a line that ends inside the window draws no marker. It is the narrow-pane
+// path, where the percentages round away to nothing, and the mouse clamp's, which parks nothing.
+func (s *EditorScreen) nudgeOffMarker(curCell int) {
+	w := s.contentW()
 	if w >= 2 && curCell == s.scrX+w-1 && len(expandLine(s.lines[s.curY])) > s.scrX+w {
 		s.scrX++
 	}

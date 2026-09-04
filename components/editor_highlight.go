@@ -228,10 +228,13 @@ func (s *EditorScreen) handleHighlightReady(m editorHighlightReadyMsg) core.Acti
 	return core.Async(s.startHighlightParse())
 }
 
-// Receive lets versioned highlight work arrive through PropagateAll even while this
-// editor is embedded beneath a menu or dialog.
-func (s *EditorScreen) Receive(_ *core.Shared, payload any) core.Action {
+// Receive lets versioned highlight work — and the drag auto-scroll clock, which is
+// addressed the same way — arrive through PropagateAll even while this editor is embedded
+// beneath a menu or dialog.
+func (s *EditorScreen) Receive(sh *core.Shared, payload any) core.Action {
 	switch m := payload.(type) {
+	case editorDragScrollMsg:
+		return s.handleDragScroll(sh, m)
 	case editorHighlightMsg:
 		return s.handleHighlightWake(m)
 	case editorHighlightReadyMsg:

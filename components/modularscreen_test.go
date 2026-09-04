@@ -187,6 +187,41 @@ func TestMouseDragStaysWithOriginatingPane(t *testing.T) {
 	}
 }
 
+// TestWheelDuringDragStaysWithGesturePane: a wheel notch is normally aimed by the pointer,
+// but mid-gesture it belongs to the pane holding the gesture — the editor's drag-select
+// scrolls and keeps selecting on it. Re-aiming would also clear the gesture owner for good,
+// since a wheel button is neither left nor right, orphaning every motion event after it.
+func TestWheelDuringDragStaysWithGesturePane(t *testing.T) {
+	left, right := &capturePanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: left, ExpandH: true}},
+		{{Panel: right, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{10, 10}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 20, 5)
+	m.View(sh)
+
+	m.Update(sh, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+	m.Update(sh, tea.MouseWheelMsg{X: 15, Y: 0, Button: tea.MouseWheelDown})
+	m.Update(sh, tea.MouseMotionMsg{X: 15, Y: 0, Button: tea.MouseLeft})
+	if len(right.got) != 0 {
+		t.Fatalf("the pane under the pointer received %d events during another pane's gesture", len(right.got))
+	}
+	if len(left.got) != 3 {
+		t.Fatalf("the gesture owner received %d events, want press/wheel/motion", len(left.got))
+	}
+	if m.mouseSlot != 0 {
+		t.Fatalf("a wheel mid-gesture left the owner at %d, want the pressed slot", m.mouseSlot)
+	}
+
+	// With no gesture in flight the wheel is aimed by the pointer, as it always was.
+	m.Update(sh, tea.MouseReleaseMsg{X: 15, Y: 0, Button: tea.MouseNone})
+	m.Update(sh, tea.MouseWheelMsg{X: 15, Y: 0, Button: tea.MouseWheelDown})
+	if len(right.got) != 1 {
+		t.Fatalf("a wheel outside a gesture reached the pointed pane %d times, want 1", len(right.got))
+	}
+}
+
 // paneKey builds the tea.KeyMsg for a pane binding's first keycode. Only PaneNext
 // carries one today; the rest are keyless (see core.Keys.PanePrev), and a test wanting
 // those drives cycleFocus or neighbor directly. Binding one is what makes the default

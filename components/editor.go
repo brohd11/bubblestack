@@ -132,6 +132,9 @@ type EditorScreen struct {
 
 	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
+	dragX, dragY              int     // the last pointer cell, in the frame positionAt reads
+	dragScrolling             bool    // an auto-scroll tick is in flight for that pointer
+	dragSeq                   int     // bumped on every gesture reset, so a stale tick dies
 	selStart, selEnd          textPos // normalized half-open selected buffer range
 
 	clickPos   textPos   // where the previous left press landed
@@ -320,6 +323,16 @@ type editorHighlightMsg struct {
 	seq    int
 }
 
+// editorDragScrollMsg is the auto-scroll clock a drag held at the edge of the pane runs on.
+// Motion events only arrive while the pointer MOVES, so a pointer parked past the edge would
+// otherwise scroll once and stop. Addressed like editorHighlightMsg, and for a second reason:
+// ModularScreen's non-key broadcast hands every panel every tick, so an editor acting on a
+// sibling's clock would double the frame rate (the fact listpanel's marqueeIDs exists for).
+type editorDragScrollMsg struct {
+	target *EditorScreen
+	seq    int
+}
+
 // editorHighlightReadyMsg carries an independently parsed snapshot back to the editor.
 // job identifies the single in-flight worker; epoch and seq guard language/buffer moves.
 type editorHighlightReadyMsg struct {
@@ -364,6 +377,39 @@ const editorWheelStep = 3
 // than the vertical step because a cell is a fraction of a word, where a line is a whole
 // thought — six lands roughly a word over per notch.
 const editorHWheelStep = 6
+
+// editorHCaretNearPct and editorHCaretFarPct bound the screen columns the caret is allowed
+// to occupy, BOTH measured from the right edge of the content window: the view scrolls right
+// once the caret is nearer the edge than the first, and left once it is further from it than
+// the second. Measuring from the right is the whole point — the half of the window that
+// carries meaning is the one BEHIND the caret, the text already read — and the gap between
+// the two is the hysteresis that keeps the view still while the caret works inside it.
+const (
+	editorHCaretNearPct = 10
+	editorHCaretFarPct  = 30
+)
+
+// editorDragEdgePct is the band at each edge of the pane where a held drag starts
+// auto-scrolling, as a share of the viewport. Five percent is a couple of rows on an
+// ordinary pane: wide enough to hit without aiming, narrow enough that a selection ending
+// near the edge stays put.
+const editorDragEdgePct = 5
+
+// editorDragScrollInterval is the auto-scroll frame. Faster than the marquee's 130ms
+// because this one tracks the hand: the pointer is held still and the view must feel like
+// it is moving continuously under it.
+const editorDragScrollInterval = 50 * time.Millisecond
+
+// editorDragScrollUnitY, editorDragScrollUnitX and editorDragScrollMaxUnits shape one
+// auto-scroll step. The units are the slowest useful crawl at the inner edge of the band —
+// one line, and two cells for the same reason editorHWheelStep is wider than
+// editorWheelStep — and the ceiling is how far the ramp goes once the pointer is thrown
+// well past the pane: three units a frame is roughly a screen a second.
+const (
+	editorDragScrollUnitY    = 1
+	editorDragScrollUnitX    = 2
+	editorDragScrollMaxUnits = 3
+)
 
 // editorMultiClickWindow is how long a left press stays eligible to be the
 // second or third click of a same-button multi-click. tea.MouseMsg carries neither a
@@ -702,6 +748,8 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen,
 		}
 	}()
 	switch m := msg.(type) {
+	case editorDragScrollMsg:
+		return s, s.handleDragScroll(sh, m)
 	case editorHighlightMsg:
 		return s, s.handleHighlightWake(m)
 	case editorHighlightReadyMsg:
@@ -815,7 +863,15 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen,
 		// The wheel is browse-only and only while focused: mouse msgs are
 		// broadcast to every pane, so an unfocused editor must not roll.
 		if s.focused {
-			s.wheel(m.Mouse())
+			mm := m.Mouse()
+			s.wheel(mm)
+			// Mid-drag the wheel is part of the gesture: the view rolled under a held
+			// pointer, so the selection has to grow over what it revealed, exactly as an
+			// auto-scroll frame does. The wheel reports where the pointer is, so the drag's
+			// notion of it is refreshed from the notch itself.
+			if s.dragging {
+				return s, core.Async(s.trackDrag(sh, mm.X, mm.Y))
+			}
 		}
 		return s, core.Action{}
 	// A drag is the only state motion and release can act on now that the left button
@@ -827,7 +883,7 @@ func (s *EditorScreen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen,
 		}
 		if s.dragging {
 			mm := m.Mouse()
-			s.extendDrag(sh, mm.X, mm.Y)
+			return s, core.Async(s.trackDrag(sh, mm.X, mm.Y))
 		}
 		return s, core.Action{}
 	case tea.MouseReleaseMsg:
