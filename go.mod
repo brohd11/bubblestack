@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/brohd11/goutil v0.1.6
+	github.com/brohd11/goutil v0.1.7
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/sahilm/fuzzy v0.1.3
 	golang.org/x/sys v0.47.0
