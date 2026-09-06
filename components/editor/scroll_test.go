@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
@@ -246,6 +247,58 @@ func TestEditorDragAutoScrollHorizontal(t *testing.T) {
 	}
 	if _, dy := s.dragEdgeScroll(sh, edge+12, s.insetY()+s.h+2); dy <= 0 {
 		t.Fatalf("wrapped, a drag below the pane should still scroll down, got %d", dy)
+	}
+}
+
+func TestEditorRightDragReturnsFromOvershoot(t *testing.T) {
+	for name, line := range map[string]string{
+		"short line":  strings.Repeat("x", 40),
+		"long line":   strings.Repeat("x", 120),
+		"tabbed line": strings.Repeat("\tword", 30),
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, sh := newEditor(Opts{})
+			// A longer line elsewhere must not pull the line being selected entirely
+			// off screen when the pointer overshoots the right edge.
+			s.setContent("header\n" + line + "\n" + strings.Repeat("y", 400))
+			row := s.insetY() + 1
+			s.Update(sh, tea.MouseClickMsg{X: 5, Y: row, Button: tea.MouseLeft})
+			s.Update(sh, tea.MouseMotionMsg{X: s.w + 12, Y: row, Button: tea.MouseLeft})
+			for range 100 {
+				if act := dragTick(s, sh); act.Cmd == nil {
+					break
+				}
+			}
+			if !s.dragging {
+				t.Fatal("reaching the right scroll limit ended the selection gesture")
+			}
+			wantScroll := max(cellOfCol(s.lines[1], len(s.lines[1]))-s.contentW()+1, 0)
+			if s.scrX != wantScroll || s.dragScrolling {
+				t.Fatalf("right scroll did not stop at the selected line: scroll=%d want=%d armed=%v",
+					s.scrX, wantScroll, s.dragScrolling)
+			}
+			s.Update(sh, tea.MouseMotionMsg{X: 20, Y: row, Button: tea.MouseLeft})
+			if s.curX >= len(line) {
+				t.Fatalf("returning inside still maps to end of line: caret=%d scroll=%d", s.curX, s.scrX)
+			}
+			previous := s.curX
+			s.Update(sh, tea.MouseMotionMsg{X: 15, Y: row, Button: tea.MouseLeft})
+			if s.curX >= previous {
+				t.Fatal("selection did not follow the pointer back to the left")
+			}
+			// The same held gesture can reverse scroll direction after reaching the
+			// right limit, then return to selecting inside the viewport again.
+			s.Update(sh, tea.MouseMotionMsg{X: 0, Y: row, Button: tea.MouseLeft})
+			for range 100 {
+				if act := dragTick(s, sh); act.Cmd == nil {
+					break
+				}
+			}
+			s.Update(sh, tea.MouseMotionMsg{X: 20, Y: row, Button: tea.MouseLeft})
+			if s.scrX != 0 || !s.dragging || s.curX != colAtCell(s.lines[1], 20)+1 {
+				t.Fatal("selection did not recover after reversing into the left scroll zone")
+			}
+		})
 	}
 }
 

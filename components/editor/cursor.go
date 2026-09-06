@@ -325,6 +325,16 @@ func (s *Screen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.A
 	}
 	wasY, wasX := s.scrY, s.scrX
 	s.scrollLines(dy)
+	// Browse scrolling uses the widest line in the document. Selection scrolling
+	// must stop at the line under the pointer: a longer line elsewhere can otherwise
+	// pull this entire line off screen, making every returning motion map to its end.
+	if dx > 0 {
+		if p, ok := s.positionAt(sh, s.dragX, s.dragY, true); ok {
+			line := s.lines[p.y]
+			limit := max(cellOfCol(line, len(line))-s.contentW()+1, 0)
+			dx = min(dx, max(limit-s.scrX, 0))
+		}
+	}
 	s.scrollCells(dx)
 	if s.scrY == wasY && s.scrX == wasX {
 		s.dragScrolling = false // no work remains, even if the terminal lost the release
