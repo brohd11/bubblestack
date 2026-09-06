@@ -125,6 +125,31 @@ func (s *Screen) applyLanguage(path string) {
 	s.resetHighlightRows()
 }
 
+// RefreshHighlight schedules a fresh parse of the current text without disturbing what is
+// on screen. It exists for a host whose highlighter answers partly from data that arrives
+// AFTER a parse — LSP semantic tokens are the case: the tokens land later than the text
+// they describe, and nothing in an edit-driven pipeline would ever revisit those rows.
+//
+// What it deliberately does NOT do is discard the snapshot. applyLanguage clears hl and
+// hlRows because a language change makes the old parse meaningless; here the old parse is
+// still the best answer available and must keep rendering until the new one is ready.
+// Clearing them instead leaves hlRows nil and hlDirty at 0, which sends every visible row
+// through the fragment preview for a frame — a full-viewport flash on every refresh.
+//
+// The epoch bump discards a parse already in flight, which read the data this refresh
+// supersedes. That cannot wedge the pipeline: handleHighlightReady clears hlParsing before
+// it tests the epoch, and starts another parse on the mismatch path.
+//
+// Cheap and safe to call often: it schedules work rather than doing it.
+func (s *Screen) RefreshHighlight() {
+	if s.hlExplicit || s.hlFactory == nil {
+		return
+	}
+	s.hlEpoch++
+	s.hlSeq = -1
+	s.hlChanged = time.Time{}
+}
+
 func pairMap(pairs []Pair) map[rune]rune {
 	if len(pairs) == 0 {
 		return nil

@@ -351,3 +351,63 @@ func TestEditorUnfocusedSuppressesHighlight(t *testing.T) {
 		t.Fatalf("unfocused render did not replace syntax styling with muted text: %q", dark)
 	}
 }
+
+// TestRefreshHighlightKeepsTheLiveSnapshot pins the one thing RefreshHighlight must not
+// do. It exists for a highlighter whose colors depend on data arriving after the parse —
+// LSP semantic tokens — and the whole point is that the screen does not change until the
+// new parse is ready. Discarding hl and hlRows instead (which is what applyLanguage does,
+// correctly, for a language change) leaves hlRows nil and hlDirty at 0, so every visible
+// row falls through to the fragment preview for a frame: a full-viewport flash on every
+// refresh, invisible to every other test here because they all assert the end state.
+func TestRefreshHighlightKeepsTheLiveSnapshot(t *testing.T) {
+	var created []*restartHL
+	s, _ := newEditor(Opts{Path: "x.lit", ResolveLanguage: trackedHighlighterLanguage(&created, nil)})
+	s.setContent("alpha\nbeta\ngamma")
+	exact := s.hl.(*restartHL)
+	exact.Parse(s.Text())
+	s.acceptHighlight(exact, s.editSeq)
+
+	before := spansText(s.hlSpans(1))
+	if before != "beta" {
+		t.Fatalf("row 1 was not highlighted before the refresh: %q", before)
+	}
+
+	s.RefreshHighlight()
+
+	if s.hl != exact {
+		t.Error("the live snapshot was replaced; it must render until the new parse lands")
+	}
+	if len(s.hlRows) != 3 {
+		t.Errorf("hlRows = %v, want the snapshot's row map kept", s.hlRows)
+	}
+	if s.hlDirty != -1 {
+		t.Errorf("hlDirty = %d, want -1: a refresh dirties no row, so no preview runs",
+			s.hlDirty)
+	}
+	if got := spansText(s.hlSpans(1)); got != before {
+		t.Errorf("row 1 after the refresh = %q, want the unchanged %q — this is the flash",
+			got, before)
+	}
+	// It must still have SCHEDULED the re-parse, or the new data never lands at all.
+	if s.hlSeq == s.editSeq {
+		t.Error("hlSeq still matches editSeq, so startHighlightParse will not run again")
+	}
+	if !s.hlChanged.IsZero() {
+		t.Error("hlChanged should be cleared so the parse is not held behind the debounce")
+	}
+}
+
+// TestRefreshHighlightLeavesExplicitHighlightersAlone: an Opts.Highlighter is a deliberate
+// host override that survives a rename, and a refresh has no factory to rebuild it from.
+func TestRefreshHighlightLeavesExplicitHighlightersAlone(t *testing.T) {
+	explicit := &countingHL{}
+	s, _ := newEditor(Opts{Path: "x.lit", Highlighter: explicit})
+	s.setContent("alpha")
+	seq := s.hlSeq
+
+	s.RefreshHighlight()
+
+	if s.hl != explicit || s.hlSeq != seq {
+		t.Error("RefreshHighlight disturbed an explicit highlighter")
+	}
+}
