@@ -150,6 +150,10 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.BlurMsg:
+		// A release outside the terminal may never arrive. Notify retained screens
+		// too, since the gesture's owner may now be underneath a modal overlay.
+		r.apply(PropagateAll(msg), &cmds)
 	case tea.BackgroundColorMsg:
 		// The terminal answering the OSC 11 query is what tells the adaptive palette
 		// which half of each Color pair to use. v1 asked synchronously through a

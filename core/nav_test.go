@@ -45,6 +45,22 @@ func twoTabRouter(t0, t1 Screen) Router {
 
 func stackLen(tm tea.Model) int { return len(tm.(Router).stack) }
 
+func TestTerminalBlurReachesScreensUnderOverlay(t *testing.T) {
+	root, inactive, overlay := &recvScreen{}, &recvScreen{}, &recvScreen{}
+	r := twoTabRouter(root, inactive)
+	r.stack = append(r.stack, overlay)
+	model, _ := r.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if !model.View().ReportFocus {
+		t.Fatal("router must request terminal focus reports")
+	}
+	model.Update(tea.BlurMsg{})
+	for name, screen := range map[string]*recvScreen{"root": root, "inactive": inactive, "overlay": overlay} {
+		if _, ok := screen.got.(tea.BlurMsg); !ok || screen.gotCnt != 1 {
+			t.Fatalf("%s did not receive one terminal blur broadcast", name)
+		}
+	}
+}
+
 func TestNavReplace(t *testing.T) {
 	tm := sized(newCoreTestRouter())
 	repl := &initScreen{}

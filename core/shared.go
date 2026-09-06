@@ -23,6 +23,10 @@ type Shared struct {
 
 	Spinner spinner.Model
 	help    help.Model // renders static (non-list) help bars
+
+	// chrome memoizes the rendered furniture for the message being handled — see
+	// chromeCache. The router owns it; nothing outside core touches it.
+	chrome chromeCache
 }
 
 func NewShared(app any) *Shared {

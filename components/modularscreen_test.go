@@ -222,6 +222,110 @@ func TestWheelDuringDragStaysWithGesturePane(t *testing.T) {
 	}
 }
 
+// pushPanel answers a press by pushing a screen, the way editor.Screen's right-click
+// opens its context menu.
+type pushPanel struct{ capturePanel }
+
+func (p *pushPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
+	p.got = append(p.got, msg)
+	if _, ok := msg.(tea.MouseClickMsg); ok {
+		return core.Push(stubPushScreen{}), true
+	}
+	return core.Action{}, true
+}
+
+type stubPushScreen struct{}
+
+func (stubPushScreen) Init(*core.Shared) tea.Cmd { return nil }
+func (stubPushScreen) Update(*core.Shared, tea.Msg) (core.Screen, core.Action) {
+	return stubPushScreen{}, core.Action{}
+}
+func (stubPushScreen) View(*core.Shared) string       { return "menu" }
+func (stubPushScreen) HelpView(*core.Shared) string   { return "" }
+func (stubPushScreen) SetSize(*core.Shared, int, int) {}
+func (stubPushScreen) Filtering() bool                { return false }
+
+// TestPressThatPushesReleasesTheGesture is the "the editor stole my mouse" regression.
+//
+// A right press on the editor opens its context menu, and the router delivers only to the
+// top of the stack — so the release lands on the menu and never comes back here. The
+// gesture owner was left pinned to that pane, and because a wheel notch mid-gesture is
+// deliberately aimed at the owner rather than at the pointer, every later scroll ANYWHERE
+// went to the editor until some click happened to reset it.
+func TestPressThatPushesReleasesTheGesture(t *testing.T) {
+	left, right := &pushPanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: left, ExpandH: true}},
+		{{Panel: right, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{10, 10}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 20, 5)
+	m.View(sh)
+
+	m.Update(sh, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseRight})
+	if m.mouseSlot != -1 {
+		t.Fatalf("a press that pushed a screen kept the gesture at slot %d", m.mouseSlot)
+	}
+
+	// The release goes to the pushed screen, so this pane never sees it. The next wheel is
+	// the pointer's to aim.
+	m.Update(sh, tea.MouseWheelMsg{X: 15, Y: 0, Button: tea.MouseWheelDown})
+	if len(right.got) != 1 {
+		t.Fatalf("the pointed pane received %d wheel notches, want 1", len(right.got))
+	}
+	if len(left.got) != 1 {
+		t.Fatalf("the pane that opened the menu received %d events, want just the press", len(left.got))
+	}
+}
+
+// TestKeyPressReleasesTheGesture is the other recovery path: a release that never arrives
+// must not outlive the next keystroke, since typing ends a mouse gesture everywhere else
+// too (editor.Screen resets its own on every key).
+func TestKeyPressReleasesTheGesture(t *testing.T) {
+	left, right := &capturePanel{}, &capturePanel{}
+	m := NewModularScreen([][]Slot{
+		{{Panel: left, ExpandH: true}},
+		{{Panel: right, ExpandH: true}},
+	}, ModularOpts{ColWidths: []int{10, 10}})
+	sh := core.NewShared(nil)
+	m.SetSize(sh, 20, 5)
+	m.View(sh)
+
+	m.Update(sh, tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+	m.Update(sh, keyMsg("x"))
+	m.Update(sh, tea.MouseWheelMsg{X: 15, Y: 0, Button: tea.MouseWheelDown})
+	if len(right.got) == 0 {
+		t.Fatal("after a keystroke the wheel should be aimed by the pointer again")
+	}
+}
+
+func TestLostMouseReleaseRecovery(t *testing.T) {
+	for name, cancel := range map[string]func(*ModularScreen, *core.Shared){
+		"terminal blur": func(m *ModularScreen, sh *core.Shared) { m.Receive(sh, tea.BlurMsg{}) },
+		"host blur":     func(m *ModularScreen, _ *core.Shared) { m.SetFocused(false) },
+		"button up": func(m *ModularScreen, sh *core.Shared) {
+			m.Update(sh, tea.MouseMotionMsg{X: 15, Y: 1, Button: tea.MouseNone})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			left, right := &capturePanel{}, &capturePanel{}
+			m := NewModularScreen([][]Slot{{{Panel: left}}, {{Panel: right}}}, ModularOpts{ColWidths: []int{10, 10}})
+			sh := core.NewShared(nil)
+			m.SetSize(sh, 20, 5)
+			m.Update(sh, tea.MouseClickMsg{X: 1, Y: 1, Button: tea.MouseLeft})
+			cancel(m, sh)
+			if m.mouseDown || m.mouseSlot != -1 {
+				t.Fatal("lost release left the gesture captured")
+			}
+			right.got = nil
+			m.Update(sh, tea.MouseWheelMsg{X: 15, Y: 1, Button: tea.MouseWheelDown})
+			if len(right.got) != 1 {
+				t.Fatal("wheel did not reach the pane under the pointer after cancellation")
+			}
+		})
+	}
+}
+
 // paneKey builds the tea.KeyMsg for a pane binding's first keycode. Only PaneNext
 // carries one today; the rest are keyless (see core.Keys.PanePrev), and a test wanting
 // those drives cycleFocus or neighbor directly. Binding one is what makes the default

@@ -52,14 +52,14 @@ func (c *countingHL) HighlightLine(row int) []Span {
 	if row < 0 || row >= len(c.lines) || c.lines[row] == "" {
 		return nil
 	}
-	return []Span{{Text: c.lines[row], Style: testHighlightStyle}}
+	return []Span{{Text: c.lines[row], Style: &testHighlightStyle}}
 }
 
 type brokenHL struct{}
 
 func (brokenHL) Parse(string) {}
 func (brokenHL) HighlightLine(int) []Span {
-	return []Span{{Text: "nope", Style: testHighlightStyle}}
+	return []Span{{Text: "nope", Style: &testHighlightStyle}}
 }
 
 func highlighterLanguage(path string) *LanguageConfig {

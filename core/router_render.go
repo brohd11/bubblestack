@@ -7,6 +7,67 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// chromeCache memoizes the chrome renders belonging to ONE message.
+//
+// The same header, tab strip and breadcrumb were rendered three times per keystroke:
+// twice inside resize() (once to publish Shared.bodyY, once more inside bodyHeightFor)
+// and a third time in View's frame(). None of it is cheap — topChrome was 77% of the
+// router's per-message cost, and 56% of that was ansi.stringWidth segmenting grapheme
+// clusters inside lipgloss's own Render, all to re-measure furniture a keystroke rarely
+// touches.
+//
+// resize() resets the cache, so every entry is rendered from state that has already had
+// the message's Actions applied to it; nothing runs between resize() and View, so the
+// strings View reuses are exactly the ones the body sizing was computed from. That was
+// always the intended invariant — the two computations agreeing — and caching is now what
+// enforces it rather than two identical call chains.
+//
+// Only the top chrome is cached, and deliberately: it was 77% of the cost, while the
+// status line and output pane below the body are rendered once each and cheaply. Keeping
+// them uncached also keeps belowChrome answering from live state for anything that calls
+// it outside the Update→View cycle.
+//
+// Two slots: a frame renders at most the top screen's mask and, under an overlay, the
+// mask of the screen below it. A third distinct mask renders uncached rather than
+// evicting, which is correct if slower.
+type chromeCache struct {
+	valid bool
+	n     int
+	slots [2]chromeSlot
+}
+
+type chromeSlot struct {
+	mask ChromeMask
+	top  string
+	set  bool
+}
+
+// reset opens a new message's cache. Called from resize(), which every Update path
+// reaches after applying whatever the message changed.
+func (c *chromeCache) reset() {
+	c.valid, c.n = true, 0
+	c.slots = [2]chromeSlot{}
+}
+
+// slot is the entry for mask, or nil when there is nothing to cache into — before the
+// first resize, or past the two masks a frame can hold.
+func (c *chromeCache) slot(mask ChromeMask) *chromeSlot {
+	if !c.valid {
+		return nil
+	}
+	for i := range c.n {
+		if c.slots[i].mask == mask {
+			return &c.slots[i]
+		}
+	}
+	if c.n == len(c.slots) {
+		return nil
+	}
+	c.slots[c.n] = chromeSlot{mask: mask}
+	c.n++
+	return &c.slots[c.n-1]
+}
+
 // maskOf is the chrome suppression requested by screen s, or the zero mask (hide
 // nothing) when it doesn't implement ChromeMasker. Parameterized by screen (rather
 // than always reading r.Top()) so the overlay path can frame the screen below the
@@ -123,6 +184,17 @@ func (r Router) breadcrumbView() string {
 // Its height is measured (not a constant) so adding/removing a part automatically
 // reflows the body.
 func (r Router) topChrome(mask ChromeMask) string {
+	slot := r.sh.chrome.slot(mask)
+	if slot == nil {
+		return r.renderTopChrome(mask)
+	}
+	if !slot.set {
+		slot.top, slot.set = r.renderTopChrome(mask), true
+	}
+	return slot.top
+}
+
+func (r Router) renderTopChrome(mask ChromeMask) string {
 	var parts []string
 	if !mask.Header && r.sh.Chrome != nil {
 		if header := r.sh.Chrome.Header.view(r.sh); header != "" { // nil-receiver safe
@@ -188,6 +260,9 @@ func (r Router) bodyHeightFor(s Screen) int {
 }
 
 func (r Router) resize() {
+	// Open this message's chrome cache first: every render below, and every one View
+	// makes after it, is then one message's worth of truth (see chromeCache).
+	r.sh.chrome.reset()
 	if r.sh.width == 0 {
 		return
 	}
@@ -276,6 +351,7 @@ func (r Router) View() tea.View {
 	// Update. It costs the terminal's own drag-select, which is why the key exists.
 	v := tea.NewView(out)
 	v.AltScreen = true
+	v.ReportFocus = true
 	if r.mouseOn {
 		v.MouseMode = tea.MouseModeCellMotion
 	}

@@ -44,6 +44,7 @@ const (
 func (s *ModularScreen) initResize(cols []int, state ResizeState) {
 	s.defaultCols = make([]int, len(s.cols))
 	copy(s.defaultCols, cols)
+	s.invalidateLayout()
 	s.colWidths = append([]int(nil), s.defaultCols...)
 	for c := range s.colWidths {
 		if c < len(state.Cols) {
@@ -259,6 +260,7 @@ func (s *ModularScreen) applyDelta(edgeIndex, delta int) {
 	if delta == 0 || edgeIndex < 0 || edgeIndex >= len(s.edges) {
 		return
 	}
+	s.invalidateLayout()
 	edge := s.edges[edgeIndex]
 	if edge.vertical {
 		s.applyColumnDelta(edge.col, delta)
@@ -336,11 +338,19 @@ func (s *ModularScreen) flexSpace() int {
 	return s.lastW - fixed
 }
 
+// relayout re-runs the layout at the CURRENT size, which is why it has to mark the
+// layout dirty first: SetSize now answers an unchanged size with nothing.
 func (s *ModularScreen) relayout() {
 	if s.lastW > 0 && s.lastH > 0 {
+		s.invalidateLayout()
 		s.SetSize(nil, s.lastW, s.lastH)
 	}
 }
+
+// invalidateLayout tells the next SetSize that the grid has moved under it even though
+// the terminal has not. Every path that edits a column width, a flex share or a row
+// share goes through applyDelta or applyResizeState, and both call this.
+func (s *ModularScreen) invalidateLayout() { s.layoutDirty = true }
 
 func (s *ModularScreen) resizeKeyMatches(k string) bool {
 	keys := s.resize.Key.Keys()

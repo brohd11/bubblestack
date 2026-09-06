@@ -155,7 +155,7 @@ func (s *Screen) refreshHighlightPreview() {
 	preview.Parse(b.String())
 	for row := from; row <= visibleTo; row++ {
 		spans := preview.HighlightLine(row - anchor)
-		if spansText(spans) == string(s.lines[row]) {
+		if spansMatchLine(spans, s.lines[row]) {
 			s.hlPreview[row] = spans
 		}
 	}
@@ -233,6 +233,9 @@ func (s *Screen) handleHighlightReady(m editorHighlightReadyMsg) core.Action {
 // beneath a menu or dialog.
 func (s *Screen) Receive(sh *core.Shared, payload any) core.Action {
 	switch m := payload.(type) {
+	case tea.BlurMsg:
+		s.resetMouseGesture()
+		return core.Action{}
 	case editorDragScrollMsg:
 		return s.handleDragScroll(sh, m)
 	case editorHighlightMsg:

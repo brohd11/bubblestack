@@ -135,6 +135,37 @@ func dragTick(s *Screen, sh *core.Shared) core.Action {
 	return act
 }
 
+func TestEditorDragTickDeliveredTwice(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent(longDoc())
+	s.Update(sh, tea.MouseClickMsg{X: 20, Y: s.insetY(), Button: tea.MouseLeft})
+	s.Update(sh, tea.MouseMotionMsg{X: 20, Y: s.insetY() + s.h - 1, Button: tea.MouseLeft})
+	tick := editorDragScrollMsg{target: s, seq: s.dragSeq}
+	first := s.Receive(sh, tick)
+	was := s.scrY
+	second := s.Receive(sh, tick)
+	if first.Cmd == nil || second.Cmd != nil || s.scrY != was {
+		t.Fatalf("one broadcast must scroll and rearm only once: first=%v second=%v scroll=%d->%d",
+			first.Cmd != nil, second.Cmd != nil, was, s.scrY)
+	}
+}
+
+func TestEditorDragClockStopsAtBufferEnd(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	s.setContent(longDoc())
+	s.Update(sh, tea.MouseClickMsg{X: 20, Y: s.insetY(), Button: tea.MouseLeft})
+	s.Update(sh, tea.MouseMotionMsg{X: 20, Y: s.insetY() + s.h + 10, Button: tea.MouseLeft})
+	for range len(s.lines) {
+		if act := dragTick(s, sh); act.Cmd == nil {
+			if s.scrY != len(s.lines)-s.h || s.dragScrolling {
+				t.Fatal("clock stopped before the buffer end, or remained armed")
+			}
+			return
+		}
+	}
+	t.Fatal("a lost release keeps generating ticks even when scrolling cannot move")
+}
+
 // TestEditorDragAutoScrollVertical: a drag held at the bottom edge keeps scrolling and
 // keeps selecting, faster the further past the pane the pointer is, and stops on its own
 // when the pointer comes back inside.
@@ -226,7 +257,13 @@ func TestEditorDragScrollStops(t *testing.T) {
 		"release": func(s *Screen, sh *core.Shared) {
 			s.Update(sh, tea.MouseReleaseMsg{X: 20, Y: s.insetY() + s.h - 1, Button: tea.MouseNone})
 		},
-		"keystroke": func(s *Screen, sh *core.Shared) { s.key(sh, keyMsg("left")) },
+		"keystroke":      func(s *Screen, sh *core.Shared) { s.key(sh, keyMsg("left")) },
+		"pane blur":      func(s *Screen, _ *core.Shared) { s.SetFocused(false) },
+		"terminal blur":  func(s *Screen, sh *core.Shared) { s.Update(sh, tea.BlurMsg{}) },
+		"broadcast blur": func(s *Screen, sh *core.Shared) { s.Receive(sh, tea.BlurMsg{}) },
+		"button up motion": func(s *Screen, sh *core.Shared) {
+			s.Update(sh, tea.MouseMotionMsg{X: 20, Y: s.insetY() + s.h - 1, Button: tea.MouseNone})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, sh := newEditor(Opts{})

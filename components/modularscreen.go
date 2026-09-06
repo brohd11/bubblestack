@@ -51,8 +51,22 @@ type ModularScreen struct {
 	resizing    bool
 	lastW       int
 	lastH       int
-	focus       int  // index into flat; -1 when no slot is focusable
-	mouseSlot   int  // slot owning the current left/right gesture; -1 when none is active
+	// layoutDirty forces the next SetSize to re-lay-out even at an unchanged size.
+	// The router re-sizes the top screen after EVERY message, so without a guard a
+	// keystroke re-ran the whole grid — reallocating rects and calling every panel's
+	// SetSize, which for an editor pane invalidates its wrap cache. Anything that
+	// changes the layout without changing the terminal size (a divider drag, a restored
+	// resize state) marks this instead; see invalidateLayout for the full list.
+	layoutDirty bool
+	focus       int // index into flat; -1 when no slot is focusable
+	mouseSlot   int // slot owning the current left/right gesture; -1 when none is active
+	// mouseDown is whether the button that opened that gesture is still held. A release
+	// does not always come back: a press that PUSHES a screen (the editor's right-click
+	// context menu) sends the release to the pushed screen instead, and the router
+	// delivers only to the top of the stack — so mouseSlot alone could stay pinned to a
+	// pane the pointer left long ago, and the wheel claim below would then send every
+	// notch on screen to it until the next click landed somewhere.
+	mouseDown   bool
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
 	title       string
 	crumb       string
@@ -116,6 +130,7 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		focus:       -1,
 		mouseSlot:   -1,
 		hostFocused: true,
+		layoutDirty: true,
 		title:       opts.Title,
 		crumb:       opts.Crumb,
 		crumbShort:  opts.CrumbShort,
@@ -206,6 +221,10 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		k := km.String()
+		// Typing ends any mouse gesture, as it does inside the panes themselves (the
+		// editor's own resetMouseGesture is on every key). It is also the recovery path
+		// if a release never arrived.
+		s.releaseMouse()
 		if s.resize != nil {
 			if s.resizing {
 				switch {
@@ -258,6 +277,10 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		_, isWheel := mm.(tea.MouseWheelMsg)
 		_, isRelease := mm.(tea.MouseReleaseMsg)
 		m := mm.Mouse()
+		if motion, ok := mm.(tea.MouseMotionMsg); ok && motion.Button == tea.MouseNone {
+			s.releaseMouse()
+			s.dragEdge = -1
+		}
 		if s.resize != nil {
 			if click, ok := mm.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && click.Mod == 0 {
 				if edge := s.edgeAt(sh, click.X, click.Y); edge >= 0 {
@@ -294,17 +317,22 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		// clear mouseSlot — and never restore it, since a wheel button is neither left nor
 		// right — so one notch during an editor drag-select would orphan every motion event
 		// that followed it.
-		if isWheel && s.mouseSlot >= 0 {
+		if isWheel && s.mouseSlot >= 0 && s.mouseDown {
 			return s, s.updateMouseSlot(sh, s.mouseSlot, mm)
 		}
 		if isClick || isWheel {
-			s.mouseSlot = -1
+			s.releaseMouse()
 			if i := s.slotAt(sh, m.X, m.Y); i >= 0 && isFocusable(s.flat[i].Panel) {
 				if m.Button == tea.MouseLeft || m.Button == tea.MouseRight {
-					s.mouseSlot = i
+					s.mouseSlot, s.mouseDown = i, true
 				}
 				focus := s.focusSlot(i)
 				act := s.updateMouseSlot(sh, i, mm)
+				// A press that pushed a screen has spent the gesture: the release will be
+				// delivered to whatever is now on top of the stack and never reach here.
+				if act.Msg != nil {
+					s.releaseMouse()
+				}
 				// Batched, not replaced: the press has its own work (a row select,
 				// a scroll) and the focus cmd rides alongside it.
 				act.Cmd = tea.Batch(act.Cmd, focus)
@@ -314,7 +342,10 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 			i := s.mouseSlot
 			act := s.updateMouseSlot(sh, i, mm)
 			if isRelease {
-				s.mouseSlot = -1
+				s.releaseMouse()
+			}
+			if act.Msg != nil {
+				s.releaseMouse() // as above: a pushed screen owns the rest of the gesture
 			}
 			return s, act
 		}
@@ -336,6 +367,11 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 	}
 	return s, core.Action{Msg: nav, Cmd: tea.Batch(cmds...)}
 }
+
+// releaseMouse ends the gesture a click opened. It is the one place mouseSlot is
+// surrendered, so every reason to surrender it reads the same: a release, a key press, the
+// next click, or a press whose Action pushed a screen that will swallow the release.
+func (s *ModularScreen) releaseMouse() { s.mouseSlot, s.mouseDown = -1, false }
 
 // updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates.
 // Keeping this translation for a full left- or right-button gesture lets a drag leave
@@ -388,6 +424,10 @@ func (s *ModularScreen) PopStop() bool { return s.popStop }
 // ScreenPanel's child form) — so the active pane dims and relights in place.
 func (s *ModularScreen) SetFocused(focused bool) {
 	s.hostFocused = focused
+	if !focused {
+		s.releaseMouse()
+		s.dragEdge = -1
+	}
 	if s.focus < 0 {
 		return
 	}
@@ -409,6 +449,10 @@ func (s *ModularScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 // Refresh closure. The recursive relay lets an async result reach a ScreenPanel child
 // even while another screen is on top of this root.
 func (s *ModularScreen) Receive(sh *core.Shared, payload any) core.Action {
+	if _, ok := payload.(tea.BlurMsg); ok {
+		s.releaseMouse()
+		s.dragEdge = -1
+	}
 	var acts []core.Action
 	for _, slot := range s.flat {
 		if receiver, ok := slot.Panel.(core.Receiver); ok {
@@ -559,8 +603,11 @@ func (s *ModularScreen) HelpView(sh *core.Shared) string {
 // same arithmetic also records each slot's body-relative rect, so Update can
 // hit-test mouse presses (see slotAt).
 func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	if !s.layoutDirty && width == s.lastW && bodyHeight == s.lastH && len(s.rects) == len(s.flat) {
+		return // same geometry, same answer: see layoutDirty
+	}
+	s.lastW, s.lastH, s.layoutDirty = width, bodyHeight, false
 	if s.resize != nil {
-		s.lastW, s.lastH = width, bodyHeight
 		s.setResizeSize(width, bodyHeight)
 		return
 	}

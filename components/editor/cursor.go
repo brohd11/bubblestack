@@ -280,7 +280,20 @@ func (s *Screen) dragScrollCmd() tea.Cmd {
 // each frame re-arms itself — and stops on its own the moment the pointer comes back inside
 // or the gesture ends, so nothing here needs a release path of its own.
 func (s *Screen) trackDrag(sh *core.Shared, x, y int) tea.Cmd {
+	// A pointer that has not left its cell OVER A VIEW THAT HAS NOT MOVED has nothing to
+	// add: the selection would be extended to where it already reaches, and the frame that
+	// follows would be the frame already on screen. Terminals report motion per cell, but a
+	// duplicate still costs a whole re-render to discover it changed nothing, and during a
+	// drag those frames are what the pointer is queued up behind.
+	//
+	// The scroll offsets are half the test because the wheel comes through here too: a
+	// notch mid-drag rolls the view under a stationary pointer, and the selection has to
+	// grow over what that revealed. Same cell, different text.
+	if s.dragging && x == s.dragX && y == s.dragY && s.scrY == s.dragScrY && s.scrX == s.dragScrX {
+		return nil
+	}
 	s.dragX, s.dragY = x, y
+	s.dragScrY, s.dragScrX = s.scrY, s.scrX
 	s.extendDrag(sh, x, y)
 	if s.dragScrolling {
 		return nil
@@ -298,16 +311,25 @@ func (s *Screen) trackDrag(sh *core.Shared, x, y int) tea.Cmd {
 // alone, so the selection still follows the POINTER rather than the view running away with
 // it. extendDrag keeps its clampScrollBounds for the same reason (see clampScrollBounds).
 func (s *Screen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.Action {
-	if m.target != s || m.seq != s.dragSeq || !s.dragging {
+	if m.target != s || m.seq != s.dragSeq || !s.dragging || !s.dragScrolling {
 		return core.Action{} // a stale frame, or the gesture is over: the clock stops here
 	}
+	// A broadcast can reach this editor through both a pane and a host's retained
+	// buffer registry. Consume the tick BEFORE rearming: a gesture-only generation
+	// lets each delivery start another timer, doubling the queue every frame.
+	s.dragSeq++
 	dx, dy := s.dragEdgeScroll(sh, s.dragX, s.dragY)
 	if dx == 0 && dy == 0 {
 		s.dragScrolling = false // back inside the pane; the next motion re-arms
 		return core.Action{}
 	}
+	wasY, wasX := s.scrY, s.scrX
 	s.scrollLines(dy)
 	s.scrollCells(dx)
+	if s.scrY == wasY && s.scrX == wasX {
+		s.dragScrolling = false // no work remains, even if the terminal lost the release
+		return core.Action{}
+	}
 	s.extendDrag(sh, s.dragX, s.dragY)
 	return core.Async(s.dragScrollCmd())
 }

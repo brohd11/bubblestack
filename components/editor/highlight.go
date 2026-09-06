@@ -10,10 +10,29 @@ import (
 // The spans of a line, concatenated, must equal the line's text EXACTLY: the
 // editor validates that before styling and falls back to the plain render on a
 // mismatch, so a buggy highlighter can lose its colors but never corrupt the
-// frame. A zero Style renders the run unstyled.
+// frame. A nil Style renders the run unstyled.
+//
+// The style is a POINTER into the highlighter's own palette, not a value, because a
+// lipgloss.Style is roughly 650 bytes — a Border of thirteen strings, fifteen color
+// interfaces and twenty-odd scalars — and a document is millions of spans. Held by
+// value, baking a 20k-line file allocated 574 MB and spent a fifth of its CPU in the
+// GC handing that memory back, on a goroutine the editor's own frames are waiting on.
+// A highlighter therefore hands out pointers to a fixed palette table; a palette
+// change replaces that table wholesale rather than writing through it, so spans from
+// an earlier parse keep the colors they were baked with until the reparse that
+// change triggers.
 type Span struct {
 	Text  string
-	Style lipgloss.Style
+	Style *lipgloss.Style
+}
+
+// SpanStyle is the style to render sp with, and false when the run is unstyled — the
+// nil case callers must not dereference.
+func (sp Span) SpanStyle() (lipgloss.Style, bool) {
+	if sp.Style == nil {
+		return lipgloss.Style{}, false
+	}
+	return *sp.Style, true
 }
 
 // Highlighter parses a full document and answers per-line highlighting, keeping
@@ -45,8 +64,27 @@ type HighlightRestartProvider interface {
 	HighlightRestartLine(row int) int
 }
 
-// spansText is the concatenated text of spans — the editor's validation of the
-// Span contract against the buffer line.
+// spansMatchLine reports whether spans concatenate to exactly line — the Span contract,
+// checked before the editor will style a row.
+//
+// It walks rather than joining. This runs for every visible row of every frame, and
+// building two copies of the line only to compare them was two allocations per row per
+// frame, which on a full viewport is most of what a plain render allocates.
+func spansMatchLine(spans []Span, line []rune) bool {
+	at := 0
+	for _, sp := range spans {
+		for _, r := range sp.Text {
+			if at >= len(line) || line[at] != r {
+				return false
+			}
+			at++
+		}
+	}
+	return at == len(line)
+}
+
+// spansText is the concatenated text of spans — the same contract spelled out as a
+// string, for the callers that need the text itself rather than the verdict.
 func spansText(spans []Span) string {
 	var b strings.Builder
 	for _, sp := range spans {

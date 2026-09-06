@@ -143,14 +143,22 @@ type Screen struct {
 	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
 	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 
+	// The geometry SetSize last laid out, so an unchanged re-size costs nothing. See
+	// SetSize; sizeDirty is how a change that is not a dimension (SetEmbedded) forces it.
+	lastSizeW     int
+	lastSizeH     int
+	lastSearchBar bool
+	sizeDirty     bool
+
 	signColumns map[string]*signColumn // host-named per-line decoration columns (see signs.go)
 	signOrder   []string               // outermost to innermost; registration order for unlisted columns
 
 	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	dragX, dragY              int     // the last pointer cell, in the frame positionAt reads
+	dragScrY, dragScrX        int     // the view offsets that cell was last resolved against (trackDrag)
 	dragScrolling             bool    // an auto-scroll tick is in flight for that pointer
-	dragSeq                   int     // bumped on every gesture reset, so a stale tick dies
+	dragSeq                   int     // bumped on reset AND tick consumption, so duplicate broadcasts die
 	selStart, selEnd          textPos // normalized half-open selected buffer range
 
 	clickPos   textPos   // where the previous left press landed
@@ -606,13 +614,23 @@ func (s *Screen) Init(*core.Shared) tea.Cmd {
 // pane-relative (no Shared.BodyY to subtract) and the body indents one column off the
 // pane edge so text doesn't butt against a neighbouring pane's border. The look is
 // unaffected: Opts.Border decides the frame.
-func (s *Screen) SetEmbedded(on bool) { s.embedded = on }
+func (s *Screen) SetEmbedded(on bool) {
+	if s.embedded != on {
+		s.embedded = on
+		s.sizeDirty = true // insetX moved: the next SetSize must recompute, same size or not
+	}
+}
 
 // SetFocused implements core.FocusableScreen: the host ModularScreen's focus arrives
 // through ScreenPanel. Unfocused, the editor mutes its body text, drops the cursor and
 // (unbordered) mutes its title bar, so the pane reads as inactive; the router drives
 // the same transition on a standalone editor when the output pane takes the keys.
-func (s *Screen) SetFocused(focused bool) { s.focused = focused }
+func (s *Screen) SetFocused(focused bool) {
+	s.focused = focused
+	if !focused {
+		s.resetMouseGesture()
+	}
+}
 
 // Text is the live buffer as one string, lines joined with '\n'. Hosts use this
 // normalized form while the document is being edited (for previews, LSPs, or word
@@ -764,6 +782,9 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		}
 	}()
 	switch m := msg.(type) {
+	case tea.BlurMsg:
+		s.resetMouseGesture()
+		return s, core.Action{}
 	case editorDragScrollMsg:
 		return s, s.handleDragScroll(sh, m)
 	case editorHighlightMsg:
@@ -894,6 +915,10 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 	// is the only one that starts a gesture. Neither ever arrives while the context
 	// menu is up: the menu is the top screen, and it consumes every message.
 	case tea.MouseMotionMsg:
+		if m.Button != tea.MouseLeft {
+			s.resetMouseGesture() // the release was lost; the button is no longer held
+			return s, core.Action{}
+		}
 		if s.confirmExit {
 			return s, core.Action{}
 		}
@@ -1279,10 +1304,26 @@ func (s *Screen) LineNumMode() bool { return s.lineNums }
 // re-clamps the scroll into the buffer's bounds. Bounds only, NOT to the caret: the
 // router re-lays out after every message, so caret-chasing here would undo every
 // wheel scroll the same tick it happened.
+// SetSize lays the viewport out inside width x bodyHeight. The router re-sizes the top
+// screen after every message, so the unchanged case has to be free: recomputing it would
+// otherwise set wrapDirty on every keystroke and every mouse-motion event, and a wrapped
+// rebuild walks — and expands — the whole document (see rebuildWrapRows).
+//
+// The guard covers every input the geometry below reads: the two dimensions, the search
+// bar's three rows, and (through sizeDirty) the embedded flag insetX derives from.
 func (s *Screen) SetSize(_ *core.Shared, width, bodyHeight int) {
+	searchBar := s.searchBarVisible()
+	if !s.sizeDirty && width == s.lastSizeW && bodyHeight == s.lastSizeH && searchBar == s.lastSearchBar {
+		// Still bound the offsets: the viewport has not moved, but the BUFFER may have
+		// shrunk under it since the last message (ten lines deleted at the end of a file),
+		// and that clamp is what this call used to be carrying.
+		s.clampScrollBounds()
+		return
+	}
+	s.lastSizeW, s.lastSizeH, s.lastSearchBar, s.sizeDirty = width, bodyHeight, searchBar, false
 	s.paneH = bodyHeight
 	s.w, s.h = width-s.insetX(), bodyHeight-s.insetY()
-	if s.searchBarVisible() {
+	if searchBar {
 		s.h -= editorSearchBarH
 	}
 	if s.bordered {

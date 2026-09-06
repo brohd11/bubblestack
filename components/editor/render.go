@@ -89,6 +89,7 @@ func retainedSearchBox() lipgloss.Style {
 // carries the tint; unbordered, it is the title bar above the body, muted while a
 // sibling pane holds the keys.
 func (s *Screen) View(*core.Shared) string {
+	s.syncSearchBarHeight()
 	var editor string
 	if s.bordered {
 		editor = components.Frame(s.titleText(), s.body(), s.w+s.gutter(), s.focused)
@@ -99,6 +100,19 @@ func (s *Screen) View(*core.Shared) string {
 		return editor
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, editor, s.searchBar())
+}
+
+// syncSearchBarHeight re-runs the layout when the retained search bar has appeared or
+// gone. The bar takes rows from the body, but the host sizes a pane only when the pane's
+// own geometry changes — and the query is edited in a PUSHED overlay whose closures write
+// straight to this screen, so neither this editor's Update nor a re-size need happen
+// between the change and the frame that has to account for it. Asserting it here, from
+// View, is the same shape ListPanel uses when its filter line appears (see sizeList).
+func (s *Screen) syncSearchBarHeight() {
+	if s.lastSizeW > 0 && s.searchBarVisible() != s.lastSearchBar {
+		s.sizeDirty = true
+		s.SetSize(nil, s.lastSizeW, s.lastSizeH)
+	}
 }
 
 // gutter is the embedded body's one-column left indent (0 standalone) — the part of
@@ -427,6 +441,8 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	}
 	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
 	selected := lipgloss.NewStyle().Background(core.MutedColor).Foreground(core.OnFocusedColor)
+	selFrom, selTo, hasSel := s.selectedCells(row)
+	inSel := func(cell int) bool { return hasSel && cell >= selFrom && cell < selTo }
 	var b strings.Builder
 	for i := 0; i < len(vis); {
 		if i == c {
@@ -434,11 +450,11 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 			i++
 			continue
 		}
-		sel := s.cellSelected(row, start+i)
+		sel := inSel(start + i)
 		match := s.cellMatched(row, start+i)
 		guide := guideCell(guides, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && s.cellSelected(row, start+j) == sel &&
+		for j < len(vis) && j != c && inSel(start+j) == sel &&
 			s.cellMatched(row, start+j) == match && guideCell(guides, start+j) == guide {
 			j++
 		}
@@ -509,18 +525,32 @@ func guideCell(guides []bool, cell int) bool {
 	return cell >= 0 && cell < len(guides) && guides[cell]
 }
 
-func (s *Screen) cellSelected(row, cell int) bool {
+// selectedCells is the row's selected window in DISPLAY CELLS, and ok=false when the row
+// carries no selection.
+//
+// It exists to be called once per row rather than once per cell. cellOfCol walks the line
+// to answer, so testing each cell through it cost two walks per cell — quadratic in the
+// line's own length for every row inside a selection. On short source lines that is
+// invisible; on a highlighted paragraph it is the frame.
+func (s *Screen) selectedCells(row int) (from, to int, ok bool) {
 	if !s.selectionActive() || row < s.selStart.y || row > s.selEnd.y {
-		return false
+		return 0, 0, false
 	}
-	from, to := 0, len(s.lines[row])
+	line := s.lines[row]
+	fromCol, toCol := 0, len(line)
 	if row == s.selStart.y {
-		from = s.selStart.x
+		fromCol = s.selStart.x
 	}
 	if row == s.selEnd.y {
-		to = s.selEnd.x
+		toCol = s.selEnd.x
 	}
-	return cell >= cellOfCol(s.lines[row], from) && cell < cellOfCol(s.lines[row], to)
+	return cellOfCol(line, fromCol), cellOfCol(line, toCol), true
+}
+
+// cellSelected is selectedCells for one cell, kept for callers outside the render loop.
+func (s *Screen) cellSelected(row, cell int) bool {
+	from, to, ok := s.selectedCells(row)
+	return ok && cell >= from && cell < to
 }
 
 // newlineSelected reports whether the half-open range crosses the newline following
@@ -614,7 +644,7 @@ func (s *Screen) hlSpans(row int) []Span {
 	} else if s.hlFactory == nil {
 		spans = s.hl.HighlightLine(row)
 	}
-	if spansText(spans) != string(s.lines[row]) {
+	if !spansMatchLine(spans, s.lines[row]) {
 		return nil
 	}
 	return spans
@@ -647,8 +677,8 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 		}
 		pos += n
 	}
-	var drunes []rune
-	var didx []int
+	drunes := make([]rune, 0, len(line)+8)
+	didx := make([]int, 0, len(line)+8)
 	for i, r := range line {
 		if r == '\t' {
 			for k := 0; k < editorTabWidth; k++ {
@@ -665,6 +695,8 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 	if row == s.curY {
 		c = cellOfCol(line, s.curX) - start // start is the window origin in BOTH modes
 	}
+	selFrom, selTo, hasSel := s.selectedCells(row)
+	inSel := func(cell int) bool { return hasSel && cell >= selFrom && cell < selTo }
 	var b strings.Builder
 	for i := 0; i < len(vis); {
 		if i == c {
@@ -672,28 +704,41 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 			i++
 			continue
 		}
-		sel := s.cellSelected(row, start+i)
+		sel := inSel(start + i)
 		match := s.cellMatched(row, start+i)
 		guide := guideCell(guides, start+i)
 		j := i + 1
-		for j < len(vis) && j != c && vidx[j] == vidx[i] && s.cellSelected(row, start+j) == sel &&
+		for j < len(vis) && j != c && vidx[j] == vidx[i] && inSel(start+j) == sel &&
 			s.cellMatched(row, start+j) == match && guideCell(guides, start+j) == guide {
 			j++
 		}
-		style := spans[vidx[i]].Style
+		style, styled := spans[vidx[i]].SpanStyle()
 		if guide {
 			style = style.Foreground(core.MutedColor)
+			styled = true
 		}
 		if sel {
 			style = style.Background(core.MutedColor).Foreground(core.OnFocusedColor)
+			styled = true
 		} else if match {
 			style = s.editorSearchStyle()
+			styled = true
 		}
 		text := string(vis[i:j])
 		if guide {
 			text = strings.Repeat(string(editorIndentGuide), j-i)
 		}
-		b.WriteString(style.Render(text))
+		// An unstyled run goes out as-is. Style.Render is 45% of a frame — it walks the
+		// whole box model (border, padding, margin, width, transform) whatever it was
+		// handed — and in source text the punctuation, whitespace and plain identifiers
+		// no lexer claims are a large share of every line. renderLinePlain has always
+		// taken this shortcut; the styled path could not until a span's style became a
+		// pointer that is cheap to test for absence.
+		if styled {
+			b.WriteString(style.Render(text))
+		} else {
+			b.WriteString(text)
+		}
 		i = j
 	}
 	if eol && end-start < s.contentW() {
