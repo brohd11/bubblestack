@@ -24,12 +24,16 @@ type ResizeOpts struct {
 // Cols uses ModularOpts.ColWidths' encoding: a positive cell width is fixed and
 // zero is flex. Flex entries are meaningful only for flex columns.
 type ResizeState struct {
-	Cols []int
-	Flex []float64
-	Rows [][]float64
+	// Splits stores composable-layout groups by stable ID. Column layouts keep
+	// using Cols, Flex and Rows.
+	Splits map[string]SplitState
+	Cols   []int
+	Flex   []float64
+	Rows   [][]float64
 }
 
 type resizeEdge struct {
+	group    *layoutBranch
 	vertical bool
 	col, row int
 	at       int
@@ -262,6 +266,10 @@ func (s *ModularScreen) applyDelta(edgeIndex, delta int) {
 	}
 	s.invalidateLayout()
 	edge := s.edges[edgeIndex]
+	if edge.group != nil {
+		s.applySplitDelta(edge.group, edge.row, delta)
+		return
+	}
 	if edge.vertical {
 		s.applyColumnDelta(edge.col, delta)
 		return
@@ -382,6 +390,10 @@ func (s *ModularScreen) Nudge(dw, dh int) {
 	if s.resize == nil || s.focus < 0 {
 		return
 	}
+	if s.layout != nil {
+		s.nudgeLayout(dw, dh)
+		return
+	}
 	p := s.pos[s.focus]
 	if dw != 0 && len(s.cols) > 1 {
 		col := p.col
@@ -414,6 +426,14 @@ func (s *ModularScreen) findResizeEdge(vertical bool, col, row int) int {
 }
 
 func (s *ModularScreen) resetResize() {
+	if s.layout != nil {
+		for _, g := range s.layoutGroups {
+			g.sizes = append([]int(nil), g.defaults.Sizes...)
+			g.weights = append([]float64(nil), g.defaults.Weights...)
+		}
+		s.relayout()
+		return
+	}
 	copy(s.colWidths, s.defaultCols)
 	for i := range s.flexFrac {
 		s.flexFrac[i] = 0
@@ -427,6 +447,13 @@ func (s *ModularScreen) resetResize() {
 
 // ResizeState returns a deep snapshot suitable for restoring into ResizeOpts.State.
 func (s *ModularScreen) ResizeState() ResizeState {
+	if s.layout != nil {
+		state := ResizeState{Splits: make(map[string]SplitState, len(s.layoutGroups))}
+		for id, g := range s.layoutGroups {
+			state.Splits[id] = SplitState{Sizes: append([]int(nil), g.sizes...), Weights: append([]float64(nil), g.weights...)}
+		}
+		return state
+	}
 	state := ResizeState{
 		Cols: append([]int(nil), s.colWidths...),
 		Flex: append([]float64(nil), s.flexFrac...),

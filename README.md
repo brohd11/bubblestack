@@ -24,3 +24,32 @@ Used by [gdaddon](https://github.com/brohd11/gdaddon) and
 ```go
 import "github.com/brohd11/bubblestack"
 ```
+
+`components.NewModularScreen` arranges panels as columns of weighted rows.
+For nested arrangements, `components.NewModularLayout` accepts horizontal and
+vertical groups. All leaves share one screen's focus, input routing, and lifecycle:
+
+```go
+leaf := func(p components.Panel) components.LayoutNode {
+    return components.LayoutNode{Slot: &components.Slot{Panel: p}}
+}
+screen := components.NewModularLayout(components.LayoutNode{
+    ID: "workspace", Axis: components.LayoutVertical,
+    Children: []components.LayoutNode{
+        {ID: "main", Axis: components.LayoutHorizontal, Weight: 3,
+            Children: []components.LayoutNode{leaf(files), leaf(editor)}},
+        {ID: "tools", Axis: components.LayoutHorizontal,
+            Children: []components.LayoutNode{leaf(results)}},
+    },
+}, components.ModularOpts{Resize: &components.ResizeOpts{}})
+```
+
+Here `results` spans the width below `files` and `editor`. Adding another leaf to
+`tools.Children` splits that row without changing the upper row. A node's positive
+`Size` fixes its width or height along its parent's axis; otherwise `Weight` divides
+the remaining space. Groups and leaves fill their allocations, with minimum sizes
+derived from `ResizeOpts` and clipping when the terminal cannot fit them.
+
+Stable group IDs identify entries in `ResizeState.Splits`. Keep snapshots through
+`ResizeOpts.OnChange` and restore them through `ResizeOpts.State`. Applications own
+visibility, toggle shortcuts, and retained state for groups they temporarily remove.

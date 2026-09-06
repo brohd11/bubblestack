@@ -8,8 +8,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// ModularScreen is the content-agnostic multi-pane screen: a grid of Panel cells
-// laid out as columns of weighted rows, with one Focusable panel holding focus
+// ModularScreen is the content-agnostic multi-pane screen: Panel cells arranged
+// as columns of weighted rows (NewModularScreen) or composable horizontal and
+// vertical splits (NewModularLayout), with one Focusable panel holding focus
 // at a time. It is a pure layout shell — panels draw their own borders and own
 // their keys; the screen only routes input (child first, itself as fallback),
 // moves focus on the reserved pane keys, pops on esc, and composes the help bar.
@@ -33,6 +34,10 @@ import (
 // is what lets a pane that types everything else (an embedded editor.Screen) still
 // be left from the keyboard.
 type ModularScreen struct {
+	layout       *layoutBranch
+	layoutLeaves []*layoutBranch
+	layoutGroups map[string]*layoutBranch
+
 	cols        [][]Slot
 	flat        []*Slot     // declaration order: column 0 top→bottom, then column 1, …
 	pos         []gridPos   // per flat slot, its (column, row) in cols — the inverse of flat
@@ -498,6 +503,9 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 // the layout: no width is being redistributed (SetSize already assigned it), the
 // padding just squares off a panel that drew narrower than it was given.
 func (s *ModularScreen) View(sh *core.Shared) string {
+	if s.layout != nil {
+		return s.viewLayout(sh)
+	}
 	cols := make([]string, len(s.cols))
 	y0 := 0
 	if s.title != "" {
@@ -607,6 +615,10 @@ func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 		return // same geometry, same answer: see layoutDirty
 	}
 	s.lastW, s.lastH, s.layoutDirty = width, bodyHeight, false
+	if s.layout != nil {
+		s.sizeLayout(width, bodyHeight)
+		return
+	}
 	if s.resize != nil {
 		s.setResizeSize(width, bodyHeight)
 		return
@@ -802,6 +814,9 @@ func (s *ModularScreen) cycleFocus(delta int) tea.Cmd {
 // back to row 0), because the row index is clamped on the way over and there is
 // nothing to restore it from on the way back.
 func (s *ModularScreen) neighbor(from, dc, dr int) int {
+	if s.layout != nil {
+		return s.layoutNeighbor(from, dc, dr)
+	}
 	p := s.pos[from]
 	if dr != 0 {
 		for r := p.row + dr; r >= 0 && r < len(s.cols[p.col]); r += dr {
