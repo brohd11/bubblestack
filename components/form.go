@@ -34,35 +34,51 @@ type FormOpts struct {
 	// (action, true) for a key it handles, or (_, false) to let the form process it
 	// normally. Consumers must only claim non-text keys so editing still works.
 	OnKey func(*core.Shared, string) (core.Action, bool)
+	// Overlay draws the form as a centered modal over the screen below it. Width is
+	// the popup's inner content width; zero uses a compact terminal-relative default.
+	Overlay bool
+	Width   int
 }
 
 type FormScreen struct {
-	title      string
-	crumb      string
-	crumbShort string
-	fields     []FormField
-	help       []key.Binding
-	focus      int
-	focused    bool // panel focus when nested (FocusableScreen); a standalone form is always focused
-	onSubmit   func(*core.Shared, *FormScreen) core.Action
-	onCancel   func(*core.Shared) core.Action
-	onKey      func(*core.Shared, string) (core.Action, bool)
+	title       string
+	crumb       string
+	crumbShort  string
+	fields      []FormField
+	help        []key.Binding
+	focus       int
+	focused     bool // panel focus when nested (FocusableScreen); a standalone form is always focused
+	onSubmit    func(*core.Shared, *FormScreen) core.Action
+	onCancel    func(*core.Shared) core.Action
+	onKey       func(*core.Shared, string) (core.Action, bool)
+	overlay     bool
+	width       int
+	renderWidth int
 }
 
 var _ core.Screen = (*FormScreen)(nil)
 var _ core.Filterer = (*FormScreen)(nil)
 var _ core.Crumber = (*FormScreen)(nil)
+var _ core.Overlayer = (*FormScreen)(nil)
 var _ Typable = (*FormScreen)(nil)
 var _ FocusableScreen = (*FormScreen)(nil)
 
 // CrumbLabel contributes the form's breadcrumb segment, defaulting to "Form" when no
 // Crumb is declared.
 func (f *FormScreen) CrumbLabel(short bool) string {
+	if f.overlay {
+		return ""
+	}
 	return CrumbSegment(short, f.crumbShort, f.crumb, "Form")
 }
 
+// IsOverlay reports whether the router should composite this form over the screen
+// below it. A non-overlay form keeps its existing full-body behavior.
+func (f *FormScreen) IsOverlay() bool { return f.overlay }
+
 func NewForm(opts FormOpts) *FormScreen {
 	f := &FormScreen{title: opts.Title, crumb: opts.Crumb, crumbShort: opts.CrumbShort, fields: opts.Fields, help: opts.Help, focused: true, onSubmit: opts.OnSubmit, onCancel: opts.OnCancel, onKey: opts.OnKey}
+	f.overlay, f.width = opts.Overlay, opts.Width
 	f.focus = f.firstFocusable()
 	if opts.Focus != "" {
 		for i, fld := range f.fields {
@@ -274,10 +290,22 @@ func (f *FormScreen) View(sh *core.Shared) string {
 	for i, fld := range f.fields {
 		rows[i] = fld.View(i == f.focus)
 	}
-	return core.WithTitle(f.title, sh.BoxFocused(strings.Join(rows, "\n"), f.focused))
+	body := strings.Join(rows, "\n")
+	if f.overlay {
+		if hint := strings.Trim(sh.BindingHelp(f.help), " \n"); hint != "" {
+			body += "\n\n" + hint
+		}
+		return core.PopupBox(f.title, body, f.renderWidth)
+	}
+	return core.WithTitle(f.title, sh.BoxFocused(body, f.focused))
 }
 
-func (f *FormScreen) HelpView(sh *core.Shared) string { return sh.BindingHelp(f.help) }
+func (f *FormScreen) HelpView(sh *core.Shared) string {
+	if f.overlay {
+		return ""
+	}
+	return sh.BindingHelp(f.help)
+}
 
 func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 	// Every field gets the box's inner width and subtracts its own marker and label, so no
@@ -289,6 +317,15 @@ func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 	// of its width, so a measurement taken before the last SetInnerWidth would budget
 	// against a stale layout.
 	inner := sh.BoxInnerWidth()
+	if f.overlay {
+		available := max(width-6, 1) // PopupBox border plus two-column padding.
+		inner = f.width
+		if inner <= 0 {
+			inner = min(64, available)
+		}
+		inner = min(inner, available)
+		f.renderWidth = inner
+	}
 	var growers []Growable
 	for _, fld := range f.fields {
 		fld.SetInnerWidth(inner)
@@ -305,6 +342,14 @@ func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 	// or a note can legitimately fold onto a second row, and a budget blind to that would
 	// hand the growers rows the box doesn't have.
 	fixed := f.chromeRows(sh)
+	if f.overlay {
+		// Measure the popup's own border/padding/title against one placeholder body
+		// row, then remove that row just as chromeRows does for a full-body form.
+		fixed = lipgloss.Height(core.PopupBox(f.title, "", f.renderWidth)) - 1
+		if hint := strings.Trim(sh.BindingHelp(f.help), " \n"); hint != "" {
+			fixed += 2 + lipgloss.Height(hint) // the blank separator plus the help itself
+		}
+	}
 	for _, fld := range f.fields {
 		if _, ok := fld.(Growable); ok {
 			fixed++ // counted, never rendered: its height is the answer we're computing

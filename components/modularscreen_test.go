@@ -100,6 +100,34 @@ type capturePanel struct {
 	got       []tea.Msg
 }
 
+type verboseHelpPanel struct{ capturePanel }
+
+func (*verboseHelpPanel) PanelHelp() []key.Binding {
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "primary")),
+		key.NewBinding(key.WithKeys("left"), key.WithHelp("left", "secondary")),
+	}
+}
+
+func TestModularHelpLimitReservesCallerHelp(t *testing.T) {
+	panel := &verboseHelpPanel{}
+	m := NewModularScreen([][]Slot{{{Panel: panel}, {Panel: &capturePanel{}}}}, ModularOpts{
+		HelpLimit: 4,
+		Help: []key.Binding{
+			key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "more")),
+		},
+	})
+	view := m.HelpView(core.NewShared(nil))
+	for _, want := range []string{"panes", "back", "primary", "more"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("bounded help dropped %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "secondary") {
+		t.Fatalf("bounded help admitted a fifth entry: %s", view)
+	}
+}
+
 func (p *capturePanel) SetSize(int, int) {}
 func (p *capturePanel) View(bool) string { return "x" }
 func (p *capturePanel) Focus()           {}

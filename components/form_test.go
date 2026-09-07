@@ -7,9 +7,31 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
+
+func TestFormOverlayKeepsHelpInsidePopup(t *testing.T) {
+	f := NewForm(FormOpts{
+		Title: "Find in Files", Overlay: true, Width: 64,
+		Fields: []FormField{NewTextField("query", "Search: ", "needle")},
+		Help:   []key.Binding{core.Hint("search", core.Keys.Select)},
+	})
+	sh := core.NewShared(nil)
+	f.SetSize(sh, 40, 20)
+	view := f.View(sh)
+
+	if !f.IsOverlay() || f.CrumbLabel(false) != "" || f.HelpView(sh) != "" {
+		t.Fatal("overlay form must composite without changing breadcrumb or chrome help")
+	}
+	if !strings.Contains(view, "Find in Files") || !strings.Contains(view, "Search:") || !strings.Contains(view, "search") {
+		t.Fatalf("popup should contain title, field and internal help:\n%s", view)
+	}
+	if got := lipgloss.Width(view); got > 40 {
+		t.Fatalf("popup width %d exceeds terminal width 40", got)
+	}
+}
 
 // navKey builds a key message for a key that types no text, so navigation keys reach
 // the form's keybind switch instead of being diverted into a focused text field by

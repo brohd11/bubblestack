@@ -77,6 +77,7 @@ type ModularScreen struct {
 	crumb       string
 	crumbShort  string
 	help        []key.Binding
+	helpLimit   int
 	refresh     func(*core.Shared, any) bool
 	popStop     bool
 	dir         string
@@ -112,6 +113,7 @@ type ModularOpts struct {
 	ColWidths  []int       // per column, cells; 0 = flex
 	Resize     *ResizeOpts // nil disables pane resizing
 	Help       []key.Binding
+	HelpLimit  int // maximum composed help entries; 0 leaves the bar uncapped
 	Refresh    func(sh *core.Shared, payload any) bool
 	PopStop    bool   // mark this screen as a PopTo boundary (a command hub)
 	Dir        string // directory this screen concerns; enables the global Terminal key (DirLocator)
@@ -140,6 +142,7 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 		crumb:       opts.Crumb,
 		crumbShort:  opts.CrumbShort,
 		help:        help,
+		helpLimit:   opts.HelpLimit,
 		resize:      opts.Resize,
 		dragEdge:    -1,
 		refresh:     opts.Refresh,
@@ -594,12 +597,30 @@ func (s *ModularScreen) HelpView(sh *core.Shared) string {
 		hints = append(hints, core.PaneHint())
 	}
 	hints = append(hints, core.Hint("back", core.Keys.Back))
+	if s.helpLimit > 0 {
+		// Caller help contains the stable escape hatch (usually "? more"). Trim
+		// framework hints first if an unusually small limit cannot hold both.
+		room := max(s.helpLimit-len(s.help), 0)
+		hints = hints[:min(len(hints), room)]
+	}
+	var panelHints []key.Binding
 	if s.focus >= 0 {
 		if h, ok := s.focusedPanel().(PanelHelper); ok {
-			hints = append(hints, h.PanelHelp()...)
+			panelHints = h.PanelHelp()
 		}
 	}
+	if s.helpLimit > 0 {
+		// Reserve caller-hint room before admitting panel-local navigation hints.
+		room := max(s.helpLimit-len(hints)-len(s.help), 0)
+		panelHints = panelHints[:min(len(panelHints), room)]
+	}
+	hints = append(hints, panelHints...)
 	hints = append(hints, s.help...)
+	if s.helpLimit > 0 && len(hints) > s.helpLimit {
+		// Only possible when caller help alone exceeds the limit: keep its tail so
+		// the final, most general escape hatch survives.
+		hints = hints[len(hints)-s.helpLimit:]
+	}
 	return sh.BindingHelp(hints)
 }
 
