@@ -538,3 +538,111 @@ type coloredListItem struct {
 }
 
 func (i coloredListItem) TitleColor() color.Color { return i.color }
+
+// keptItem is a compact row that keeps its own color under the cursor.
+type keptItem struct{ coloredItem }
+
+func (i keptItem) KeepColor() bool { return true }
+
+// renderCompactSelected renders the row at index as the CURSOR row.
+func renderCompactSelected(t *testing.T, index, width int, items ...list.Item) string {
+	t.Helper()
+	l := NewCompactList(items, "")
+	l.SetSize(width, 10)
+	l.Select(index)
+	var b strings.Builder
+	CompactDelegate{}.Render(&b, l, index, items[index])
+	return b.String()
+}
+
+// TestCompactKeepColorSelected: a KeepColorItem under the cursor is drawn in its own color,
+// not the accent — and the row's text and width are untouched, so the border and padding
+// SelectedTitle carries are still there.
+func TestCompactKeepColorSelected(t *testing.T) {
+	plain := marqueeItem{title: "notes.md"}
+	colored := coloredItem{marqueeItem: plain, color: lipgloss.Color("12")}
+	items := []list.Item{plain, colored, keptItem{coloredItem: colored}}
+
+	accent := renderCompactSelected(t, 1, 30, items...) // a ColorItem that has not opted out
+	kept := renderCompactSelected(t, 2, 30, items...)
+	if accent == kept {
+		t.Fatal("a KeepColorItem must not take the selection accent")
+	}
+	if ansi.Strip(kept) != ansi.Strip(accent) {
+		t.Fatalf("keeping color must not change the row's text: %q vs %q", ansi.Strip(kept), ansi.Strip(accent))
+	}
+	if lipgloss.Width(kept) != lipgloss.Width(accent) {
+		t.Fatal("keeping color must not change the row's width")
+	}
+	// Same color as the unselected row of the same item: the git color, not the accent.
+	unselected := renderCompactRow(t, 1, 30, items...)
+	if !strings.Contains(kept, colorSeq(t, lipgloss.Color("12"))) || !strings.Contains(unselected, colorSeq(t, lipgloss.Color("12"))) {
+		t.Fatal("the selected KeepColorItem should carry the same foreground it has unselected")
+	}
+}
+
+// TestCompactKeepColorSelectedUncolored: a KeepColorItem answering nil sheds the accent too,
+// falling back to the normal title foreground — so the border alone marks the cursor and an
+// opted-out list reads uniformly.
+func TestCompactKeepColorSelectedUncolored(t *testing.T) {
+	plain := marqueeItem{title: "notes.md"}
+	items := []list.Item{plain, keptItem{coloredItem: coloredItem{marqueeItem: plain}}}
+
+	accent := renderCompactSelected(t, 0, 30, items...)
+	kept := renderCompactSelected(t, 1, 30, items...)
+	if accent == kept {
+		t.Fatal("an uncolored KeepColorItem must not take the selection accent")
+	}
+	if ansi.Strip(kept) != ansi.Strip(accent) {
+		t.Fatal("the border and padding must survive shedding the accent")
+	}
+	normal := list.NewDefaultItemStyles(isDark).NormalTitle.GetForeground()
+	if !strings.Contains(kept, colorSeq(t, normal)) {
+		t.Fatal("an uncolored KeepColorItem should fall back to the normal title foreground")
+	}
+}
+
+// coloredListItem's kept counterpart, for the three-row delegate.
+type keptListItem struct{ coloredListItem }
+
+func (i keptListItem) KeepColor() bool { return true }
+
+// TestColorDelegateKeepColor: the three-row delegate honors the same contract on its title,
+// and leaves the DESCRIPTION line on the accent so the selection stays legible.
+func TestColorDelegateKeepColor(t *testing.T) {
+	plain := renderListItem("notes.md")
+	colored := coloredListItem{renderListItem: plain, color: lipgloss.Color("12")}
+	items := []list.Item{plain, colored, keptListItem{coloredListItem: colored}}
+
+	l := NewSelectList(items, "")
+	l.SetSize(30, 12)
+	d := NewDelegate()
+	render := func(index int) string {
+		l.Select(index)
+		var b strings.Builder
+		d.Render(&b, l, index, items[index])
+		return b.String()
+	}
+	accent, kept := render(1), render(2)
+	if accent == kept {
+		t.Fatal("a KeepColorItem must not take the selection accent")
+	}
+	if ansi.Strip(kept) != ansi.Strip(accent) {
+		t.Fatal("keeping color must not change the row's text")
+	}
+	if !strings.Contains(kept, colorSeq(t, lipgloss.Color("12"))) {
+		t.Fatal("the selected KeepColorItem should carry its own foreground")
+	}
+}
+
+// colorSeq is the SGR sequence lipgloss emits for a foreground, so a test can assert which
+// color a row was actually painted in rather than only that two rows differ.
+func colorSeq(t *testing.T, c color.Color) string {
+	t.Helper()
+	rendered := lipgloss.NewStyle().Foreground(c).Render("x")
+	seq, _, ok := strings.Cut(rendered, "x")
+	if !ok || seq == "" {
+		t.Fatalf("no escape sequence for %v", c)
+	}
+	return seq
+}

@@ -982,3 +982,23 @@ func TestFilePanelColorModesAndOverride(t *testing.T) {
 		t.Fatal("nil override should leave file plain")
 	}
 }
+
+// TestFilePanelKeepColor: the opt-out reaches every row the panel builds, the synthetic ".."
+// row included, and stays off by default.
+func TestFilePanelKeepColor(t *testing.T) {
+	root := colorTree(t)
+	for _, keep := range []bool{false, true} {
+		p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Root: root, Colors: FileColorsDirs, KeepColor: keep})
+		up := false
+		for _, it := range p.List().Items() {
+			row := it.(fileItem)
+			if row.KeepColor() != keep {
+				t.Fatalf("KeepColor=%v: row %q answered %v", keep, row.Title(), row.KeepColor())
+			}
+			up = up || row.entry.Up
+		}
+		if !up {
+			t.Fatal("expected a \"..\" row to cover the synthetic construction site")
+		}
+	}
+}

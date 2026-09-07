@@ -221,24 +221,48 @@ type PrefixItem interface{ PrefixText() string }
 // reading the name — a file listing's directories against its files. A row that does not
 // implement it, or answers nil, renders exactly as it did before.
 //
-// The selection accent OUTRANKS it: the cursor row, and the dimmed rows of an open-but-
-// empty filter, keep the delegate's own styles, so a type color can never make the cursor
-// ambiguous. itemColor is where that precedence lives and both delegates read it, so the
-// two densities cannot disagree about which rows are colored.
+// The selection accent OUTRANKS it by default: the cursor row, and the dimmed rows of an
+// open-but-empty filter, keep the delegate's own styles, so a type color can never make the
+// cursor ambiguous. A row can opt out of the first half of that through KeepColorItem.
+// itemColor is where the whole precedence lives and both delegates read it, so the two
+// densities cannot disagree about which rows are colored.
 type ColorItem interface{ TitleColor() color.Color }
 
+// KeepColorItem is an optional contract a row may satisfy alongside ColorItem: it opts the
+// row OUT of the selection accent, for a list whose colors carry information the reader most
+// wants on the row they are pointing at — gote's git state, where the cursor landing on a
+// file is exactly when "is this modified?" is being asked. The accent BORDER still marks the
+// selection, which is what makes dropping the foreground safe.
+//
+// A row that opts out and has no color of its own falls back to the NORMAL title foreground
+// rather than the accent, so an opted-out list reads uniformly: every row is its own color,
+// selected or not, and only the border moves. Dimming is not affected — an open-but-empty
+// filter still greys everything.
+type KeepColorItem interface{ KeepColor() bool }
+
 // itemColor is the foreground a delegate should apply to one row, and false when it should
-// apply none — the row is selected or dimmed, is not a ColorItem, or answers nil.
-func itemColor(item list.Item, isSelected, dimmed bool) (color.Color, bool) {
-	if isSelected || dimmed {
+// leave the style it already picked alone. normal is the foreground an UNSELECTED row would
+// have had, used only for the opted-out-but-uncolored case above.
+func itemColor(item list.Item, isSelected, dimmed bool, normal color.Color) (color.Color, bool) {
+	if dimmed {
 		return nil, false
 	}
-	ci, ok := item.(ColorItem)
-	if !ok {
+	keep := false
+	if k, ok := item.(KeepColorItem); ok {
+		keep = k.KeepColor()
+	}
+	if isSelected && !keep {
 		return nil, false
 	}
-	c := ci.TitleColor()
-	return c, c != nil
+	if ci, ok := item.(ColorItem); ok {
+		if c := ci.TitleColor(); c != nil {
+			return c, true
+		}
+	}
+	if isSelected {
+		return normal, true
+	}
+	return nil, false
 }
 
 // NewCompactList builds the single-line counterpart of NewSelectList. It keeps
@@ -428,7 +452,7 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// own color rather than reverting to the delegate's default. It is a Foreground on the
 	// STYLE, applied to already-truncated text — no ANSI enters the raw string, so every
 	// width computation above (CompactMarquee, fitWidth, marqueeSeg) is untouched.
-	if c, ok := itemColor(item, isSelected, emptyFilter); ok {
+	if c, ok := itemColor(item, isSelected, emptyFilter, styles.NormalTitle.GetForeground()); ok {
 		titleStyle = titleStyle.Foreground(c)
 	}
 	if isFiltered && !emptyFilter && index < len(m.VisibleItems()) {
@@ -456,7 +480,10 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 // a hardcoded pink). The left-border layout from the default delegate is kept; only
 // the colors change.
 // ColorDelegate is the three-row delegate with per-row foregrounds: a row implementing
-// ColorItem is drawn in its own color, every other row exactly as bubbles draws it.
+// ColorItem is drawn in its own color, every other row exactly as bubbles draws it. A row
+// that is also a KeepColorItem keeps that color on the cursor row; its DESCRIPTION line
+// still takes the accent, so the second row and the border together keep the selection
+// legible at this density.
 //
 // A wrapper rather than a copy of list.DefaultDelegate.Render, because that method takes
 // its receiver BY VALUE — recoloring this copy's styles is therefore local to the single
@@ -469,8 +496,15 @@ type ColorDelegate struct{ list.DefaultDelegate }
 func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
 	dimmed := m.FilterState() == list.Filtering && m.FilterValue() == ""
-	if c, ok := itemColor(item, isSelected, dimmed); ok {
-		d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(c)
+	if c, ok := itemColor(item, isSelected, dimmed, d.Styles.NormalTitle.GetForeground()); ok {
+		// The selected row's style is a different field, and recoloring it is what lets a
+		// KeepColorItem shed the accent here too. Its BorderForeground is left alone: the
+		// tinted left rule is the cursor mark the foreground is being given up for.
+		if isSelected {
+			d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(c)
+		} else {
+			d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(c)
+		}
 	}
 	d.DefaultDelegate.Render(w, m, index, item)
 }

@@ -79,6 +79,11 @@ type FilePanelOpts struct {
 	// TitleColor optionally overrides a row's foreground. nil falls back to Colors.
 	// Called during rendering: use cached state, never filesystem or subprocess work.
 	TitleColor func(FileEntry) color.Color
+	// KeepColor opts every row out of the selection accent (core.KeepColorItem): a row keeps
+	// its own color under the cursor and the frame's tinted left rule alone says which row
+	// that is. For a listing whose colors carry state the reader most wants on the row they
+	// are pointing at — a git status — rather than a type the accent can safely mask.
+	KeepColor bool
 
 	// Compact picks the starting row density; DensityKey flips it live. An unbound
 	// DensityKey (the zero value) leaves the chord to the host, which calls ToggleDensity
@@ -281,6 +286,7 @@ func (p *FilePanel) read(dir string) ([]fileItem, error) {
 			// All mode preserves symlink colors; dirs mode colors navigable folders.
 			color:      p.rowColor(kind),
 			titleColor: p.opts.TitleColor,
+			keepColor:  p.opts.KeepColor,
 		})
 	}
 	less := p.opts.Less
@@ -319,6 +325,7 @@ func (p *FilePanel) rows() []list.Item {
 			// no fs.DirEntry for ClassifyFile to read.
 			color:      p.rowColor(KindDir),
 			titleColor: p.opts.TitleColor,
+			keepColor:  p.opts.KeepColor,
 		})
 	}
 	for _, it := range p.items {
@@ -360,9 +367,13 @@ type fileItem struct {
 	desc       string
 	color      color.Color // the type color, nil for an ordinary file
 	titleColor func(FileEntry) color.Color
+	keepColor  bool // FilePanelOpts.KeepColor, carried per row: the delegate reads the contract
 }
 
-var _ core.ColorItem = fileItem{}
+var (
+	_ core.ColorItem     = fileItem{}
+	_ core.KeepColorItem = fileItem{}
+)
 
 func (i fileItem) Title() string {
 	if i.entry.Up {
@@ -381,7 +392,7 @@ func (i fileItem) SuffixText() string  { return "" }
 // one without the eye having to find the trailing slash. Classified once at read time
 // rather than per frame — a delegate's Render must stay cheap, and the entry it would have
 // to re-examine is gone by then. nil (an ordinary file) leaves the row unstyled, and the
-// selection accent outranks this on the cursor row.
+// selection accent outranks this on the cursor row unless KeepColor was set.
 func (i fileItem) TitleColor() color.Color {
 	if i.titleColor != nil {
 		if c := i.titleColor(i.entry); c != nil {
@@ -390,6 +401,11 @@ func (i fileItem) TitleColor() color.Color {
 	}
 	return i.color
 }
+
+// KeepColor implements core.KeepColorItem. One flag covers both color sources, because
+// TitleColor above has already merged them: whatever the row ended up being drawn in is what
+// survives the cursor.
+func (i fileItem) KeepColor() bool { return i.keepColor }
 
 // FilterValue keeps ".." out of every search: a filter is a question about which entries
 // you want, and the way out of the folder is not one of the answers (the same rule an

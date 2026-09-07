@@ -77,3 +77,11 @@ and `..`; All keeps the file-type palette. Existing `Colors: true` callers shoul
 An optional `TitleColor func(FileEntry) color.Color` overrides an individual row's
 foreground. Return nil to use the mode's default. The callback runs during rendering,
 so read cached application state only. Selection and filter-dimming styles take priority.
+
+`KeepColor: true` drops that selection priority: a row keeps its own color under the
+cursor and the frame's tinted left rule alone marks the selection. Use it when the colors
+say something the reader most wants on the row they are pointing at (a git status) rather
+than a type the accent can safely mask. A kept row with no color of its own is drawn in the
+normal foreground, not the accent, so the list reads uniformly. Filter-dimming is
+unaffected. The underlying contract is `core.KeepColorItem`, which any list row can
+implement — `CompactDelegate` and `ColorDelegate` both honor it.
