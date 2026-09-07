@@ -209,7 +209,7 @@ func (p *ListPanel) marqueeOverflow() (int, bool) {
 	if !over {
 		return 0, false
 	}
-	return row.Width() - tw, true
+	return row.MarqueeLimit(tw), true
 }
 
 // marqueeStep advances one frame: burn a dwell if one is pending, else step one cell,

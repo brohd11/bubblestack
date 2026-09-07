@@ -270,6 +270,13 @@ type markedItem struct {
 
 func (i markedItem) Mark() string { return i.mark }
 
+type prefixedItem struct {
+	marqueeItem
+	prefix string
+}
+
+func (i prefixedItem) PrefixText() string { return i.prefix }
+
 // renderCompact renders row 0 of a compact list `width` cells wide, with the marquee
 // pointed at off (nil ⇒ the static truncation every list had before).
 func renderCompact(t *testing.T, off *int, width int, items ...list.Item) string {
@@ -330,6 +337,24 @@ func TestCompactMarqueeOffsetClamped(t *testing.T) {
 	}
 	if got, want := renderCompact(t, &negative, 28, item), renderCompact(t, ptr(0), 28, item); got != want {
 		t.Errorf("a negative offset should clamp to 0:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestCompactPrefixStaysPinnedWhileTitleMarquees(t *testing.T) {
+	item := prefixedItem{marqueeItem: marqueeItem{title: "architecture-notes.md", suffix: "design/deep/"}, prefix: "  ▾ "}
+	row, over := CompactMarquee(item, CompactTextWidth(24))
+	if !over || row.Prefix != "  ▾ " {
+		t.Fatalf("prefixed row = %#v, overflow %v", row, over)
+	}
+	maxOff := row.Width() - CompactTextWidth(24)
+	for _, off := range []int{0, maxOff} {
+		out := ansi.Strip(renderCompact(t, &off, 24, item))
+		if !strings.HasPrefix(out, "│   ▾ ") {
+			t.Errorf("offset %d moved the structural prefix: %q", off, out)
+		}
+		if w := lipgloss.Width(out); w != 24 {
+			t.Errorf("offset %d rendered %d cells, want 24", off, w)
+		}
 	}
 }
 

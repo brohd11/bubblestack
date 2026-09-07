@@ -210,6 +210,12 @@ type SuffixItem interface {
 // this renders exactly as it did before.
 type MarkItem interface{ Mark() string }
 
+// PrefixItem is an optional compact-row contract for structural text that stays pinned
+// to the row's left edge. TreePanel uses it for indentation and disclosure markers: the
+// prefix is rendered with the title style, but is not part of filtering and does not
+// slide away when a long selected row marquees.
+type PrefixItem interface{ PrefixText() string }
+
 // ColorItem is an optional contract a row may satisfy alongside list.Item: it names the
 // row's OWN foreground, for a list whose rows carry a type the eye should sort by without
 // reading the name — a file listing's directories against its files. A row that does not
@@ -312,16 +318,26 @@ func (CompactDelegate) Height() int                         { return 1 }
 func (CompactDelegate) Spacing() int                        { return 0 }
 func (CompactDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 
-// CompactRow is one row's raw, untruncated pieces: the title, the muted tail ("  " +
-// suffix, empty when the item has no suffix), and the reserved Mark ("" when the item is
-// not a MarkItem). Title and Tail are what slide under a marquee; Mark never moves.
-type CompactRow struct{ Title, Tail, Mark string }
+// CompactRow is one row's raw, untruncated pieces. Prefix and Mark stay pinned at the
+// left and right edges; Title and Tail are the portion that slides under a marquee.
+type CompactRow struct{ Prefix, Title, Tail, Mark string }
 
 // Width is the row's full untruncated cell width, the mark's reserved cells included.
 // Subtracting the text width from it gives the marquee's last offset — the point at which
 // the tail sits flush against the mark at the right edge.
 func (r CompactRow) Width() int {
-	return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) + lipgloss.Width(r.Mark)
+	return lipgloss.Width(r.Prefix) + lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) + lipgloss.Width(r.Mark)
+}
+
+func (r CompactRow) movingWidth() int { return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) }
+
+// MarqueeLimit is the last useful offset after the pinned prefix and mark take their
+// cells. It is shared by CompactDelegate and ListPanel so the clock never advances into
+// repeated, clamped frames at very narrow widths.
+func (r CompactRow) MarqueeLimit(textWidth int) int {
+	prefixWidth := min(lipgloss.Width(r.Prefix), max(textWidth-lipgloss.Width(r.Mark)-1, 0))
+	available := max(textWidth-prefixWidth-lipgloss.Width(r.Mark), 1)
+	return max(r.movingWidth()-available, 0)
 }
 
 // CompactTextWidth is the cells a compact row's text actually gets out of a list of the
@@ -340,6 +356,9 @@ func CompactTextWidth(listWidth int) int {
 // offset and the delegate that consumes it cannot disagree about which rows are moving.
 func CompactMarquee(i SuffixItem, textWidth int) (CompactRow, bool) {
 	r := CompactRow{Title: i.Title()}
+	if p, ok := i.(PrefixItem); ok {
+		r.Prefix = p.PrefixText()
+	}
 	if s := i.SuffixText(); s != "" {
 		r.Tail = "  " + s
 	}
@@ -349,7 +368,7 @@ func CompactMarquee(i SuffixItem, textWidth int) (CompactRow, bool) {
 	if m, ok := i.(MarkItem); ok {
 		r.Mark = m.Mark()
 	}
-	return r, r.Width() > textWidth
+	return r, r.MarqueeLimit(textWidth) > 0
 }
 
 func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
@@ -368,11 +387,11 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		textWidth = 1
 	}
 
-	// The mark's cells come off the top, so what follows fits the title and suffix into
-	// what is left rather than into the whole row. CompactMarquee already counted those
-	// cells in its overflow answer, so the two agree about which rows move.
+	// Structural prefixes and marks keep their edges while the title and suffix share the
+	// cells between them.
 	raw, over := CompactMarquee(i, textWidth)
-	fitWidth := max(textWidth-lipgloss.Width(raw.Mark), 1)
+	prefix := ansi.Truncate(raw.Prefix, max(textWidth-lipgloss.Width(raw.Mark)-1, 0), "")
+	fitWidth := max(textWidth-lipgloss.Width(prefix)-lipgloss.Width(raw.Mark), 1)
 
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
@@ -383,10 +402,10 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	// string, so the tail of a long name and the path behind it both come into view. Never
 	// while a filter is live — the match highlighting below styles the title by rune index,
 	// and those indices stop addressing the string once it has been windowed. The last
-	// offset is measured against the full row (raw.Width already carries the mark), which
-	// is the same number ListPanel.marqueeOverflow steps the clock to.
+	// offset is measured against the moving title/tail portion; the prefix and mark never
+	// enter its coordinate space.
 	if over && d.Offset != nil && isSelected && !isFiltered {
-		off := min(max(*d.Offset, 0), raw.Width()-textWidth)
+		off := min(max(*d.Offset, 0), raw.MarqueeLimit(textWidth))
 		title = marqueeSeg(raw.Title, 0, off, fitWidth)
 		suffix = marqueeSeg(raw.Tail, lipgloss.Width(raw.Title), off, fitWidth)
 	} else {
@@ -429,7 +448,7 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if raw.Mark != "" {
 		mark = titleStyle.Inline(true).Render(raw.Mark)
 	}
-	fmt.Fprint(w, titleStyle.Render(title)+muted.Render(suffix)+mark) //nolint:errcheck
+	fmt.Fprint(w, titleStyle.Render(prefix+title)+muted.Render(suffix)+mark) //nolint:errcheck
 }
 
 // newDelegate is the shared list delegate with brightened description text and the
