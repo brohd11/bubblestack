@@ -66,3 +66,14 @@ cell-width truncation, and keeping the active tab visible on selection or resize
 Call `Click(x, y)` with local coordinates: a nonempty returned ID requests
 activation; arrow clicks scroll without selecting. The bar does not take keyboard
 focus, so the host owns shortcuts and routes its mouse clicks explicitly.
+
+### FilePanel colors
+
+`FilePanelOpts.Colors` accepts `FileColorsNone` (the zero value), `FileColorsDirs`,
+or `FileColorsAll`. Dirs colors navigable directories, including directory symlinks
+and `..`; All keeps the file-type palette. Existing `Colors: true` callers should use
+`Colors: components.FileColorsAll`; `false` becomes `FileColorsNone` or omission.
+
+An optional `TitleColor func(FileEntry) color.Color` overrides an individual row's
+foreground. Return nil to use the mode's default. The callback runs during rendering,
+so read cached application state only. Selection and filter-dimming styles take priority.

@@ -545,7 +545,7 @@ func TestClassifyFileNilInfo(t *testing.T) {
 // no fs.DirEntry behind it — is colored as the folder it is.
 func TestFilePanelRowColors(t *testing.T) {
 	root := colorTree(t)
-	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true, Colors: true})
+	p := NewFilePanel(FilePanelOpts{Dir: filepath.Join(root, "sub"), Compact: true, Colors: FileColorsAll})
 	p.SetSize(30, 12)
 
 	got := map[string]color.Color{}
@@ -560,7 +560,7 @@ func TestFilePanelRowColors(t *testing.T) {
 		t.Errorf("the parent row should be dir-colored, got %v", got[".."])
 	}
 
-	p = NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: true})
+	p = NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: FileColorsAll})
 	p.SetSize(30, 12)
 	want := map[string]FileKind{
 		"sub/":     KindDir,
@@ -595,7 +595,7 @@ func TestFilePanelRowColors(t *testing.T) {
 // here as a mismatch, whatever the frame, the truncation or the marquee did with it.
 func TestFilePanelColorIsStyleOnly(t *testing.T) {
 	root := colorTree(t)
-	build := func(colors bool) string {
+	build := func(colors FileColorMode) string {
 		p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Border: true, Colors: colors})
 		p.SetSize(24, 12) // narrow enough that names truncate
 		return p.View(false)
@@ -604,7 +604,7 @@ func TestFilePanelColorIsStyleOnly(t *testing.T) {
 	// there is no color profile to flip a single render between plain and styled. The
 	// claim is the same one either way: the type color is style, so an opted-in panel
 	// and an opted-out one draw the same cells and differ only in the escapes.
-	colored, plain := build(true), build(false)
+	colored, plain := build(FileColorsAll), build(FileColorsNone)
 
 	if colored == plain {
 		t.Fatal("a listing of dirs, dotfiles and source files should print some color")
@@ -643,7 +643,7 @@ func TestFilePanelColorsAreOptIn(t *testing.T) {
 	// escape codes" was never the claim — "prints no file-type color" is.
 	off := build().View(false)
 	on := func() string {
-		p := NewFilePanel(FilePanelOpts{Dir: root, Compact: true, Border: true, Colors: true})
+		p := NewFilePanel(FilePanelOpts{Dir: root, Compact: true, Border: true, Colors: FileColorsAll})
 		p.SetSize(24, 12)
 		return p.View(false)
 	}()
@@ -777,7 +777,7 @@ func TestFilePanelSymlinkToFileStaysAFile(t *testing.T) {
 // left on the row saying an indirection is involved.
 func TestFilePanelSymlinkedDirStaysSymlinkColored(t *testing.T) {
 	root := linkTree(t)
-	p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: true})
+	p := NewFilePanel(FilePanelOpts{Dir: root, Root: root, Compact: true, Colors: FileColorsAll})
 	p.SetSize(30, 12)
 
 	for _, it := range p.List().VisibleItems() {
@@ -930,5 +930,55 @@ func TestClickOnUpRowWalksUp(t *testing.T) {
 		if p.Dir() != root {
 			t.Fatalf("button %v on \"..\" should walk up; Dir() = %q", button, p.Dir())
 		}
+	}
+}
+
+func TestFilePanelColorModesAndOverride(t *testing.T) {
+	root := colorTree(t)
+	link := filepath.Join(root, "linked-dir")
+	if err := os.Symlink(filepath.Join(root, "sub"), link); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []FileColorMode{FileColorsNone, FileColorsDirs, FileColorsAll} {
+		p := NewFilePanel(FilePanelOpts{Dir: root, Colors: mode, Compact: true})
+		for _, it := range p.List().Items() {
+			row := it.(fileItem)
+			c := row.TitleColor()
+			if mode == FileColorsNone && c != nil {
+				t.Fatalf("none colored %s", row.Title())
+			}
+			if mode == FileColorsDirs && (c != nil) != row.entry.IsDir {
+				t.Fatalf("dirs: %s color=%v dir=%v", row.Title(), c, row.entry.IsDir)
+			}
+		}
+	}
+	current := FileKindColor(KindArchive)
+	p := NewFilePanel(FilePanelOpts{Dir: root, Colors: FileColorsDirs, TitleColor: func(e FileEntry) color.Color {
+		if e.IsDir {
+			return nil
+		}
+		return current
+	}})
+	var file fileItem
+	for _, it := range p.List().Items() {
+		row := it.(fileItem)
+		if row.entry.IsDir {
+			if row.TitleColor() == nil {
+				t.Fatal("nil override lost folder fallback")
+			}
+		} else {
+			file = row
+		}
+	}
+	if file.TitleColor() != current {
+		t.Fatal("override not used")
+	}
+	current = FileKindColor(KindCode)
+	if file.TitleColor() != current {
+		t.Fatal("cached row did not use updated callback")
+	}
+	current = nil
+	if file.TitleColor() != nil {
+		t.Fatal("nil override should leave file plain")
 	}
 }

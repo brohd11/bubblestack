@@ -74,11 +74,11 @@ type FilePanelOpts struct {
 	Root   string // navigation floor; "" leaves the panel free to walk to the filesystem root
 	Title  string // fixed border legend; "" tracks the current directory's base name
 	Border bool   // draw the shared frame (the instancer's call, never the embedder's)
-	// Colors tints each row by what the entry IS — directory, dotfile, symlink, program,
-	// source, archive (see filecolor.go). The instancer's call exactly as Border is: it is
-	// an appearance decision, and the zero value leaves a listing plain, so a consumer that
-	// has not thought about coloring does not silently get it.
-	Colors bool
+	// Colors controls built-in file-type colors. The zero value leaves all rows plain.
+	Colors FileColorMode
+	// TitleColor optionally overrides a row's foreground. nil falls back to Colors.
+	// Called during rendering: use cached state, never filesystem or subprocess work.
+	TitleColor func(FileEntry) color.Color
 
 	// Compact picks the starting row density; DensityKey flips it live. An unbound
 	// DensityKey (the zero value) leaves the chord to the host, which calls ToggleDensity
@@ -231,16 +231,9 @@ func linkStat(path string, d fs.DirEntry) fs.FileInfo {
 	return info
 }
 
-// rowColor is the color a row of kind k gets, or nil when this panel was not built with
-// Colors. nil rather than some neutral color is what makes an uncolored panel PLAIN: it is
-// what core.ColorItem reads as "no opinion", so the delegate leaves the row to the
-// terminal's own foreground.
-//
-// Both color sites go through here so the flag cannot be honored in one and forgotten in
-// the other. ClassifyFile still runs when the flag is off — it is a d.Type() check and at
-// most a few map lookups, and one gate in one place is worth more than skipping it.
+// rowColor applies the built-in mode. nil lets the delegate use its normal style.
 func (p *FilePanel) rowColor(k FileKind) color.Color {
-	if !p.opts.Colors {
+	if p.opts.Colors == FileColorsNone || (p.opts.Colors == FileColorsDirs && k != KindDir && k != KindHiddenDir) {
 		return nil
 	}
 	return FileKindColor(k)
@@ -275,13 +268,19 @@ func (p *FilePanel) read(dir string) ([]fileItem, error) {
 		} else if !isDir {
 			info, _ = d.Info() // an lstat: the entry itself
 		}
+		kind := ClassifyFile(d, info)
+		if p.opts.Colors == FileColorsDirs && isDir {
+			kind = KindDir
+			if isHiddenName(d.Name()) {
+				kind = KindHiddenDir
+			}
+		}
 		out = append(out, fileItem{
 			entry: FileEntry{Name: d.Name(), Path: path, Dir: dir, IsDir: isDir},
 			desc:  entryDesc(isDir, info),
-			// ClassifyFile still reads the LINK's own type, so a linked folder stays
-			// symlink-colored rather than becoming dir-colored — the ls convention, and the
-			// one thing on the row that still says an indirection is involved.
-			color: p.rowColor(ClassifyFile(d, info)),
+			// All mode preserves symlink colors; dirs mode colors navigable folders.
+			color:      p.rowColor(kind),
+			titleColor: p.opts.TitleColor,
 		})
 	}
 	less := p.opts.Less
@@ -318,7 +317,8 @@ func (p *FilePanel) rows() []list.Item {
 			desc:  "parent directory",
 			// The way out is a folder, and is colored as one: it is synthetic, so there is
 			// no fs.DirEntry for ClassifyFile to read.
-			color: p.rowColor(KindDir),
+			color:      p.rowColor(KindDir),
+			titleColor: p.opts.TitleColor,
 		})
 	}
 	for _, it := range p.items {
@@ -356,9 +356,10 @@ func (p *FilePanel) clamp(dir string) string {
 // Description for the standard one; the suffix stays empty because a listing is one
 // directory deep and there is no path context to add to a name.
 type fileItem struct {
-	entry FileEntry
-	desc  string
-	color color.Color // the type color, nil for an ordinary file
+	entry      FileEntry
+	desc       string
+	color      color.Color // the type color, nil for an ordinary file
+	titleColor func(FileEntry) color.Color
 }
 
 var _ core.ColorItem = fileItem{}
@@ -381,7 +382,14 @@ func (i fileItem) SuffixText() string  { return "" }
 // rather than per frame — a delegate's Render must stay cheap, and the entry it would have
 // to re-examine is gone by then. nil (an ordinary file) leaves the row unstyled, and the
 // selection accent outranks this on the cursor row.
-func (i fileItem) TitleColor() color.Color { return i.color }
+func (i fileItem) TitleColor() color.Color {
+	if i.titleColor != nil {
+		if c := i.titleColor(i.entry); c != nil {
+			return c
+		}
+	}
+	return i.color
+}
 
 // FilterValue keeps ".." out of every search: a filter is a question about which entries
 // you want, and the way out of the folder is not one of the answers (the same rule an

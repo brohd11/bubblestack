@@ -21,6 +21,16 @@ import (
 // from the one this component was built to (see entryDesc) — so the type axis is carried
 // by the extension tables below instead.
 
+// FileColorMode controls the built-in classification palette, independently of a
+// host's TitleColor override.
+type FileColorMode int
+
+const (
+	FileColorsNone FileColorMode = iota
+	FileColorsDirs
+	FileColorsAll
+)
+
 // FileKind is what one listed entry is, for coloring purposes. The zero value is an
 // ordinary file, which is drawn unstyled — so an unclassified row inherits the terminal's
 // own foreground rather than a color this package chose for it.
