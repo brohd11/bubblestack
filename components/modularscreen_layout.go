@@ -35,7 +35,10 @@ type LayoutNode struct {
 	Axis     LayoutAxis
 	Children []LayoutNode
 	Size     int
-	Weight   float64
+	// FixedSize locks a positive Size along the parent's axis, including below
+	// the ordinary pane minimum. Adjacent resize handles are omitted.
+	FixedSize bool
+	Weight    float64
 }
 
 // SplitState records a group's child allocations, in declaration order. Sizes
@@ -59,6 +62,7 @@ type layoutBranch struct {
 	sizes       []int
 	weights     []float64
 	defaults    SplitState
+	fixed       bool
 }
 
 // NewModularLayout builds one screen over a tree of horizontal/vertical splits.
@@ -70,7 +74,7 @@ func NewModularLayout(root LayoutNode, opts ModularOpts) *ModularScreen {
 	s.layoutGroups = make(map[string]*layoutBranch)
 	var build func(LayoutNode, *layoutBranch, int, string) *layoutBranch
 	build = func(node LayoutNode, parent *layoutBranch, index int, path string) *layoutBranch {
-		g := &layoutBranch{parent: parent, index: index, leaf: -1, first: len(s.flat), axis: node.Axis}
+		g := &layoutBranch{parent: parent, index: index, leaf: -1, first: len(s.flat), axis: node.Axis, fixed: node.FixedSize && node.Size > 0}
 		if node.Slot != nil {
 			if len(node.Children) > 0 || node.Slot.Panel == nil {
 				panic("components: layout leaf requires a panel and no children")
@@ -128,6 +132,18 @@ func NewModularLayout(root LayoutNode, opts ModularOpts) *ModularScreen {
 					g.weights = append([]float64(nil), state.Weights...)
 				}
 			}
+			for i, child := range g.children {
+				if child.fixed {
+					g.sizes[i] = g.defaults.Sizes[i]
+				}
+			}
+		}
+		if g.fixed && parent != nil {
+			if parent.axis == LayoutVertical {
+				g.minH = node.Size
+			} else {
+				g.minW = node.Size
+			}
 		}
 		g.last = len(s.flat)
 		return g
@@ -180,12 +196,15 @@ func (s *ModularScreen) sizeLayout(width, height int) {
 		if g.axis == LayoutVertical {
 			extent = r.h
 		}
-		lengths := splitLengths(extent, g.sizes, g.weights, mins)
+		lengths := g.splitLengths(extent, mins)
 		at := 0
 		// Parent boundaries precede descendant boundaries at intersections.
 		if s.resize != nil {
 			for i := 0; i+1 < len(g.children); i++ {
 				at += lengths[i]
+				if g.children[i].fixed || g.children[i+1].fixed {
+					continue
+				}
 				edge := resizeEdge{group: g, row: i, vertical: g.axis == LayoutHorizontal, at: r.x + at, lo: r.y, hi: r.y + r.h}
 				if g.axis == LayoutVertical {
 					edge.at = r.y + at
@@ -210,6 +229,37 @@ func (s *ModularScreen) sizeLayout(width, height int) {
 		}
 	}
 	size(s.layout, panelRect{y: y, w: max(0, width), h: s.bodyH})
+}
+
+// Reserve locked nodes before allocating the remaining panes, even when the
+// terminal is too small for the ordinary minima.
+func (g *layoutBranch) splitLengths(total int, mins []int) []int {
+	locked := false
+	for _, child := range g.children {
+		locked = locked || child.fixed
+	}
+	if !locked {
+		return splitLengths(total, g.sizes, g.weights, mins)
+	}
+	out := make([]int, len(g.children))
+	var indexes, sizes, remainingMins []int
+	var weights []float64
+	remaining := max(0, total)
+	for i, child := range g.children {
+		if child.fixed {
+			out[i] = min(g.sizes[i], remaining)
+			remaining -= out[i]
+		} else {
+			indexes = append(indexes, i)
+			sizes = append(sizes, g.sizes[i])
+			weights = append(weights, g.weights[i])
+			remainingMins = append(remainingMins, mins[i])
+		}
+	}
+	for i, length := range splitLengths(remaining, sizes, weights, remainingMins) {
+		out[indexes[i]] = length
+	}
+	return out
 }
 
 // splitLengths honors fixed cells and weighted space, freezing children at their
@@ -343,12 +393,12 @@ func (s *ModularScreen) viewLayout(sh *core.Shared) string {
 			return fitLayoutBody("", g.rect.w, g.rect.h)
 		}
 		if len(parts) == 1 {
-			return parts[0]
+			return fitLayoutBody(parts[0], g.rect.w, g.rect.h)
 		}
 		if g.axis == LayoutHorizontal {
-			return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+			return fitLayoutBody(lipgloss.JoinHorizontal(lipgloss.Top, parts...), g.rect.w, g.rect.h)
 		}
-		return lipgloss.JoinVertical(lipgloss.Left, parts...)
+		return fitLayoutBody(lipgloss.JoinVertical(lipgloss.Left, parts...), g.rect.w, g.rect.h)
 	}
 	s.hitRects = append(s.hitRects[:0], s.rects...)
 	for _, leaf := range s.layoutLeaves {

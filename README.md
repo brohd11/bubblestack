@@ -53,3 +53,16 @@ derived from `ResizeOpts` and clipping when the terminal cannot fit them.
 Stable group IDs identify entries in `ResizeState.Splits`. Keep snapshots through
 `ResizeOpts.OnChange` and restore them through `ResizeOpts.State`. Applications own
 visibility, toggle shortcuts, and retained state for groups they temporarily remove.
+
+For a non-resizable strip, set a node's positive `Size` and `FixedSize: true`.
+This also overrides the ordinary pane minimum along that axis; a tab bar can
+occupy exactly one row. Locked nodes retain their declared size when restoring
+a resize snapshot and have no adjacent resize handles.
+
+`components.NewTabBar` creates a reusable single-row tab panel. Supply
+`[]components.TabItem` with stable `ID`, `Label`, and optional `Marker` values via
+`SetItems`, and select the current ID with `SetActive`. It handles overflow,
+cell-width truncation, and keeping the active tab visible on selection or resize.
+Call `Click(x, y)` with local coordinates: a nonempty returned ID requests
+activation; arrow clicks scroll without selecting. The bar does not take keyboard
+focus, so the host owns shortcuts and routes its mouse clicks explicitly.

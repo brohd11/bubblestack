@@ -588,6 +588,52 @@ func TestEditorBorderedView(t *testing.T) {
 	}
 }
 
+func TestEditorHiddenTitleGeometry(t *testing.T) {
+	for _, border := range []bool{false, true} {
+		s, sh := newPaneEditor(Opts{Title: "notes.md", Border: border, HideTitle: true})
+		s.setContent("first\nsecond")
+		s.SetPaneOrigin(10, 7)
+		inset, height := 0, 10
+		if border {
+			inset, height = 1, 8
+		}
+		if s.insetY() != inset || s.h != height {
+			t.Fatalf("hidden title geometry: inset=%d height=%d", s.insetY(), s.h)
+		}
+		if strings.Contains(ansi.Strip(s.View(sh)), "notes.md") || lipgloss.Height(s.View(sh)) != 10 {
+			t.Fatal("hidden title still rendered or left unused rows")
+		}
+		if s.CrumbLabel(false) != "notes.md" {
+			t.Fatal("hiding title removed breadcrumb identity")
+		}
+		s.Update(sh, press(s.insetX()+1, inset+1, tea.MouseLeft))
+		if s.curY != 1 || s.curX != 1 {
+			t.Fatal("hidden title shifted mouse selection")
+		}
+		typeRunes(s, '!')
+		text, position := s.Text(), s.CursorPosition()
+		if strings.Contains(ansi.Strip(s.View(sh)), "(*)") {
+			t.Fatal("dirty marker recreated hidden title")
+		}
+		s.SetTitleVisible(true)
+		if !strings.Contains(ansi.Strip(s.View(sh)), "notes.md (*)") {
+			t.Fatal("showing title lost filename or dirty marker")
+		}
+		s.SetTitleVisible(false)
+		_, y, visible := s.CursorAnchor()
+		if !visible || y != 7+inset+1 || s.h != height {
+			t.Fatal("title toggle left stale cursor or viewport geometry")
+		}
+		if s.Text() != text || s.CursorPosition() != position {
+			t.Fatal("title toggle changed buffer state")
+		}
+		s.Update(sh, keyMsg("ctrl+z"))
+		if s.Text() != "first\nsecond" {
+			t.Fatal("title toggle lost undo history")
+		}
+	}
+}
+
 // TestEditorSizeInsets: the viewport is the assigned dims net of whatever chrome the
 // editor draws — the frame on both axes when bordered, the title bar otherwise, plus
 // the one-column gutter when embedded. Standalone stays what it always was.

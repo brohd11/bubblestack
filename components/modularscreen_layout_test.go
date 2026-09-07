@@ -36,6 +36,50 @@ func (p *layoutProbe) UpdatePanel(_ *core.Shared, msg tea.Msg) (core.Action, boo
 
 func layoutLeaf(p Panel) LayoutNode { return LayoutNode{Slot: &Slot{Panel: p}} }
 
+func TestModularLayoutFixedBar(t *testing.T) {
+	sh := core.NewShared(nil)
+	bar, editor, bottom := NewTabBar(), &layoutProbe{}, &layoutProbe{}
+	root := LayoutNode{ID: "workspace", Axis: LayoutVertical, Children: []LayoutNode{
+		{ID: "document", Axis: LayoutVertical, Weight: 3, Children: []LayoutNode{
+			{Slot: &Slot{Panel: bar}, Size: 1, FixedSize: true}, layoutLeaf(editor),
+		}}, layoutLeaf(bottom),
+	}}
+	m := NewModularLayout(root, ModularOpts{Resize: &ResizeOpts{State: ResizeState{Splits: map[string]SplitState{
+		"document": {Sizes: []int{9, 0}, Weights: []float64{1, 1}},
+	}}}})
+	m.Init(sh)
+	m.SetSize(sh, 80, 24)
+	m.View(sh)
+	if bar.height != 1 || editor.oy != 1 {
+		t.Fatalf("locked row not honored: height=%d editorY=%d", bar.height, editor.oy)
+	}
+	for _, edge := range m.edges {
+		if edge.group.id == "document" {
+			t.Fatal("locked row has resize handle")
+		}
+	}
+	old := bottom.h
+	m.nudgeLayout(0, 2)
+	if bottom.h == old || bar.height != 1 {
+		t.Fatal("keyboard resize did not skip locked boundary and resize workspace")
+	}
+	m.applySplitDelta(m.layoutGroups["document"], 0, 5)
+	m.relayout()
+	if bar.height != 1 {
+		t.Fatal("direct resize changed locked row")
+	}
+	m.SetSize(sh, 4, 2)
+	if bar.height != 1 {
+		t.Fatal("tiny terminal lost locked row")
+	}
+	if got := lipgloss.Height(m.View(sh)); got != 2 {
+		t.Fatalf("tiny layout height = %d", got)
+	}
+	if m.focus != 1 {
+		t.Fatal("fixed bar captured focus")
+	}
+}
+
 func twoRowLayout(a, b, c, d Panel) LayoutNode {
 	second := []LayoutNode{layoutLeaf(c)}
 	if d != nil {

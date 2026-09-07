@@ -23,6 +23,9 @@ import (
 // rows) the same way ModularScreen accounts for its own title. The focused and muted
 // bars render at the same height, so focus never shifts the body.
 func (s *Screen) titleH() int {
+	if s.hideTitle {
+		return 0
+	}
 	return lipgloss.Height(core.RenderTitleBar(s.titleText()))
 }
 
@@ -59,7 +62,12 @@ func (s *Screen) baseTitleText() string {
 	return s.title
 }
 
-func (s *Screen) titleText() string { return s.baseTitleText() }
+func (s *Screen) titleText() string {
+	if s.hideTitle {
+		return ""
+	}
+	return s.baseTitleText()
+}
 
 // searchBarVisible reports whether the bottom rows belong to search: while the
 // modal editor is open (including its initially empty state), or afterward while a

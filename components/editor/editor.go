@@ -127,9 +127,10 @@ type Screen struct {
 	autoIndentSpaces    int        // what the resolved profile asks for; 0 ⇒ a literal tab
 	indentGuides        bool       // render leading indent levels without changing buffer geometry
 
-	bordered bool // Opts.Border: draw the frame instead of the title bar
-	embedded bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
-	focused  bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
+	bordered  bool // Opts.Border: draw the frame instead of the title bar
+	hideTitle bool // host supplies the document label (for example, in a tab bar)
+	embedded  bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
+	focused   bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
 
 	originX, originY int  // the pane's absolute top-left (components.components.PaneOriginer)
 	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
@@ -294,6 +295,7 @@ type wrapRow struct{ line, start, end int }
 type Opts struct {
 	Path            string
 	Title           string
+	HideTitle       bool // omit the title bar or border legend; retain breadcrumb identity
 	Crumb           string
 	Border          bool
 	OnExit          func(*core.Shared) core.Action
@@ -543,6 +545,7 @@ func New(opts Opts) *Screen {
 		onSaved:         opts.OnSaved,
 		lines:           [][]rune{{}},
 		bordered:        opts.Border,
+		hideTitle:       opts.HideTitle,
 		focused:         true, // standalone the editor is always focused; a panel blurs it
 		hl:              hl,
 		hlFactory:       nil,
@@ -629,6 +632,19 @@ func (s *Screen) SetFocused(focused bool) {
 	s.focused = focused
 	if !focused {
 		s.resetMouseGesture()
+	}
+}
+
+// SetTitleVisible changes title chrome without replacing the buffer. An
+// unbordered editor reclaims the title rows immediately; a frame keeps its border.
+func (s *Screen) SetTitleVisible(visible bool) {
+	if s.hideTitle == !visible {
+		return
+	}
+	s.hideTitle = !visible
+	s.sizeDirty = true
+	if s.lastSizeW > 0 {
+		s.SetSize(nil, s.lastSizeW, s.lastSizeH)
 	}
 }
 

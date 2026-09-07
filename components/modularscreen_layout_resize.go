@@ -4,6 +4,9 @@ func (s *ModularScreen) applySplitDelta(g *layoutBranch, index, delta int) {
 	if index < 0 || index+1 >= len(g.children) || delta == 0 {
 		return
 	}
+	if g.children[index].fixed || g.children[index+1].fixed {
+		return
+	}
 	lengths := make([]int, len(g.children))
 	mins := make([]int, len(g.children))
 	for i, c := range g.children {
@@ -42,6 +45,9 @@ func (s *ModularScreen) nudgeLayout(dw, dh int) {
 				continue
 			}
 			index := min(child.index, len(g.children)-2)
+			if g.children[index].fixed || g.children[index+1].fixed {
+				continue
+			}
 			s.applySplitDelta(g, index, delta)
 			return
 		}
