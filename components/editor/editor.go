@@ -174,7 +174,7 @@ type Screen struct {
 	revision, savedRevision, nextRevision uint64
 	completion                            *editorCompletionSession
 
-	searchEnabled bool          // Opts.Search: alt+f and match rendering are available
+	searchEnabled bool          // Opts.Search: ctrl+f and match rendering are available
 	searchEditing bool          // the modal line edit is open; keeps its bottom rows reserved even while empty
 	searchQuery   string        // live query; retained after enter or escape
 	searchSeq     int           // editSeq represented by searchMatches (-1 means stale)
@@ -262,7 +262,7 @@ type wrapRow struct{ line, start, end int }
 // is ignored (plain render), so the frame contract — no raw tabs, rectangular body —
 // can't be broken by one.
 //
-// Search enables the editor's alt+f literal search. A floating components.LineEditScreen opens
+// Search enables the editor's ctrl+f literal search. A floating components.LineEditScreen opens
 // over a reserved bar at the editor's bottom edge and every case-insensitive match is
 // highlighted in the buffer. A non-empty query leaves the same bar visible but
 // unfocused after the overlay closes. It is opt-in so the shared editor does not
@@ -703,7 +703,7 @@ func (s *Screen) CrumbLabel(short bool) string {
 
 const editorSearchBarH = 3 // one input row plus the rounded box's top and bottom borders
 
-// searchEdit builds the floating line edit alt+f pushes over the editor's reserved
+// searchEdit builds the floating line edit ctrl+f pushes over the editor's reserved
 // bottom bar. The component owns text capture and its bordered overlay look; the
 // editor owns only the live query. A static cursor avoids a blinking box over the
 // document.
@@ -711,7 +711,7 @@ func (s *Screen) searchEdit(sh *core.Shared) *components.LineEditScreen {
 	return s.buildSearchEdit(sh, true)
 }
 
-// buildSearchEdit creates the focused overlay. alt+f asks it to seed from a
+// buildSearchEdit creates the focused overlay. ctrl+f asks it to seed from a
 // single-line selection; clicking the retained bar does not, because that gesture means
 // "continue editing this query" and must not silently replace it with selected text.
 func (s *Screen) buildSearchEdit(sh *core.Shared, seedSelection bool) *components.LineEditScreen {
@@ -1001,7 +1001,7 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	if s.handleCompletionKey(k, m) {
 		return s, core.Action{}
 	}
-	if s.searchEnabled && k == "alt+f" {
+	if s.searchEnabled && k == "ctrl+f" {
 		return s, core.Push(s.searchEdit(sh))
 	}
 	if k == "ctrl+z" {
@@ -1077,7 +1077,7 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 		case "shift+tab", "enter":
 			s.deleteSelection()
 		case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
-			"alt+right", "ctrl+right", "home", "ctrl+a", "end", "ctrl+e":
+			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
 			s.clearSelection()
 		default:
 			if m.Text != "" {
@@ -1149,7 +1149,7 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 		s.moveRight()
 	case "alt+left", "ctrl+left", "alt+b":
 		s.moveWordBack()
-	case "alt+right", "ctrl+right":
+	case "alt+right", "ctrl+right", "alt+f":
 		s.moveWordForward()
 	case "home", "ctrl+a":
 		s.moveHome()
@@ -1204,7 +1204,7 @@ func (s *Screen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
 	}
 	if s.searchEnabled {
-		hints = append(hints, key.NewBinding(key.WithKeys("alt+f"), key.WithHelp("alt+f", "search")))
+		hints = append(hints, key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search")))
 	}
 	if s.onRelease != nil {
 		hints = append(hints, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave pane")))
@@ -1226,7 +1226,7 @@ func (s *Screen) HelpBindings() []key.Binding {
 		// these bars spells itself out (ctrl+s, shift+tab), so the option glyph was the
 		// one entry a reader had to translate. A host listing these alongside its own
 		// alt chords (gote's ? overlay) then reads in one notation throughout.
-		key.NewBinding(key.WithKeys("alt+left", "alt+right"), key.WithHelp("alt+←→", "word")),
+		key.NewBinding(key.WithKeys("alt+left", "alt+right", "alt+b", "alt+f"), key.WithHelp("alt+←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("alt+backspace", "del word")),
 		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("alt+c", "copy")),
 		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("alt+x", "cut")),

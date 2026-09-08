@@ -944,6 +944,21 @@ func TestEditorWordNav(t *testing.T) {
 	if s.curX != 6 {
 		t.Fatalf("alt+right to next word: curX = %d, want 6", s.curX)
 	}
+
+	// alt+b and alt+f are not extra aliases — they are the bytes a terminal sends for
+	// alt+left/alt+right, so they have to land on the same motions. Pinned here because
+	// an app claiming either letter for a feature breaks word nav invisibly: the help
+	// bar advertises only the arrows.
+	s.curY, s.curX = 0, 5 // inside "bar"
+	s.key(nil, keyMsg("alt+b"))
+	if s.curX != 4 {
+		t.Fatalf("alt+b to word start: curX = %d, want 4", s.curX)
+	}
+	s.curY, s.curX = 0, 0
+	s.key(nil, keyMsg("alt+f"))
+	if s.curX != 4 {
+		t.Fatalf("alt+f to next word: curX = %d, want 4", s.curX)
+	}
 }
 
 // TestEditorCtrlAliases: the readline-style aliases textinput also honors — ctrl+h

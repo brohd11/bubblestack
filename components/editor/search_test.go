@@ -33,8 +33,8 @@ func TestEditorSearchInteraction(t *testing.T) {
 	s.setContent("Alpha alpha ALPHA\nalphabet\nbeta")
 	fullH := s.h
 
-	if act := editorSearchKey(s, sh, "alt+f"); act.Msg == nil {
-		t.Fatal("alt+f should push a floating line edit")
+	if act := editorSearchKey(s, sh, "ctrl+f"); act.Msg == nil {
+		t.Fatal("ctrl+f should push a floating line edit")
 	}
 	edit := s.searchEdit(sh)
 	s.SetSize(sh, 80, 20)
@@ -139,25 +139,31 @@ func TestEditorSearchDoesNotSeedMultilineSelection(t *testing.T) {
 
 func TestEditorSearchIsOptIn(t *testing.T) {
 	s, sh := newEditor(Opts{})
-	if act := editorSearchKey(s, sh, "alt+f"); act.Msg != nil || act.Cmd != nil {
-		t.Fatal("alt+f must remain inert when search is disabled")
+	if act := editorSearchKey(s, sh, "ctrl+f"); act.Msg != nil || act.Cmd != nil {
+		t.Fatal("ctrl+f must remain inert when search is disabled")
 	}
 	for _, binding := range s.HelpBindings() {
-		if strings.Contains(strings.Join(binding.Keys(), " "), "alt+f") {
-			t.Fatal("disabled search must not advertise alt+f")
+		if strings.Contains(strings.Join(binding.Keys(), " "), "ctrl+f") {
+			t.Fatal("disabled search must not advertise ctrl+f")
 		}
 	}
 
+	// alt+f is the terminal's escape-prefixed alt+right: it belongs to word-forward, and
+	// enabling search must not take it back. The cursor moving is the whole assertion.
 	enabled, _ := newEditor(Opts{Search: true})
-	if act := editorSearchKey(enabled, sh, "ctrl+f"); act.Msg != nil || act.Cmd != nil {
-		t.Fatal("ctrl+f must not invoke search after the binding moves to alt+f")
+	enabled.setContent("alpha beta")
+	if act := editorSearchKey(enabled, sh, "alt+f"); act.Msg != nil || act.Cmd != nil {
+		t.Fatal("alt+f must not invoke search; it is the editor's word-forward motion")
+	}
+	if enabled.curX == 0 {
+		t.Fatal("alt+f should have moved the cursor forward by a word")
 	}
 	var advertised bool
 	for _, binding := range enabled.HelpBindings() {
-		advertised = advertised || strings.Contains(strings.Join(binding.Keys(), " "), "alt+f")
+		advertised = advertised || strings.Contains(strings.Join(binding.Keys(), " "), "ctrl+f")
 	}
 	if !advertised {
-		t.Fatal("enabled search should advertise alt+f")
+		t.Fatal("enabled search should advertise ctrl+f")
 	}
 }
 
