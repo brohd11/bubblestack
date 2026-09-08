@@ -357,3 +357,41 @@ func TestEditorWheelDuringDrag(t *testing.T) {
 		t.Fatalf("the selection ended at line %d after a wheel notch, want %d", got, want)
 	}
 }
+
+// TestEditorSetTopLine: SetTopLine is TopLine's inverse in both wrap modes — the pair
+// gote's session restore relies on to bring back the view that was left, not merely one
+// containing the caret. The offset is clamped, so a line past the end of a buffer that
+// shrank since lands at the bottom rather than on empty space.
+func TestEditorSetTopLine(t *testing.T) {
+	s, _ := newEditor(Opts{})
+	s.setContent(longDoc()) // 100 single-cell lines in a 20-row window
+
+	s.SetTopLine(40)
+	if got := s.TopLine(); got != 40 {
+		t.Fatalf("unwrapped TopLine = %d, want 40", got)
+	}
+
+	// Wrapped, scrY counts display rows, so the same buffer line is a different offset —
+	// which is exactly what a caller storing a LINE should not have to know.
+	s.setContent("short\n" + strings.Repeat("x", 200) + "\ntail\n" + longDoc())
+	s.wrap, s.wrapDirty = true, true
+	s.SetTopLine(2)
+	if got := s.TopLine(); got != 2 {
+		t.Fatalf("wrapped TopLine = %d, want 2", got)
+	}
+	if s.scrY == 2 {
+		t.Fatal("precondition: a 200-cell line above row 2 should have pushed scrY past it")
+	}
+
+	// Past the end, and below zero, both clamp instead of showing nothing.
+	s.wrap, s.wrapDirty = false, true
+	s.setContent(longDoc())
+	s.SetTopLine(5000)
+	if want := len(s.lines) - s.h; s.scrY != want {
+		t.Fatalf("a line past the end → scrY %d, want the last full screen %d", s.scrY, want)
+	}
+	s.SetTopLine(-3)
+	if s.scrY != 0 {
+		t.Fatalf("a negative line → scrY %d, want 0", s.scrY)
+	}
+}

@@ -1249,16 +1249,25 @@ func (s *Screen) ToggleWrap() {
 	top := s.TopLine() // in the mode we are leaving
 	s.wrap = !s.wrap
 	s.wrapDirty = true // the gutter appears or goes: the whole geometry moved
-	if s.wrap {
-		s.scrY = s.firstRowOfLine(top)
-	} else {
-		s.scrY = top
-	}
-	s.clampScrollBounds()
+	s.SetTopLine(top)
 }
 
 // TopLine is the buffer line showing at the top of the viewport, in either mode.
 func (s *Screen) TopLine() int { return s.lineAtRow(s.scrY) }
+
+// SetTopLine scrolls the viewport so line shows at its top — the inverse of TopLine, and
+// translated the same way: wrapped, a buffer line starts at a display row that has to be
+// looked up; unwrapped, rows and lines are the same thing. The offset is clamped, so a
+// line past the end of a buffer that shrank since lands at the bottom rather than on
+// empty space.
+func (s *Screen) SetTopLine(line int) {
+	if s.wrap {
+		s.scrY = s.firstRowOfLine(line)
+	} else {
+		s.scrY = line
+	}
+	s.clampScrollBounds()
+}
 
 // CenterLine is the buffer line showing at the MIDDLE of the viewport — the anchor a
 // synced view (gote's preview pane) centers itself on. Aligning the middles keeps the
