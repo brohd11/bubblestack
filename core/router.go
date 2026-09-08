@@ -154,6 +154,12 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A release outside the terminal may never arrive. Notify retained screens
 		// too, since the gesture's owner may now be underneath a modal overlay.
 		r.apply(PropagateAll(msg), &cmds)
+	case tea.FocusMsg:
+		// Broadcast for the same reason blur is: a screen that wants to catch up on
+		// what changed while the terminal was away (re-reading state some other process
+		// may have moved) is usually not the one on top of the stack when focus returns.
+		// Neither case returns — the top screen still sees the message through Update.
+		r.apply(PropagateAll(msg), &cmds)
 	case tea.BackgroundColorMsg:
 		// The terminal answering the OSC 11 query is what tells the adaptive palette
 		// which half of each Color pair to use. v1 asked synchronously through a
