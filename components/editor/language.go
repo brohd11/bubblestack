@@ -3,6 +3,8 @@ package editor
 import (
 	"strings"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // LanguageResolver is the host-owned seam between a path and the editing
@@ -123,12 +125,13 @@ func (s *Screen) applyLanguage(path string) {
 	s.hlSeq = -1
 	s.hlChanged = time.Time{}
 	s.resetHighlightRows()
+	s.ClearHighlightOverlay()
 }
 
 // RefreshHighlight schedules a fresh parse of the current text without disturbing what is
-// on screen. It exists for a host whose highlighter answers partly from data that arrives
-// AFTER a parse — LSP semantic tokens are the case: the tokens land later than the text
-// they describe, and nothing in an edit-driven pipeline would ever revisit those rows.
+// on screen. It exists for a host whose highlighter depends on external state that changed
+// without a buffer edit; nothing in an edit-driven pipeline would otherwise revisit those
+// rows.
 //
 // What it deliberately does NOT do is discard the snapshot. applyLanguage clears hl and
 // hlRows because a language change makes the old parse meaningless; here the old parse is
@@ -141,13 +144,14 @@ func (s *Screen) applyLanguage(path string) {
 // it tests the epoch, and starts another parse on the mismatch path.
 //
 // Cheap and safe to call often: it schedules work rather than doing it.
-func (s *Screen) RefreshHighlight() {
+func (s *Screen) RefreshHighlight() tea.Cmd {
 	if s.hlExplicit || s.hlFactory == nil {
-		return
+		return nil
 	}
 	s.hlEpoch++
 	s.hlSeq = -1
 	s.hlChanged = time.Time{}
+	return s.startHighlightParse()
 }
 
 func pairMap(pairs []Pair) map[rune]rune {

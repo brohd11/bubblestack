@@ -61,8 +61,8 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 			if s.path != "" && path != s.path {
 				return core.Push(s.saveAsConfirm(path))
 			}
-			s.applySaveName(path)
-			return core.Seq(core.Pop(), core.Action{Cmd: s.saveCmd()})
+			highlight := s.applySaveName(path)
+			return core.Seq(core.Pop(), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
 		}, nil)
 	if s.path != "" {
 		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
@@ -92,9 +92,9 @@ func (s *Screen) saveAsConfirm(path string) *components.DialogScreen {
 		Title:  "save as",
 		Render: func(*core.Shared) string { return body },
 		OnYes: func(*core.Shared) core.Action {
-			s.applySaveName(path)
+			highlight := s.applySaveName(path)
 			// Two levels: this confirm and the save-as box under it.
-			return core.Seq(core.Pop(2), core.Action{Cmd: s.saveCmd()})
+			return core.Seq(core.Pop(2), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
 		},
 		Help:    components.DefaultHelpKeys,
 		Overlay: true,
@@ -126,11 +126,18 @@ func (s *Screen) paneW() int {
 // crumb and host-resolved editing behavior follow the new identity. An explicit
 // highlighter or indent width passed through Opts is a deliberate override and a
 // rename must not undo it.
-func (s *Screen) applySaveName(name string) {
+func (s *Screen) applySaveName(name string) tea.Cmd {
+	if name == s.path {
+		return nil
+	}
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
 	s.applyLanguage(name)
+	if !s.loaded {
+		return nil
+	}
+	return s.startHighlightParse()
 }
 
 // SetPath points the buffer at path after the file moved underneath it — the host
@@ -139,7 +146,7 @@ func (s *Screen) applySaveName(name string) {
 // which is exactly what keeps the next ctrl+s from re-creating the old file. The load
 // flag is deliberately left set — a rename does not make the new path worth reading, and
 // re-reading it on a later pane swap would undo everything this method promises.
-func (s *Screen) SetPath(path string) { s.applySaveName(path) }
+func (s *Screen) SetPath(path string) tea.Cmd { return s.applySaveName(path) }
 
 // saveCmd snapshots the buffer and its revision and writes it to Path asynchronously
 // (IO in the cmd lane); the result arrives as an editorSavedMsg. An empty path is an error — a

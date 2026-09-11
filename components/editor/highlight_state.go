@@ -19,7 +19,7 @@ func (s *Screen) resetHighlightRows() {
 	s.hlPreview = nil
 	s.hlPrevSeq = -1
 	s.hlPrevFrom, s.hlPrevTo = -1, -1
-	s.hlDirty, s.hlAnchor, s.hlFar = 0, 0, false
+	s.hlDirty, s.hlAnchor, s.hlAnchorSnapshot, s.hlFar = 0, 0, -1, false
 }
 
 func (s *Screen) acceptHighlight(h Highlighter, seq int) {
@@ -32,19 +32,19 @@ func (s *Screen) acceptHighlight(h Highlighter, seq int) {
 	s.hlPreview = nil
 	s.hlPrevSeq = -1
 	s.hlPrevFrom, s.hlPrevTo = -1, -1
-	s.hlDirty, s.hlAnchor, s.hlFar = -1, -1, false
+	s.hlDirty, s.hlAnchor, s.hlAnchorSnapshot, s.hlFar = -1, -1, -1, false
 }
 
 // highlightAnchor translates the active snapshot's restart hint back into the current
 // buffer. The search is deliberately bounded: walking an enormous multiline construct
 // on every key would merely move the old parse stall into cache maintenance.
-func (s *Screen) highlightAnchor(row int) (int, bool) {
+func (s *Screen) highlightAnchor(row int) (currentRow, snapshotRow int, far bool) {
 	if row < 0 || row >= len(s.hlRows) || s.hl == nil {
-		return row, false
+		return row, -1, false
 	}
 	oldRow := s.hlRows[row]
 	if oldRow < 0 {
-		return row, s.hlFar
+		return row, -1, s.hlFar
 	}
 	restart := oldRow
 	if p, ok := s.hl.(HighlightRestartProvider); ok {
@@ -55,10 +55,10 @@ func (s *Screen) highlightAnchor(row int) (int, bool) {
 	}
 	for current, n := row, 0; current >= 0 && n < editorHighlightPreviewLines; current, n = current-1, n+1 {
 		if s.hlRows[current] == restart {
-			return current, false
+			return current, restart, false
 		}
 	}
-	return row, restart != oldRow
+	return row, oldRow, restart != oldRow
 }
 
 // rebaseHighlightRows mirrors a raw text replacement against the exact snapshot. Rows
@@ -68,12 +68,15 @@ func (s *Screen) rebaseHighlightRows(start, end textPos, inserted string) {
 	if s.hl == nil {
 		return
 	}
-	anchor, far := s.highlightAnchor(start.y)
+	anchor, snapshotAnchor, far := s.highlightAnchor(start.y)
 	if s.hlDirty < 0 || start.y < s.hlDirty {
 		s.hlDirty = start.y
 	}
 	if s.hlAnchor < 0 || anchor < s.hlAnchor {
 		s.hlAnchor = anchor
+		s.hlAnchorSnapshot = snapshotAnchor
+	} else if anchor == s.hlAnchor && s.hlAnchorSnapshot < 0 && snapshotAnchor >= 0 {
+		s.hlAnchorSnapshot = snapshotAnchor
 	}
 	s.hlFar = s.hlFar || far
 	s.hlPreview = nil
@@ -148,7 +151,13 @@ func (s *Screen) refreshHighlightPreview() {
 		}
 		b.WriteString(string(s.lines[row]))
 	}
-	preview := s.hlFactory()
+	var preview Highlighter
+	if provider, ok := s.hl.(HighlightPreviewProvider); ok && s.hlAnchorSnapshot >= 0 {
+		preview = provider.NewHighlightPreview(s.hlAnchorSnapshot)
+	}
+	if preview == nil {
+		preview = s.hlFactory()
+	}
 	if preview == nil {
 		return
 	}

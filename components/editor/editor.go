@@ -92,27 +92,30 @@ type Screen struct {
 	confirmExit bool // the nano-style save/discard/cancel prompt is showing
 	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
 
-	hl         Highlighter // latest exact syntax snapshot; nil ⇒ plain render
-	hlFactory  func() Highlighter
-	hlExplicit bool   // hl came from Opts: a rename must not replace it
-	editSeq    int    // bumped at every buffer mutation
-	hlSeq      int    // edit sequence represented by hl (-1 ⇒ never)
-	hlEpoch    uint64 // language identity; rejects a parse finishing after a rename
-	hlRows     []int  // current row → row in hl; -1 means text affected by an edit
-	hlPreview  map[int][]Span
-	hlPrevSeq  int
-	hlPrevFrom int
-	hlPrevTo   int
-	hlDirty    int // earliest row whose lexical state may have changed; -1 ⇒ exact
-	hlAnchor   int // best current-buffer restart row for the provisional parse
-	hlFar      bool
-	hlParsing  bool
-	hlJob      uint64
-	hlChanged  time.Time // latest edit; exact parsing waits for a quiet window
-	hlDebounce time.Duration
-	textCache  string // lines joined for text consumers at textSeq
-	textSeq    int    // editSeq represented by textCache (-1 ⇒ stale)
-	lineEnding string // serialized newline: "\r\n" for a pure CRLF load, otherwise "\n"
+	hl               Highlighter // latest exact syntax snapshot; nil ⇒ plain render
+	hlFactory        func() Highlighter
+	hlExplicit       bool   // hl came from Opts: a rename must not replace it
+	editSeq          int    // bumped at every buffer mutation
+	hlSeq            int    // edit sequence represented by hl (-1 ⇒ never)
+	hlEpoch          uint64 // language identity; rejects a parse finishing after a rename
+	hlRows           []int  // current row → row in hl; -1 means text affected by an edit
+	hlPreview        map[int][]Span
+	hlPrevSeq        int
+	hlPrevFrom       int
+	hlPrevTo         int
+	hlDirty          int // earliest row whose lexical state may have changed; -1 ⇒ exact
+	hlAnchor         int // best current-buffer restart row for the provisional parse
+	hlAnchorSnapshot int // exact-snapshot row corresponding to hlAnchor; -1 when unknown
+	hlFar            bool
+	hlParsing        bool
+	hlJob            uint64
+	hlChanged        time.Time // latest edit; exact parsing waits for a quiet window
+	hlDebounce       time.Duration
+	hlOverlay        [][]highlightOverlayRange // immutable host overlay, addressed through hlOverlayRows
+	hlOverlayRows    []int                     // current row → row in hlOverlay; -1 means edited
+	textCache        string                    // lines joined for text consumers at textSeq
+	textSeq          int                       // editSeq represented by textCache (-1 ⇒ stale)
+	lineEnding       string                    // serialized newline: "\r\n" for a pure CRLF load, otherwise "\n"
 
 	resolveLanguage LanguageResolver // host-owned path → behavior seam
 	autoPairs       map[rune]rune    // typed opener → closer; nil ⇒ literal typing

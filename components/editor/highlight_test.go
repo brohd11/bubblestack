@@ -25,6 +25,16 @@ type restartHL struct {
 	restart []int
 }
 
+type previewSeedHL struct {
+	countingHL
+	requested *[]int
+}
+
+func (h *previewSeedHL) NewHighlightPreview(snapshotLine int) Highlighter {
+	*h.requested = append(*h.requested, snapshotLine)
+	return &countingHL{}
+}
+
 func (h *restartHL) HighlightRestartLine(row int) int {
 	if row < 0 || row >= len(h.restart) {
 		return row
@@ -202,6 +212,118 @@ func TestEditorHighlighterFactoryPreviewsEditedLine(t *testing.T) {
 	}
 }
 
+func TestEditorHighlighterPreviewReceivesExactSnapshotRow(t *testing.T) {
+	var requested []int
+	resolve := func(string) *LanguageConfig {
+		return &LanguageConfig{NewHighlighter: func() Highlighter {
+			return &previewSeedHL{requested: &requested}
+		}}
+	}
+	lines := make([]string, editorHighlightPreviewLines+20)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	s, sh := newEditor(Opts{Path: "deep.seed", ResolveLanguage: resolve})
+	s.setContent(strings.Join(lines, "\n"))
+	exact := s.hl.(*previewSeedHL)
+	exact.Parse(s.Text())
+	s.acceptHighlight(exact, s.editSeq)
+	s.curY = editorHighlightPreviewLines + 10
+	s.curX = len(s.lines[s.curY])
+	s.scrY = s.curY
+
+	s.Update(sh, keyMsg("x"))
+	if len(requested) != 1 || requested[0] != editorHighlightPreviewLines+10 {
+		t.Fatalf("preview seed rows = %v, want snapshot row %d", requested, editorHighlightPreviewLines+10)
+	}
+	if got := spansText(s.hlSpans(s.curY)); got != "linex" {
+		t.Fatalf("seeded deep preview = %q, want linex", got)
+	}
+}
+
+// A normal save submits the current path through the save-as component. Reapplying the
+// same language used to discard the exact snapshot without launching its replacement;
+// below the preview budget that made the rest of a large file render plain.
+func TestEditorSaveSamePathKeepsDeepHighlightSnapshot(t *testing.T) {
+	lines := make([]string, editorHighlightPreviewLines+20)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	s, sh := newEditor(Opts{Path: "deep.lit", ResolveLanguage: highlighterLanguage})
+	s.SetText(strings.Join(lines, "\n"))
+	exact := s.hl.(*countingHL)
+	exact.Parse(s.Text())
+	s.acceptHighlight(exact, s.editSeq)
+	deep := editorHighlightPreviewLines + 10
+	if got := spansText(s.hlSpans(deep)); got != "line" {
+		t.Fatalf("deep row before save = %q", got)
+	}
+
+	s.saveAsEdit(sh).OnDone(sh, s.path)
+	if s.hl != exact || len(s.hlRows) != len(lines) {
+		t.Fatal("same-path save discarded the live exact highlight snapshot")
+	}
+	if got := spansText(s.hlSpans(deep)); got != "line" {
+		t.Fatalf("deep row after save = %q, want highlighting preserved", got)
+	}
+}
+
+func TestHighlightOverlayComposesAndRebases(t *testing.T) {
+	a := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	b := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	s, sh := newEditor(Opts{})
+	s.SetText("one\ntwo\nthree")
+	if !s.SetHighlightOverlay(s.EditSeq(), []HighlightRange{
+		{Range: Range{Start: Position{Line: 0}, End: Position{Line: 0, Column: 3}}, Style: &a},
+		{Range: Range{Start: Position{Line: 2}, End: Position{Line: 2, Column: 5}}, Style: &b},
+	}) {
+		t.Fatal("current overlay was rejected")
+	}
+	if spans := s.hlSpans(0); len(spans) != 1 || spans[0].Style.GetForeground() != a.GetForeground() {
+		t.Fatalf("row 0 overlay = %+v, want style a", spans)
+	}
+
+	// Splitting row 0 invalidates the touched result but structurally carries row 2's
+	// answer down to row 3.
+	s.curX = len(s.lines[0])
+	s.Update(sh, keyMsg("enter"))
+	if spans := s.hlSpans(0); len(spans) != 0 {
+		t.Fatalf("edited row kept stale overlay: %+v", spans)
+	}
+	if spans := s.hlSpans(3); len(spans) != 1 || spans[0].Style.GetForeground() != b.GetForeground() {
+		t.Fatalf("rebased row 3 overlay = %+v, want style b", spans)
+	}
+
+	s.curY, s.curX = 3, len(s.lines[3])
+	s.Update(sh, keyMsg("x"))
+	if spans := s.hlSpans(3); len(spans) != 0 {
+		t.Fatalf("locally edited row kept stale overlay: %+v", spans)
+	}
+}
+
+func TestHighlightOverlayVersionAndReplacement(t *testing.T) {
+	a := lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	b := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	s, sh := newEditor(Opts{})
+	s.SetText("one\ntwo")
+	seq := s.EditSeq()
+	s.SetHighlightOverlay(seq, []HighlightRange{{
+		Range: Range{Start: Position{Line: 1}, End: Position{Line: 1, Column: 3}}, Style: &a,
+	}})
+	s.Update(sh, keyMsg("x")) // edits row 0; row 1's overlay remains valid
+	if s.SetHighlightOverlay(seq, []HighlightRange{{
+		Range: Range{Start: Position{Line: 1}, End: Position{Line: 1, Column: 3}}, Style: &b,
+	}}) {
+		t.Fatal("stale overlay generation was accepted")
+	}
+	if spans := s.hlSpans(1); len(spans) != 1 || spans[0].Style.GetForeground() != a.GetForeground() {
+		t.Fatalf("stale publication disturbed the live overlay: %+v", spans)
+	}
+	if !s.SetHighlightOverlay(s.EditSeq(), nil) || len(s.hlSpans(1)) != 0 {
+		t.Fatal("a current empty answer did not clear the overlay")
+	}
+}
+
 func TestEditorHighlighterRebasesInsertedAndDeletedLines(t *testing.T) {
 	var created []*restartHL
 	s, sh := newEditor(Opts{Path: "x.lit", ResolveLanguage: trackedHighlighterLanguage(&created, nil)})
@@ -372,7 +494,7 @@ func TestRefreshHighlightKeepsTheLiveSnapshot(t *testing.T) {
 		t.Fatalf("row 1 was not highlighted before the refresh: %q", before)
 	}
 
-	s.RefreshHighlight()
+	cmd := s.RefreshHighlight()
 
 	if s.hl != exact {
 		t.Error("the live snapshot was replaced; it must render until the new parse lands")
@@ -394,6 +516,9 @@ func TestRefreshHighlightKeepsTheLiveSnapshot(t *testing.T) {
 	}
 	if !s.hlChanged.IsZero() {
 		t.Error("hlChanged should be cleared so the parse is not held behind the debounce")
+	}
+	if cmd == nil || !s.hlParsing {
+		t.Error("RefreshHighlight did not immediately schedule the replacement parse")
 	}
 }
 

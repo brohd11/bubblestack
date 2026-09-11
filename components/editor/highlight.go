@@ -54,6 +54,20 @@ type Highlighter interface {
 	HighlightLine(row int) []Span
 }
 
+// HighlightPreviewProvider is the optional stateful-preview half of Highlighter. The
+// receiver is the immutable exact snapshot currently on screen; snapshotLine is a row in
+// that snapshot whose beginning corresponds to the fragment the editor is about to parse.
+// The returned highlighter must be an independent instance, seeded with any non-lexical
+// state the fragment needs at that row. The editor still uses HighlightRestartProvider to
+// find a safe lexical restart first.
+//
+// This is deliberately a constructor rather than a state value passed through the editor:
+// bracket stacks, parser checkpoints and similar context remain private to the host
+// highlighter, and the editor never has to type-assert an opaque seed.
+type HighlightPreviewProvider interface {
+	NewHighlightPreview(snapshotLine int) Highlighter
+}
+
 // HighlightRestartProvider is the optional fast-preview half of Highlighter. An
 // implementation may point the editor at a preceding row from which a fragment can be
 // parsed in isolation with useful lexical context — the opening row of a multiline
@@ -62,6 +76,17 @@ type Highlighter interface {
 // Invalid or forward answers are ignored and the edited row is used instead.
 type HighlightRestartProvider interface {
 	HighlightRestartLine(row int) int
+}
+
+// HighlightRange is one host-supplied style override. Range columns are rune indexes,
+// matching Position and Range everywhere else in this package. Highlight overlays are
+// line-local: a range whose endpoints name different rows is ignored.
+//
+// Style follows Span's immutable-pointer contract. A nil Style is meaningful and removes
+// the lexical style from the covered text.
+type HighlightRange struct {
+	Range Range
+	Style *lipgloss.Style
 }
 
 // spansMatchLine reports whether spans concatenate to exactly line — the Span contract,

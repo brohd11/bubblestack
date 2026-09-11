@@ -372,7 +372,7 @@ func (s *Screen) renderWrappedRow(idx int) string {
 	// here. Mid-line it belongs to the next row, at its column 0.
 	eol := s.lastRowOfLine(idx)
 
-	if s.focused && s.hl != nil {
+	if s.focused && (s.hl != nil || len(s.hlOverlayRows) > 0) {
 		if styled, ok := s.renderLineStyled(r.line, start, end, eol); ok {
 			return num + styled
 		}
@@ -423,7 +423,7 @@ func (s *Screen) renderLine(row int) string {
 	num := s.gutterText(row, true)
 	var body string
 	done := false
-	if s.focused && s.hl != nil {
+	if s.focused && (s.hl != nil || len(s.hlOverlayRows) > 0) {
 		body, done = s.renderLineStyled(row, start, end, !over)
 	}
 	if !done {
@@ -649,9 +649,10 @@ func (s *Screen) hlSpans(row int) []Span {
 		spans = s.hlPreview[row]
 	} else if row >= 0 && row < len(s.hlRows) && s.hlRows[row] >= 0 {
 		spans = s.hl.HighlightLine(s.hlRows[row])
-	} else if s.hlFactory == nil {
+	} else if s.hlFactory == nil && s.hl != nil {
 		spans = s.hl.HighlightLine(row)
 	}
+	spans = s.applyHighlightOverlay(row, spans)
 	if !spansMatchLine(spans, s.lines[row]) {
 		return nil
 	}
