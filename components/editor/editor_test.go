@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1231,6 +1232,101 @@ func TestEditorSaveKey(t *testing.T) {
 
 // TestEditorOnExitHook: with Opts.OnExit set (embedded use), every exit path —
 // clean ctrl+x, discard, and save — runs the hook instead of popping.
+// TestEditorSaveBaseDir: a relative name typed into the save box belongs to the
+// directory the HOST opened in, not to the shell the binary was launched from. The
+// cases are the three states baseDir can be in, plus the one the resolution must NOT
+// change: an absolute name.
+func TestEditorSaveBaseDir(t *testing.T) {
+	t.Run("a relative name lands under BaseDir", func(t *testing.T) {
+		base, elsewhere := t.TempDir(), t.TempDir()
+		t.Chdir(elsewhere) // the launching shell, deliberately not the base
+		saved := ""
+		s, sh := newEditor(Opts{
+			BaseDir: base,
+			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
+		})
+		typeRunes(s, 'h', 'i')
+		s.key(sh, keyMsg("ctrl+s"))
+		s.saveAsEdit(sh).OnDone(sh, filepath.Join("sub", "note.md")) // a relative name, one level down
+		s.Update(sh, s.saveCmd()())
+
+		want := filepath.Join(base, "sub", "note.md")
+		if s.path != want {
+			t.Fatalf("the buffer should take the resolved path %q, got %q", want, s.path)
+		}
+		if saved != want {
+			t.Fatalf("OnSaved should report the resolved path %q, got %q", want, saved)
+		}
+		if b, err := os.ReadFile(want); err != nil || string(b) != "hi" {
+			t.Fatalf("the file should be under BaseDir: %q, err = %v", b, err)
+		}
+		if _, err := os.Stat(filepath.Join(elsewhere, "sub", "note.md")); err == nil {
+			t.Fatal("nothing should have been written relative to the process cwd")
+		}
+	})
+
+	t.Run("without BaseDir the cwd still decides, absolutely", func(t *testing.T) {
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		s, sh := newEditor(Opts{}) // a standalone editor: nano's rule
+		typeRunes(s, 'x')
+		s.key(sh, keyMsg("ctrl+s"))
+		s.saveAsEdit(sh).OnDone(sh, "note.md")
+		s.Update(sh, s.saveCmd()())
+
+		// Absolute even here: s.path becomes the buffer's identity, and a host keying its
+		// open documents by path must not be handed a bare name.
+		if !filepath.IsAbs(s.path) || filepath.Base(s.path) != "note.md" {
+			t.Fatalf("the buffer should take an absolute path under the cwd, got %q", s.path)
+		}
+		if b, err := os.ReadFile(filepath.Join(cwd, "note.md")); err != nil || string(b) != "x" {
+			t.Fatalf("the file should be in the cwd: %q, err = %v", b, err)
+		}
+	})
+
+	t.Run("an absolute name ignores BaseDir", func(t *testing.T) {
+		base := t.TempDir()
+		want := filepath.Join(t.TempDir(), "abs.txt")
+		s, sh := newEditor(Opts{BaseDir: base})
+		typeRunes(s, 'a')
+		s.key(sh, keyMsg("ctrl+s"))
+		s.saveAsEdit(sh).OnDone(sh, want)
+		s.Update(sh, s.saveCmd()())
+		if s.path != want {
+			t.Fatalf("an absolute name should be taken as typed, got %q", s.path)
+		}
+		if b, err := os.ReadFile(want); err != nil || string(b) != "a" {
+			t.Fatalf("saved content = %q, err = %v", b, err)
+		}
+	})
+
+	// A relative spelling of the file the buffer is already on is a re-save, not a
+	// save-as: resolution happens BEFORE the names are compared, so no confirm is raised.
+	t.Run("a relative spelling of the buffer's own file re-saves in place", func(t *testing.T) {
+		base := t.TempDir()
+		t.Chdir(t.TempDir())
+		path := filepath.Join(base, "same.txt")
+		s, sh := newEditor(Opts{BaseDir: base, Path: path})
+		typeRunes(s, 'y')
+		s.key(sh, keyMsg("ctrl+s"))
+		act := s.saveAsEdit(sh).OnDone(sh, "same.txt")
+		s.Update(sh, s.saveCmd()())
+		if s.path != path {
+			t.Fatalf("a re-save must not move the buffer, got %q", s.path)
+		}
+		// Submitting the buffer's own absolute path is unambiguously a re-save; the
+		// relative spelling of it must produce the same shape of action rather than the
+		// push of a save-as confirm. Compared against that case rather than a hardcoded
+		// type so the assertion says what it means.
+		if got, want := fmt.Sprintf("%T", act.Msg), fmt.Sprintf("%T", s.saveAsEdit(sh).OnDone(sh, path).Msg); got != want {
+			t.Fatalf("a relative spelling of the buffer's own file should re-save (%s), got %s", want, got)
+		}
+		if b, err := os.ReadFile(path); err != nil || string(b) != "y" {
+			t.Fatalf("saved content = %q, err = %v", b, err)
+		}
+	})
+}
+
 func TestEditorOnExitHook(t *testing.T) {
 	t.Run("clean", func(t *testing.T) {
 		fired := 0

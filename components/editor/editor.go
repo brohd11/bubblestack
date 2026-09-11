@@ -73,9 +73,10 @@ import (
 // fall back to the whole line; optional literal search is enabled by the host through
 // Opts.Search.
 type Screen struct {
-	path  string // file to load/save; empty ⇒ unsavable scratch buffer
-	title string // title-bar text (defaults to the file's base name, else "Editor")
-	crumb string // breadcrumb segment; defaults to title
+	path    string // file to load/save; empty ⇒ unsavable scratch buffer
+	baseDir string // directory a relative save-as name resolves against; empty ⇒ the process cwd
+	title   string // title-bar text (defaults to the file's base name, else "Editor")
+	crumb   string // breadcrumb segment; defaults to title
 
 	onExit    func(*core.Shared) core.Action         // embedded mode: replaces Pop on exit (nil ⇒ Pop)
 	onRelease func(*core.Shared) core.Action         // esc: hand the keys back to the host (nil ⇒ esc ignored)
@@ -296,7 +297,11 @@ type wrapRow struct{ line, start, end int }
 // IndentGuides draws a muted vertical guide in the leading whitespace occupied by each
 // complete live indent unit. It is render-only and defaults off.
 type Opts struct {
-	Path            string
+	Path string
+	// BaseDir is the directory a RELATIVE name typed into the save box resolves against —
+	// the directory the host opened in, which is rarely the shell the binary was launched
+	// from. Empty leaves the process cwd deciding, which is what a standalone editor wants.
+	BaseDir         string
 	Title           string
 	HideTitle       bool // omit the title bar or border legend; retain breadcrumb identity
 	Crumb           string
@@ -541,6 +546,7 @@ func New(opts Opts) *Screen {
 	hl, hlExplicit := opts.Highlighter, opts.Highlighter != nil
 	ed := &Screen{
 		path:            opts.Path,
+		baseDir:         opts.BaseDir,
 		title:           title,
 		crumb:           crumb,
 		onExit:          opts.OnExit,

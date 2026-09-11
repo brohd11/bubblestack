@@ -24,7 +24,7 @@ import (
 // "File Name to Write". Enter saves under the typed name (a different name is a
 // save-as: the buffer takes the new path and title); a blank entry or esc pops back to
 // whatever raised it, so from the exit prompt that prompt is still up and from ctrl+s
-// nothing happened. A relative name resolves against the process CWD, nano's rule.
+// nothing happened. A relative name resolves against Opts.BaseDir — see resolveSavePath.
 // saveExits, set by the caller before the push, is what decides where the write lands.
 //
 // A name that DIFFERS from the buffer's own goes through saveAsConfirm first. The box is
@@ -35,7 +35,7 @@ import (
 //
 // A leading "~" is resolved here, the one place the user's typed text enters, so the
 // buffer takes the RESOLVED path: unexpanded it would reach os.WriteFile as a literal
-// directory named "~" under the CWD, and the title, the prefill of the next ctrl+s and
+// directory named "~" under whatever resolveSavePath anchors to, and the title, the prefill of the next ctrl+s and
 // the path handed to OnSaved would all name a file that isn't where the user asked for
 // it. A "~user" form is refused rather than guessed (strutil.ExpandHome's rule) and the
 // write is abandoned — writing it literally is the very surprise this resolves.
@@ -58,6 +58,9 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 				// The same wording editorSavedMsg reports a failed write with.
 				return core.Seq(core.Pop(), core.SetStatus("save failed: "+err.Error()))
 			}
+			// Before the comparison below, so a relative spelling of the buffer's OWN file
+			// re-saves in place rather than reading as a save-as onto a new name.
+			path = s.resolveSavePath(path)
 			if s.path != "" && path != s.path {
 				return core.Push(s.saveAsConfirm(path))
 			}
@@ -68,6 +71,29 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
 	}
 	return edit
+}
+
+// resolveSavePath anchors what was typed into the save box. A relative name resolves
+// against baseDir — the directory the HOST opened in, which for gote is its scan root,
+// vault or doc store, and is rarely the shell the binary was launched from. With no
+// baseDir the process cwd still decides, nano's rule, but the result is made absolute
+// either way: path becomes the buffer's identity, and a host that keys its open documents
+// by path must not be handed a string whose meaning depends on a cwd it cannot change.
+//
+// Unlike a host's own confined name boxes, this one is allowed to leave baseDir — ".." is
+// resolved, not refused. The save box is the one that writes anywhere by design; baseDir
+// only says where "here" is, not where the user may go.
+func (s *Screen) resolveSavePath(path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	if s.baseDir != "" {
+		return filepath.Clean(filepath.Join(s.baseDir, path))
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // saveAsConfirm is the y/n step between a NEW name in the save-as box and the write.
