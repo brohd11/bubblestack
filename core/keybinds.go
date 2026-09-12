@@ -45,6 +45,7 @@ type KeyMap struct {
 	No  key.Binding
 
 	// global chrome
+	Actions        key.Binding // open the app's Actions picker; the app owns the menu and the push
 	NextTab        key.Binding
 	PrevTab        key.Binding
 	ToggleOutput   key.Binding // focus/unfocus the output pane for scrolling (O; o shows/hides)
@@ -104,6 +105,19 @@ var Keys = KeyMap{
 
 	Yes: key.NewBinding(key.WithKeys("enter", "y", "Y", "e")),
 	No:  key.NewBinding(key.WithKeys("esc", "n", "N", "c")),
+
+	// Every app on this framework opens its Actions picker with "a" and each used to
+	// declare that separately — the duplication this keymap exists to prevent. The router
+	// dispatches nothing here: the binding is shared, the menu and the Push stay the app's.
+	//
+	// ctrl+alt+a is the alias for a screen that captures every keystroke. An embedded
+	// editor's Filtering() is unconditionally true, so bare "a" is text there and the
+	// picker is unreachable — in a chrome-less single-pane launch, unreachable at all. A
+	// modified key passes the capture gates (see modifiedKey), which is the same reason
+	// Unwind carries alt+u beside u. It rides the ESC-prefixed control byte, so like every
+	// other alt chord it needs the terminal's option-as-meta setting; "a" stays primary
+	// and the help label names it alone.
+	Actions: key.NewBinding(key.WithKeys("a", "ctrl+alt+a"), key.WithHelp("a", "actions")),
 
 	// The shift+arrows used to alias these. They belong to the focused screen now —
 	// an editor selects text with them (editor.Screen.selectMove) — so the
