@@ -1,9 +1,6 @@
 package editor
 
-import (
-	"strings"
-	"unicode"
-)
+import "unicode"
 
 // Word and line motion for Screen, mirroring the bubbles/textinput KeyMap so the
 // alt+arrow / ctrl+w chords behave the way they do in a plain input.
@@ -14,18 +11,11 @@ import (
 // alnum/punct classes — keep it stupidly simple).
 func isWordSpace(r rune) bool { return unicode.IsSpace(r) }
 
-// isBackwardDeleteSymbol marks punctuation that forms its own token for
-// alt+backspace/ctrl+w. Word movement and forward deletion keep their existing
-// whitespace-only behavior; this is intentionally the narrower editing gesture the
-// user invokes when peeling a path or expression apart from right to left.
-func isBackwardDeleteSymbol(r rune) bool {
-	return strings.ContainsRune("()[]{}.,|/", r)
-}
-
-// editorWordClass groups runes for double-click selection. The whitespace-only split
-// word movement uses is too coarse here — it would take all of "foo.bar(baz)" as one
-// word — so punctuation forms its own runs and a double-click on the '.' in "foo.bar"
-// takes just the dot.
+// editorWordClass groups runes into whitespace / word (letters, digits, '_') / everything
+// else. It is the notion of a word that double-click selection and backward word deletion
+// share; the whitespace-only split word movement uses is too coarse for both — it would
+// take all of "foo.bar(baz)" as one word — so punctuation forms its own runs and a
+// double-click on the '.' in "foo.bar" takes just the dot.
 func editorWordClass(r rune) int {
 	switch {
 	case isWordSpace(r):
@@ -59,9 +49,12 @@ func wordBoundsAt(line []rune, col int) (int, int) {
 	return from, to
 }
 
-// wordBackPos is the position WordBackward would move to from the cursor: at column 0
-// the previous line's end (the caller treats that one as a plain join/move), else
-// past any spaces then the word before them.
+// wordBackPos is the position WordBackward would move to from the cursor: at column 0 the
+// previous line's end (the caller treats that one as a plain move), else back over the word
+// runes left of the caret and then over the spaces before them. It lands on the BACK of the
+// previous word ("foo bar|"), mirroring wordForwardPos landing on the FRONT of the next one
+// ("foo |bar") — so the two stop on opposite sides of a gap, and a left/right round trip from
+// a word front toggles across it rather than returning.
 func (s *Screen) wordBackPos() (int, int) {
 	y, x := s.curY, s.curX
 	if x == 0 {
@@ -71,10 +64,10 @@ func (s *Screen) wordBackPos() (int, int) {
 		return y - 1, len(s.lines[y-1])
 	}
 	line := s.lines[y]
-	for x > 0 && isWordSpace(line[x-1]) {
+	for x > 0 && !isWordSpace(line[x-1]) {
 		x--
 	}
-	for x > 0 && !isWordSpace(line[x-1]) {
+	for x > 0 && isWordSpace(line[x-1]) {
 		x--
 	}
 	return y, x
@@ -100,11 +93,11 @@ func (s *Screen) wordForwardPos() (int, int) {
 	return y, x
 }
 
-// deleteWordBackPos is wordBackPos with punctuation-aware token boundaries. It
-// preserves the existing whitespace rule (trailing spaces are removed together with
-// the token before them), then removes either one run of configured symbols or one
-// run of ordinary word characters. Thus repeated alt+backspace on "file.md" removes
-// "md", then ".", then "file".
+// deleteWordBackPos is the position alt+backspace deletes back to: one run of same-class
+// runes, the classes being editorWordClass's. Unlike wordBackPos, whitespace is a token of
+// its own, so a press with space before the caret eats only the space and stops at the text
+// and the next press takes the word. Symbol runs likewise stand alone, so repeated presses
+// peel "src/foo.md" apart as "md", ".", "foo", "/", "src".
 func (s *Screen) deleteWordBackPos() (int, int) {
 	y, x := s.curY, s.curX
 	if x == 0 {
@@ -114,19 +107,8 @@ func (s *Screen) deleteWordBackPos() (int, int) {
 		return y - 1, len(s.lines[y-1])
 	}
 	line := s.lines[y]
-	for x > 0 && isWordSpace(line[x-1]) {
-		x--
-	}
-	if x == 0 {
-		return y, x
-	}
-	if isBackwardDeleteSymbol(line[x-1]) {
-		for x > 0 && isBackwardDeleteSymbol(line[x-1]) {
-			x--
-		}
-		return y, x
-	}
-	for x > 0 && !isWordSpace(line[x-1]) && !isBackwardDeleteSymbol(line[x-1]) {
+	class := editorWordClass(line[x-1])
+	for x > 0 && editorWordClass(line[x-1]) == class {
 		x--
 	}
 	return y, x

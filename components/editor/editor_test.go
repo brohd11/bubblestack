@@ -87,6 +87,7 @@ func TestEditorSelectionEditing(t *testing.T) {
 		{"backspace deletes", keyMsg("backspace"), "aef"},
 		{"delete deletes", keyMsg("delete"), "aef"},
 		{"word delete deletes", keyMsg("ctrl+w"), "aef"},
+		{"line-start delete deletes", keyMsg("ctrl+alt+backspace"), "aef"},
 		{"line delete deletes", keyMsg("ctrl+k"), "aef"},
 	}
 	for _, tc := range tests {
@@ -818,9 +819,14 @@ func TestEditorWordDelete(t *testing.T) {
 		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foo r baz")
 	}
 
-	// At a word start (after spaces): deletes the PREVIOUS word and the spaces.
+	// At a word start (after spaces): the run of spaces is a token of its own, so the
+	// first press stops at the previous word and the second takes it.
 	s.setContent("foo   bar")
 	s.curY, s.curX = 0, 6
+	s.key(nil, keyMsg("ctrl+w"))
+	if got := buffer(s); got != "foobar" {
+		t.Fatalf("ctrl+w on spaces: buffer = %q, want %q", got, "foobar")
+	}
 	s.key(nil, keyMsg("ctrl+w"))
 	if got := buffer(s); got != "bar" {
 		t.Fatalf("ctrl+w past spaces: buffer = %q, want %q", got, "bar")
@@ -864,12 +870,60 @@ func TestEditorWordDelete(t *testing.T) {
 	}
 }
 
+// TestEditorClearToLineStart covers the cmd+backspace gesture. ctrl+alt+backspace and
+// ctrl+u are the same action — the chord a terminal reports differs, the behavior does
+// not — so both drive every case. With nothing left of the caret there is only the
+// newline to take, which is the one place this departs from readline's ctrl+u.
+func TestEditorClearToLineStart(t *testing.T) {
+	for _, k := range []string{"ctrl+alt+backspace", "ctrl+u"} {
+		t.Run(k, func(t *testing.T) {
+			s, _ := newEditor(Opts{})
+
+			// Mid-line: the text before the caret goes, the tail stays.
+			s.setContent("hello world")
+			s.curY, s.curX = 0, 5
+			s.key(nil, keyMsg(k))
+			if got := buffer(s); got != " world" {
+				t.Fatalf("mid-line: buffer = %q, want %q", got, " world")
+			}
+			if s.curX != 0 {
+				t.Fatalf("mid-line: curX = %d, want 0", s.curX)
+			}
+
+			// Column 0 with text after it: nothing to clear, so the newline goes and the
+			// line joins the one above.
+			s.setContent("one\ntwo")
+			s.curY, s.curX = 1, 0
+			s.key(nil, keyMsg(k))
+			if got := buffer(s); got != "onetwo" {
+				t.Fatalf("col 0: buffer = %q, want %q", got, "onetwo")
+			}
+
+			// An empty line is that same case: only its newline is left to delete.
+			s.setContent("one\n\ntwo")
+			s.curY, s.curX = 1, 0
+			s.key(nil, keyMsg(k))
+			if got := buffer(s); got != "one\ntwo" {
+				t.Fatalf("empty line: buffer = %q, want %q", got, "one\ntwo")
+			}
+
+			// Start of buffer: nothing before the caret anywhere, so nothing happens.
+			s.setContent("abc")
+			s.curY, s.curX = 0, 0
+			s.key(nil, keyMsg(k))
+			if got := buffer(s); got != "abc" {
+				t.Fatalf("start of buffer: buffer = %q, want %q", got, "abc")
+			}
+		})
+	}
+}
+
 func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 	s, _ := newEditor(Opts{})
 	altBackspace := keyMsg("alt+backspace")
 
-	// Ordinary text stops at the nearest configured symbol; a contiguous symbol run
-	// is its own token, so repeated presses peel an expression apart predictably.
+	// Ordinary text stops at the nearest non-word rune; a contiguous symbol run is its
+	// own token, so repeated presses peel an expression apart predictably.
 	s.setContent("root/foo()[]{}.,|/bar")
 	s.curY, s.curX = 0, len(s.lines[0])
 	for _, want := range []string{
@@ -884,37 +938,47 @@ func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 		}
 	}
 
-	// Trailing whitespace keeps the old behavior: it goes with the token before it,
-	// while text after the cursor remains untouched.
+	// Whitespace is a token of its own: a press with spaces before the caret takes the
+	// spaces and stops at the word, while text after the cursor remains untouched.
 	s.setContent("left/foo.bar   tail")
 	s.curY, s.curX = 0, strings.Index(buffer(s), "tail")
 	s.key(nil, altBackspace)
-	if got, want := buffer(s), "left/foo.tail"; got != want {
-		t.Fatalf("symbol boundary with spaces/suffix = %q, want %q", got, want)
+	if got, want := buffer(s), "left/foo.bartail"; got != want {
+		t.Fatalf("spaces before the caret = %q, want %q", got, want)
 	}
 
-	// The requested list is exact: '-' remains part of an ordinary word.
-	s.setContent("foo-bar")
+	// Any non-word rune delimits, not an authored list — '-' and '#' included.
+	s.setContent("foo-bar #tag")
 	s.curY, s.curX = 0, len(s.lines[0])
-	s.key(nil, altBackspace)
-	if got := buffer(s); got != "" {
-		t.Fatalf("unlisted hyphen should remain within the word, got %q", got)
+	for _, want := range []string{
+		"foo-bar #",
+		"foo-bar ",
+		"foo-bar",
+		"foo-",
+		"foo",
+		"",
+	} {
+		s.key(nil, altBackspace)
+		if got := buffer(s); got != want {
+			t.Fatalf("successive class-run alt+backspace = %q, want %q", got, want)
+		}
 	}
 }
 
-// TestEditorWordNav mirrors textinput's word jumps: alt/ctrl+left goes to the previous
-// word start (wrapping to the previous line's end at column 0), alt/ctrl+right to the
-// next word start (wrapping at end of line).
+// TestEditorWordNav pins the two word jumps and the asymmetry between them: alt/ctrl+left
+// goes to the previous word's END (wrapping to the previous line's end at column 0),
+// alt/ctrl+right to the next word's START (wrapping at end of line). They stop on opposite
+// sides of a gap on purpose — each lands where the text it is heading for begins or ends.
 func TestEditorWordNav(t *testing.T) {
 	s, _ := newEditor(Opts{})
 	s.setContent("foo bar\n  baz quux")
 
 	s.curY, s.curX = 0, 5 // inside "bar"
 	s.key(nil, keyMsg("alt+left"))
-	if s.curX != 4 {
-		t.Fatalf("alt+left to word start: curX = %d, want 4", s.curX)
+	if s.curX != 3 {
+		t.Fatalf("alt+left to the previous word's end: curX = %d, want 3", s.curX)
 	}
-	s.key(nil, keyMsg("alt+left")) // previous word
+	s.key(nil, keyMsg("alt+left")) // no word before "foo": the line start
 	if s.curX != 0 {
 		t.Fatalf("alt+left again: curX = %d, want 0", s.curX)
 	}
@@ -952,8 +1016,8 @@ func TestEditorWordNav(t *testing.T) {
 	// bar advertises only the arrows.
 	s.curY, s.curX = 0, 5 // inside "bar"
 	s.key(nil, keyMsg("alt+b"))
-	if s.curX != 4 {
-		t.Fatalf("alt+b to word start: curX = %d, want 4", s.curX)
+	if s.curX != 3 {
+		t.Fatalf("alt+b to the previous word's end: curX = %d, want 3", s.curX)
 	}
 	s.curY, s.curX = 0, 0
 	s.key(nil, keyMsg("alt+f"))

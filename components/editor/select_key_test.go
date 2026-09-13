@@ -202,9 +202,15 @@ func TestEditorShiftWordSelection(t *testing.T) {
 	if got := s.selectedText(); got != "foo bar " {
 		t.Fatalf("a second ctrl+shift+→ selected %q, want %q", got, "foo bar ")
 	}
+	// Back lands on the previous word's end where forward lands on the next word's start,
+	// so the trailing space is given up on its own press.
 	s.key(nil, keyMsg("ctrl+shift+left"))
-	if got := s.selectedText(); got != "foo " {
-		t.Fatalf("ctrl+shift+← pulled back to %q, want %q", got, "foo ")
+	if got := s.selectedText(); got != "foo bar" {
+		t.Fatalf("ctrl+shift+← pulled back to %q, want %q", got, "foo bar")
+	}
+	s.key(nil, keyMsg("ctrl+shift+left"))
+	if got := s.selectedText(); got != "foo" {
+		t.Fatalf("a second ctrl+shift+← pulled back to %q, want %q", got, "foo")
 	}
 	// All the way back onto the anchor at column 0 — the word chords share the one
 	// anchor with the arrows, so this collapses rather than selecting backwards.

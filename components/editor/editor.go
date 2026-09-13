@@ -1066,7 +1066,7 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	if s.selectionActive() {
 		switch k {
 		case "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
-			"alt+delete", "alt+d", "ctrl+u", "ctrl+k":
+			"alt+delete", "alt+d", "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h", "ctrl+k":
 			s.deleteSelection()
 			s.wrapDirty = true
 			s.clampScroll()
@@ -1141,9 +1141,19 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 		s.deleteWordBack()
 	case "alt+delete", "alt+d":
 		s.deleteWordForward()
-	case "ctrl+u":
-		s.deleteRange(s.curY, 0, s.curY, s.curX)
-		s.curX, s.wantX = 0, 0
+	// cmd+backspace's gesture: clear the line up to the caret. With nothing left of the
+	// caret there is only the newline to take, so it joins like backspace rather than
+	// doing readline's nothing — ctrl+u goes with it so every chord here is one action.
+	// ctrl+alt+h is what ctrl+alt+backspace decodes to on a terminal that sends BS for
+	// ctrl+backspace; ctrl+u is the one that also arrives in Terminal.app, which reports
+	// no modified backspace at all.
+	case "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h":
+		if s.curX == 0 {
+			s.backspace() // joins, and is already a no-op at the start of the buffer
+		} else {
+			s.deleteRange(s.curY, 0, s.curY, s.curX)
+			s.curX, s.wantX = 0, 0
+		}
 	case "ctrl+k":
 		if s.curX < len(s.lines[s.curY]) {
 			s.deleteRange(s.curY, s.curX, s.curY, len(s.lines[s.curY]))
@@ -1237,6 +1247,11 @@ func (s *Screen) HelpBindings() []key.Binding {
 		// alt chords (gote's ? overlay) then reads in one notation throughout.
 		key.NewBinding(key.WithKeys("alt+left", "alt+right", "alt+b", "alt+f"), key.WithHelp("alt+←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("alt+backspace", "del word")),
+		// Helped as the chord pressed, like ctrl+/ above: ctrl+alt+h is only the name the
+		// bytes decode to on a terminal without the Kitty protocol, and ctrl+u is the
+		// readline spelling that also arrives where no modified backspace does.
+		key.NewBinding(key.WithKeys("ctrl+alt+backspace", "ctrl+alt+h", "ctrl+u"),
+			key.WithHelp("ctrl+alt+backspace", "clear to line start")),
 		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("alt+c", "copy")),
 		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("alt+x", "cut")),
 		key.NewBinding(key.WithKeys("alt+v"), key.WithHelp("alt+v", "paste")),

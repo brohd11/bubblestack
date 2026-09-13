@@ -142,6 +142,7 @@ func TestEditorUndoCoversDeletionFamilies(t *testing.T) {
 		keyMsg("backspace"),
 		keyMsg("delete"),
 		keyMsg("ctrl+w"),
+		keyMsg("ctrl+alt+backspace"),
 		keyMsg("ctrl+k"),
 	} {
 		s, _ := newEditor(Opts{})
