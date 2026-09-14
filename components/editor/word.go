@@ -94,10 +94,10 @@ func (s *Screen) wordForwardPos() (int, int) {
 }
 
 // deleteWordBackPos is the position alt+backspace deletes back to: one run of same-class
-// runes, the classes being editorWordClass's. Unlike wordBackPos, whitespace is a token of
-// its own, so a press with space before the caret eats only the space and stops at the text
-// and the next press takes the word. Symbol runs likewise stand alone, so repeated presses
-// peel "src/foo.md" apart as "md", ".", "foo", "/", "src".
+// runes, the classes being editorWordClass's, plus any whitespace before that run on the
+// same line. A press with whitespace before the caret takes only the whitespace and stops
+// at the text. Word and symbol runs stay separate, so repeated presses peel "src/foo.md"
+// apart as "md", ".", "foo", "/", "src".
 func (s *Screen) deleteWordBackPos() (int, int) {
 	y, x := s.curY, s.curX
 	if x == 0 {
@@ -109,6 +109,9 @@ func (s *Screen) deleteWordBackPos() (int, int) {
 	line := s.lines[y]
 	class := editorWordClass(line[x-1])
 	for x > 0 && editorWordClass(line[x-1]) == class {
+		x--
+	}
+	for x > 0 && isWordSpace(line[x-1]) {
 		x--
 	}
 	return y, x

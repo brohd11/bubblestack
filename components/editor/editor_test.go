@@ -804,19 +804,19 @@ func TestEditorUnfocusedRender(t *testing.T) {
 	}
 }
 
-// TestEditorWordDelete mirrors bubbles/textinput's word/line deletes: alt+backspace
-// (and ctrl+w) delete the word before the cursor, joining at column 0; alt+delete
+// TestEditorWordDelete covers word/line deletes: alt+backspace (and ctrl+w) delete
+// the run before the cursor with its preceding whitespace, joining at column 0; alt+delete
 // deletes the word ahead, pulling the next line up at end of line; ctrl+u/ctrl+k
 // delete to the line start/end.
 func TestEditorWordDelete(t *testing.T) {
 	s, _ := newEditor(Opts{})
 
-	// Mid-word: alt+backspace deletes back to the word start.
+	// Mid-word: alt+backspace deletes the fragment and its preceding whitespace.
 	s.setContent("foo bar baz")
 	s.curY, s.curX = 0, 6 // inside "bar", after the 'a'
 	s.key(nil, keyMsg("alt+backspace"))
-	if got := buffer(s); got != "foo r baz" {
-		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foo r baz")
+	if got := buffer(s); got != "foor baz" {
+		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foor baz")
 	}
 
 	// At a word start (after spaces): the run of spaces is a token of its own, so the
@@ -918,6 +918,74 @@ func TestEditorClearToLineStart(t *testing.T) {
 	}
 }
 
+func TestEditorBackwardWordDeleteWhitespace(t *testing.T) {
+	// The marker records the caret independently of byte offsets, including Unicode.
+	parseCaret := func(marked string) (string, textPos) {
+		before, after, ok := strings.Cut(marked, "|")
+		if !ok {
+			t.Fatalf("missing caret in %q", marked)
+		}
+		rows := strings.Split(before, "\n")
+		return before + after, textPos{len(rows) - 1, len([]rune(rows[len(rows)-1]))}
+	}
+	for _, k := range []string{"alt+backspace", "ctrl+w"} {
+		for _, tc := range []struct {
+			name, before, after string
+		}{
+			{"trailing spaces", "my text is here                     |", "my text is here|"},
+			{"word and space", "my text is here|", "my text is|"},
+			{"mid-word", "foo ba|r", "foo|r"},
+			{"spaces before tail", "foo   |bar", "foo|bar"},
+			{"word before tail", "foo   bar| baz", "foo| baz"},
+			{"tabs", "foo\t\tbar|", "foo|"},
+			{"unicode whitespace", "é\u00a0\u2003猫| tail", "é| tail"},
+			{"mixed trailing whitespace", "é \t\u2003|tail", "é|tail"},
+			{"punctuation and spaces", "foo  #|tag", "foo|tag"},
+			{"indented word", "previous\n\t  word|", "previous\n|"},
+			{"indentation only", "previous\n\t  |tail", "previous\n|tail"},
+			{"newline", "here\n|", "here|"},
+			{"newline after spaces", "here   \n|tail", "here   |tail"},
+			{"blank line", "here\n\n|tail", "here\n|tail"},
+			{"line start boundary", "here\nword|", "here\n|"},
+			{"buffer start", "|word", "|word"},
+			{"empty buffer", "|", "|"},
+		} {
+			t.Run(k+"/"+tc.name, func(t *testing.T) {
+				s, _ := newEditor(Opts{})
+				before, start := parseCaret(tc.before)
+				after, end := parseCaret(tc.after)
+				s.setContent(before)
+				s.curY, s.curX, s.wantX = start.y, start.x, start.x
+				check := func(want string, pos textPos) {
+					t.Helper()
+					if got := buffer(s); got != want {
+						t.Fatalf("buffer = %q, want %q", got, want)
+					}
+					if s.curY != pos.y || s.curX != pos.x || s.wantX != pos.x {
+						t.Fatalf("caret = (%d,%d), wantX = %d; want (%d,%d)",
+							s.curY, s.curX, s.wantX, pos.y, pos.x)
+					}
+				}
+				s.key(nil, keyMsg(k))
+				check(after, end)
+				if before == after {
+					if s.dirty || len(s.undoStack) != 0 {
+						t.Fatal("no-op deletion must stay clean without adding history")
+					}
+					return
+				}
+				if len(s.undoStack) != 1 {
+					t.Fatalf("deletion history = %d, want one undo step", len(s.undoStack))
+				}
+				undoEditor(s)
+				check(before, start)
+				redoEditor(s)
+				check(after, end)
+			})
+		}
+	}
+}
+
 func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 	s, _ := newEditor(Opts{})
 	altBackspace := keyMsg("alt+backspace")
@@ -952,7 +1020,6 @@ func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 	s.curY, s.curX = 0, len(s.lines[0])
 	for _, want := range []string{
 		"foo-bar #",
-		"foo-bar ",
 		"foo-bar",
 		"foo-",
 		"foo",
