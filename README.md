@@ -15,8 +15,12 @@ optional header/output/status chrome, a theme, and its tabs, and `bubblestack.Ru
 - **`sysopen/`** — hand a path/URL/directory to the OS: `Path` (file manager), `URL` (browser),
   `Terminal(dir, command...)` (an emulator at `dir`, optionally running a command) and
   `TerminalInline(dir, command...)` (the same, but borrowing the running program's own tty via
-  `tea.ExecProcess` — the TUI suspends and is restored on exit, so no window is spawned).
+  Bubble Tea's exec handoff — the TUI suspends and is restored on exit, so no window is spawned).
   Returns a `core.Action`; cross-platform, with the launched terminal always rooted at `dir`.
+  Use `TerminalInlineFor(appName, dir, command...)` to name the return destination. Interactive
+  zsh, bash and fish sessions show `[gofer → repoview] exit returns to repoview` above each
+  prompt; other shells show it once on entry. Startup integration is temporary and leaves
+  dotfiles untouched. Explicit commands run directly without prompt integration.
 
 Used by [gdaddon](https://github.com/brohd11/gdaddon) and
 [repoview](https://github.com/brohd11/repoview).

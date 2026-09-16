@@ -14,6 +14,7 @@ package sysopen
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -104,21 +105,33 @@ func Terminal(dir string, command ...string) core.Action {
 // of Terminal — no window is created, so the user lands back on the screen they left
 // rather than accumulating detached windows for a two-command detour.
 //
-// With a command it runs that command instead of a shell (still rooted at dir), matching
-// Terminal's variadic. Unlike Terminal there is no pre-launch status: the screen is about
-// to disappear, so the only line the user reads is the one written when the child exits.
+// Interactive shells show the app context above each prompt in zsh, bash and fish.
+// Other shells get an entry reminder. Use TerminalInlineFor to supply a stable app name.
+// With a command it runs that command directly instead, without shell integration.
 func TerminalInline(dir string, command ...string) core.Action {
+	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
+	return TerminalInlineFor(name, dir, command...)
+}
+
+// TerminalInlineFor is TerminalInline with an explicit name for the app to return to.
+// App names accumulate in the child environment when apps open nested shells; exiting
+// a shell leaves the parent environment and its prompt untouched.
+func TerminalInlineFor(appName, dir string, command ...string) core.Action {
 	if _, err := os.Stat(dir); err != nil {
 		return core.SetStatusAndLog("path not found: " + dir)
 	}
 	cmd := inlineCmd(command)
 	cmd.Dir = dir
-	return core.Async(tea.ExecProcess(cmd, func(err error) tea.Msg {
+	report := func(err error) tea.Msg {
 		if err != nil {
 			return core.SetStatusAndLog("terminal at " + dir + ": " + err.Error()).Msg
 		}
 		return core.SetStatus("terminal at " + dir + " closed").Msg
-	}))
+	}
+	if len(command) == 0 {
+		return core.Async(tea.Exec(&inlineShell{Cmd: cmd, appName: appName}, report))
+	}
+	return core.Async(tea.ExecProcess(cmd, report))
 }
 
 // inlineCmd builds the child for TerminalInline: the user's shell when command is empty,
