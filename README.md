@@ -9,7 +9,7 @@ optional header/output/status chrome, a theme, and its tabs, and `bubblestack.Ru
   the `Screen` interface and optional capabilities (Receiver/Crumber/Overlayer/…), a theme
   registry, and layout/help/style helpers.
 - **`components/`** — reusable screens configured by closures: a self-dispatching list `Item`,
-  `PickerScreen`, `DialogScreen`, `MenuScreen` (the floating dropdown/context menu),
+  `PickerScreen`, `RootListScreen`, `DialogScreen`, `MenuScreen` (the floating dropdown/context menu),
   `LoadingScreen`, `TaskScreen`, `FormScreen`, `DocScreen`, and the default
   `LogPane`/`StatusLine`.
 - **`sysopen/`** — hand a path/URL/directory to the OS: `Path` (file manager), `URL` (browser),
@@ -28,6 +28,29 @@ Used by [gdaddon](https://github.com/brohd11/gdaddon) and
 ```go
 import "github.com/brohd11/bubblestack"
 ```
+
+### List screens
+
+`components.NewPicker(items, PickerOpts{Title: "Choose"})` builds a pushed list;
+`components.NewRootList(items, RootListOpts{PickerOpts: PickerOpts{Title: "Browse"}})`
+builds a tab root. Both start expanded and support `D` to toggle one-line rows by
+default. Set `Compact: true` to start compact, `DensityKey` to customize the key,
+or `DisableDensityToggle: true` to remove the key and its full-help entry.
+
+The root shares the picker's rendering, filtering, mouse handling, theme styling,
+and sizing. It uses tabbed help and a `Tab` breadcrumb, leaves quitting to the
+router, and does not pop on Back. Its unhandled `OnKey` calls fall through to row
+`Keys`; a picker's `OnKey` continues to replace row key handling.
+
+Use `RootListOpts.Init` for async startup work, `Refresh` to rebuild rows on a
+broadcast, and `Receive` for broadcasts that return actions. Theme styling and
+`Refresh` run before `Receive`. `List()` exposes selection and title customization;
+use `SetItems()` to replace rows without losing an active filter.
+
+Set `RootListOpts.CompactState` to an app-owned `*bool` to share density across
+tabs and retain it when roots are reconstructed. Its value overrides `Compact`;
+the component writes through on toggles and reconciles other roots during sizing.
+Without it, density belongs to the screen instance.
 
 `components.NewModularScreen` arranges panels as columns of weighted rows.
 For nested arrangements, `components.NewModularLayout` accepts horizontal and

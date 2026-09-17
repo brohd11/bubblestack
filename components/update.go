@@ -68,6 +68,15 @@ func QueryUpdate(s Typable, msg tea.Msg) (tea.Cmd, bool) {
 // The dispatch skeleton itself (wheel/filter/key order) is listDispatch; what makes
 // a root a root is only the two hooks below.
 func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
+	return RootUpdateRows(sh, l, msg, listItemRows)
+}
+
+// RootUpdateRows is RootUpdate for a root whose row height is not the default delegate's —
+// a tab root carrying a Density, which renders one row per item when it is compact. The two
+// stand to each other as listDispatch and listDispatchRows do, and for the same reason: the
+// row height is only read by mouse hit-testing, and a click divided by the wrong one lands
+// on a different item than the one under the pointer. Pass Density.ItemRows().
+func RootUpdateRows(sh *core.Shared, l *list.Model, msg tea.Msg, itemRows int) core.Action {
 	onSelect := func() core.Action {
 		if pick := itemPick(l.SelectedItem()); pick != nil {
 			sh.ClearStatus()
@@ -83,7 +92,7 @@ func RootUpdate(sh *core.Shared, l *list.Model, msg tea.Msg) core.Action {
 		}
 		return core.Action{}, false
 	}
-	return listDispatch(sh, l, msg, sh.BodyY(), onSelect, onKey)
+	return listDispatchRows(sh, l, msg, sh.BodyY(), itemRows, onSelect, onKey, nil)
 }
 
 func itemPick(item list.Item) func(*core.Shared) core.Action {

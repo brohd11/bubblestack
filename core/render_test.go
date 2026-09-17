@@ -646,3 +646,53 @@ func colorSeq(t *testing.T, c color.Color) string {
 	}
 	return seq
 }
+
+// describedItem satisfies bubbles' list.DefaultItem and nothing else — the shape of every
+// row that renders under the three-row delegate but knows nothing about SuffixItem.
+type describedItem struct{ title, desc string }
+
+func (i describedItem) Title() string       { return i.title }
+func (i describedItem) Description() string { return i.desc }
+func (i describedItem) FilterValue() string { return i.title }
+
+// TestCompactDelegateFallsBackToDescription: a compact list renders a plain DefaultItem,
+// with its description standing in for the suffix. This is what lets ONE list flip between
+// the two densities — before it, CompactDelegate.Render silently drew nothing for a row
+// that had no SuffixText, so a flipped list went blank.
+func TestCompactDelegateFallsBackToDescription(t *testing.T) {
+	got := renderCompact(t, nil, 40, describedItem{title: "alpha", desc: "first"})
+	if !strings.Contains(got, "alpha") {
+		t.Fatalf("a DefaultItem must render compactly, got %q", got)
+	}
+	if !strings.Contains(got, "first") {
+		t.Errorf("the description should stand in for the suffix, got %q", got)
+	}
+}
+
+// TestCompactTextPrefersSuffixText: a row carrying both contracts is not silently switched
+// to its description — an explicit SuffixText is the more specific answer and wins.
+func TestCompactTextPrefersSuffixText(t *testing.T) {
+	both := struct {
+		marqueeItem
+		desc string
+	}{marqueeItem{title: "alpha", suffix: "chosen"}, "ignored"}
+
+	got := renderCompact(t, nil, 40, both)
+	if !strings.Contains(got, "chosen") || strings.Contains(got, "ignored") {
+		t.Errorf("SuffixText should outrank Description, got %q", got)
+	}
+}
+
+// TestCompactMarqueeRejectsUnrenderableRow: a row neither delegate can draw reports ok=false
+// rather than an empty row that looks like it fits, so ListPanel's marquee clock and the
+// delegate keep agreeing about which rows move.
+func TestCompactMarqueeRejectsUnrenderableRow(t *testing.T) {
+	if _, over := CompactMarquee(bareItem{}, 10); over {
+		t.Error("a row with no Title/Description contract must not report overflow")
+	}
+}
+
+// bareItem satisfies list.Item alone — no Title, no Description, no SuffixText.
+type bareItem struct{}
+
+func (bareItem) FilterValue() string { return "" }

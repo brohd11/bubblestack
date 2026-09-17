@@ -200,12 +200,11 @@ func (p *ListPanel) marqueeOverflow() (int, bool) {
 	if p.marqueeID == 0 || p.list.FilterState() != list.Unfiltered {
 		return 0, false
 	}
-	i, ok := p.list.SelectedItem().(core.SuffixItem)
-	if !ok {
-		return 0, false
-	}
 	tw := core.CompactTextWidth(p.list.Width())
-	row, over := core.CompactMarquee(i, tw)
+	// CompactMarquee resolves the row's contract itself (SuffixItem, else list.DefaultItem),
+	// and reports ok=false for a row neither delegate can render — so the panel driving the
+	// clock and the delegate fitting the row cannot disagree about which rows move.
+	row, over := core.CompactMarquee(p.list.SelectedItem(), tw)
 	if !over {
 		return 0, false
 	}

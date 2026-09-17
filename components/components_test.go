@@ -8,6 +8,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 	"github.com/brohd11/bubblestack/internal/tuitest"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -467,4 +468,257 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// ---------- PickerScreen density ----------
+
+// densityPicker is the shared fixture: four described rows, the framework chord bound, and
+// a real allocation, since pagination (and therefore every row-geometry assertion below)
+// is derived from one.
+func densityPicker(t *testing.T, opts PickerOpts) (*PickerScreen, *core.Shared) {
+	t.Helper()
+	opts.Title = "T"
+	p := NewPicker([]list.Item{
+		Item{Name: "alpha", Desc: "first"},
+		Item{Name: "beta", Desc: "second"},
+		Item{Name: "gamma", Desc: "third"},
+		Item{Name: "delta", Desc: "fourth"},
+	}, opts)
+	sh := core.NewShared(nil)
+	p.SetSize(sh, 40, 12)
+	return p, sh
+}
+
+// lineWith returns the first rendered line containing want, so a test can ask whether two
+// strings share a row without counting rows itself.
+func lineWith(view, want string) string {
+	for _, ln := range strings.Split(view, "\n") {
+		if strings.Contains(ln, want) {
+			return ln
+		}
+	}
+	return ""
+}
+
+// TestPickerCompactPutsDescriptionOnTheTitleLine is the feature in one assertion, and the
+// regression guard for core.compactText: a plain components.Item implements no SuffixText,
+// so before the fallback core.CompactDelegate rendered nothing at all for these rows.
+func TestPickerCompactPutsDescriptionOnTheTitleLine(t *testing.T) {
+	compact, _ := densityPicker(t, PickerOpts{Compact: true})
+	sh := core.NewShared(nil)
+
+	line := lineWith(compact.View(sh), "alpha")
+	if line == "" {
+		t.Fatal("a compact picker must render a plain Item; it has no SuffixText method")
+	}
+	if !strings.Contains(line, "first") {
+		t.Errorf("compact should carry the description as a suffix on the title line, got %q", line)
+	}
+
+	normal, _ := densityPicker(t, PickerOpts{})
+	if line := lineWith(normal.View(sh), "alpha"); strings.Contains(line, "first") {
+		t.Errorf("the default density keeps the description on its own row, got %q", line)
+	}
+}
+
+// TestPickerDensityKeyToggles checks the chord flips both ways and that the flip is
+// structural, not just cosmetic: a one-row delegate fits strictly more rows per page.
+func TestPickerDensityKeyToggles(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{})
+	wide := p.list.Paginator.PerPage
+
+	p.Update(sh, keyMsg("D"))
+	if !p.Compact() {
+		t.Fatal("the density key should flip the picker to compact")
+	}
+	if p.list.Paginator.PerPage <= wide {
+		t.Errorf("a one-row delegate should fit more rows per page, got %d want >%d",
+			p.list.Paginator.PerPage, wide)
+	}
+	if line := lineWith(p.View(sh), "alpha"); !strings.Contains(line, "first") {
+		t.Errorf("after the flip the description should be a suffix, got %q", line)
+	}
+
+	p.Update(sh, keyMsg("D"))
+	if p.Compact() {
+		t.Fatal("the density key should flip back")
+	}
+	if p.list.Paginator.PerPage != wide {
+		t.Errorf("flipping back should restore the original pagination, got %d want %d",
+			p.list.Paginator.PerPage, wide)
+	}
+}
+
+func TestPickerDisabledDensityKeyIsInert(t *testing.T) {
+	p := NewPicker([]list.Item{Item{Name: "alpha", Desc: "first"}}, PickerOpts{
+		Title: "T", DisableDensityToggle: true, DensityKey: DefaultDensityKey,
+	})
+	sh := core.NewShared(nil)
+	p.SetSize(sh, 40, 12)
+
+	p.Update(sh, keyMsg("D"))
+	if p.Compact() {
+		t.Error("D must do nothing when density toggling is disabled")
+	}
+	for _, b := range p.list.AdditionalFullHelpKeys() {
+		if b.Help().Desc == "density" {
+			t.Error("a picker with a disabled density key must not advertise one")
+		}
+	}
+}
+
+func TestPickerCustomDensityKey(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{DensityKey: key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "density"))})
+	p.Update(sh, keyMsg("D"))
+	if p.Compact() {
+		t.Fatal("a custom density key replaces the default")
+	}
+	p.Update(sh, keyMsg("X"))
+	if !p.Compact() {
+		t.Fatal("the custom density key should toggle")
+	}
+	for _, b := range p.list.AdditionalFullHelpKeys() {
+		if b.Help().Desc == "density" && b.Help().Key != "X" {
+			t.Errorf("density help should advertise X, got %q", b.Help().Key)
+		}
+	}
+}
+
+func TestPickerDefaultDensityKeyIsFilterText(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{})
+	p.Update(sh, keyMsg("/"))
+	p.Update(sh, keyMsg("D"))
+	if p.Compact() || p.list.FilterValue() != "D" {
+		t.Fatalf("D should stay filter text: compact=%v, query=%q", p.Compact(), p.list.FilterValue())
+	}
+}
+
+// TestPickerDensityKeepsCursorAndFilter: the flip is a SetDelegate, not a rebuild, so
+// unlike FilePanel.SetCompact even an applied /-filter survives it.
+func TestPickerDensityKeepsCursorAndFilter(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{})
+	p.list.SetFilterText("a") // alpha, beta, gamma, delta all match
+	p.list.Select(2)
+	before := p.list.SelectedItem()
+
+	p.Update(sh, keyMsg("D"))
+
+	if p.list.FilterState() != list.FilterApplied {
+		t.Errorf("an applied filter should survive the flip, got %v", p.list.FilterState())
+	}
+	if p.list.FilterValue() != "a" {
+		t.Errorf("the filter query should survive the flip, got %q", p.list.FilterValue())
+	}
+	if got := p.list.SelectedItem(); !reflect.DeepEqual(got, before) {
+		t.Errorf("the cursor should hold still across the flip, got %v want %v", got, before)
+	}
+}
+
+// TestPickerCompactClickSelectsClickedRow guards the listDispatchRows swap: a compact list
+// hit-tested with the three-row constant would select a row three places off.
+func TestPickerCompactClickSelectsClickedRow(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{Compact: true})
+	// Rows start below the titled list's two-row header and are one row tall each.
+	p.Update(sh, tea.MouseClickMsg{X: 5, Y: 2 + 2, Button: tea.MouseLeft})
+	if p.list.Index() != 2 {
+		t.Fatalf("a click on the third compact row should select item 2, got %d", p.list.Index())
+	}
+}
+
+// TestPickerOnKeyOutranksDensity: the flip is matched after the screen's own hooks, so a
+// consumer that already binds the chord keeps it.
+func TestPickerOnKeyOutranksDensity(t *testing.T) {
+	claimed := false
+	p, sh := densityPicker(t, PickerOpts{
+		OnKey: func(_ *core.Shared, k string, _ list.Item) (core.Action, bool) {
+			if k == "D" {
+				claimed = true
+				return core.Action{}, true
+			}
+			return core.Action{}, false
+		},
+	})
+	p.Update(sh, keyMsg("D"))
+	if !claimed {
+		t.Fatal("OnKey should be offered the density chord first")
+	}
+	if p.Compact() {
+		t.Error("a key claimed by OnKey must not also flip the density")
+	}
+}
+
+// TestPickerDensityKeyIsFullHelpOnly: a density flip is a command, so it belongs in the (?)
+// menu and never on the bar (core.ShortHelp's short branch is a fixed literal by design).
+func TestPickerDensityKeyIsFullHelpOnly(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{})
+
+	found := false
+	for _, b := range p.list.AdditionalFullHelpKeys() {
+		if b.Help().Desc == "density" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a bound density key should appear in the (?) full help")
+	}
+	if strings.Contains(p.HelpView(sh), "density") {
+		t.Error("the short help bar must stay sparse; density belongs in the (?) menu")
+	}
+}
+
+// TestPickerThemeChangeKeepsDensity: Receive rebuilds the delegate to refresh cached theme
+// colors, and rebuilding the wrong one would silently undo a flip.
+func TestPickerThemeChangeKeepsDensity(t *testing.T) {
+	p, sh := densityPicker(t, PickerOpts{Compact: true})
+	p.Receive(sh, core.MsgThemeChanged{})
+	if !p.Compact() {
+		t.Fatal("a theme broadcast must not reset the density")
+	}
+	if line := lineWith(p.View(sh), "alpha"); !strings.Contains(line, "first") {
+		t.Errorf("the compact delegate should still be live after a theme change, got %q", line)
+	}
+}
+
+// ---------- RootUpdateRows ----------
+
+// TestRootUpdateRowsCompactClick guards the tab-root half of the density work: a compact
+// root hit-tested with the default three-row constant selects a row up to three places off.
+func TestRootUpdateRowsCompactClick(t *testing.T) {
+	items := []list.Item{
+		Item{Name: "alpha", Desc: "first"},
+		Item{Name: "beta", Desc: "second"},
+		Item{Name: "gamma", Desc: "third"},
+	}
+	l := core.NewCompactList(items, "T")
+	var dens Density
+	dens.SetCompact(&l, true)
+	dens.Fit(&l, 40, 12)
+
+	// Rows start below the titled list's two-row header and are one row tall each.
+	RootUpdateRows(core.NewShared(nil), &l, tea.MouseClickMsg{X: 5, Y: 2 + 2, Button: tea.MouseLeft}, dens.ItemRows())
+	if l.Index() != 2 {
+		t.Fatalf("a click on the third compact row should select item 2, got %d", l.Index())
+	}
+}
+
+// TestDensityRestyleKeepsCompact: a screen reacting to a theme change goes through Restyle
+// rather than core.NewDelegate(), so repainting cannot silently undo a flip.
+func TestDensityRestyleKeepsCompact(t *testing.T) {
+	l := core.NewSelectList([]list.Item{Item{Name: "alpha", Desc: "first"}}, "")
+	var dens Density
+	dens.Fit(&l, 40, 12)
+	dens.SetCompact(&l, true)
+	perPage := l.Paginator.PerPage
+
+	dens.Restyle(&l)
+	if !dens.Compact() {
+		t.Fatal("Restyle must not change the density")
+	}
+	if l.Paginator.PerPage != perPage {
+		t.Errorf("Restyle should rebuild the compact delegate, got PerPage %d want %d",
+			l.Paginator.PerPage, perPage)
+	}
+	if got := lineWith(core.RenderList(l), "alpha"); !strings.Contains(got, "first") {
+		t.Errorf("the compact delegate should still be live after Restyle, got %q", got)
+	}
 }

@@ -194,10 +194,37 @@ func NewSelectList(items []list.Item, title string, extra ...key.Binding) list.M
 
 // SuffixItem is the row contract for a compact list. Title is the primary value;
 // SuffixText is optional context rendered after it in the theme's muted color.
+//
+// Implementing it is OPTIONAL: a row that satisfies only bubbles' list.DefaultItem — the
+// Title/Description pair the three-row delegate already requires — renders compactly too,
+// with its description as the suffix (see compactText). That fallback is what lets ONE
+// list flip between the two densities at runtime without its rows knowing: every row that
+// renders under the default delegate renders under this one. Implement SuffixItem when the
+// compact suffix should differ from the description, or when the row has no description at
+// all.
 type SuffixItem interface {
 	list.Item
 	Title() string
 	SuffixText() string
+}
+
+// compactText resolves the two strings a compact row prints from whichever contract the
+// item satisfies: SuffixItem first, then list.DefaultItem with its description standing in
+// for the suffix. ok is false only for a row that also could not render under the default
+// delegate (list.DefaultDelegate.Render early-returns on the same assertion), so the two
+// densities agree exactly about which rows are renderable.
+//
+// It resolves TEXT only. The optional contracts a row may carry alongside — PrefixItem,
+// MarkItem, ColorItem, KeepColorItem — are read off the original item by their own call
+// sites, never through anything this returns.
+func compactText(item list.Item) (title, suffix string, ok bool) {
+	switch i := item.(type) {
+	case SuffixItem:
+		return i.Title(), i.SuffixText(), true
+	case list.DefaultItem:
+		return i.Title(), i.Description(), true
+	}
+	return "", "", false
 }
 
 // MarkItem is an optional second contract a compact row may also satisfy: Mark is a short
@@ -378,26 +405,32 @@ func CompactTextWidth(listWidth int) int {
 // CompactMarquee reports a row's raw pieces and whether they overflow textWidth. It is the
 // single place "does this row need to scroll?" is answered, so the panel that owns the
 // offset and the delegate that consumes it cannot disagree about which rows are moving.
-func CompactMarquee(i SuffixItem, textWidth int) (CompactRow, bool) {
-	r := CompactRow{Title: i.Title()}
-	if p, ok := i.(PrefixItem); ok {
+// It takes a list.Item rather than a SuffixItem so a density-flipping list can measure a
+// row that only implements list.DefaultItem; compactText settles which contract applies.
+// ok is false for a row neither delegate can render.
+func CompactMarquee(item list.Item, textWidth int) (CompactRow, bool) {
+	title, suffix, ok := compactText(item)
+	if !ok {
+		return CompactRow{}, false
+	}
+	r := CompactRow{Title: title}
+	if p, ok := item.(PrefixItem); ok {
 		r.Prefix = p.PrefixText()
 	}
-	if s := i.SuffixText(); s != "" {
-		r.Tail = "  " + s
+	if suffix != "" {
+		r.Tail = "  " + suffix
 	}
 	// Reading the mark here rather than in Render is what keeps the panel driving the
 	// marquee clock and the delegate fitting the row from disagreeing about the width a
 	// marked row has left to scroll in.
-	if m, ok := i.(MarkItem); ok {
+	if m, ok := item.(MarkItem); ok {
 		r.Mark = m.Mark()
 	}
 	return r, r.MarqueeLimit(textWidth) > 0
 }
 
 func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	i, ok := item.(SuffixItem)
-	if !ok || m.Width() <= 0 {
+	if _, _, ok := compactText(item); !ok || m.Width() <= 0 {
 		return
 	}
 
@@ -413,7 +446,7 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 	// Structural prefixes and marks keep their edges while the title and suffix share the
 	// cells between them.
-	raw, over := CompactMarquee(i, textWidth)
+	raw, over := CompactMarquee(item, textWidth)
 	prefix := ansi.Truncate(raw.Prefix, max(textWidth-lipgloss.Width(raw.Mark)-1, 0), "")
 	fitWidth := max(textWidth-lipgloss.Width(prefix)-lipgloss.Width(raw.Mark), 1)
 
