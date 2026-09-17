@@ -14,8 +14,8 @@ type RootListOpts struct {
 	Init    func(*core.Shared) tea.Cmd
 	Receive func(*core.Shared, any) core.Action
 	// CompactState optionally shares an app-owned, session density preference.
-	// Its initial value overrides Compact. Changes reconcile during SetSize,
-	// and toggling or SetCompact writes through to it. Keep it alive across root
+	// It overrides both Compact and the app's core.ListDensityProvider. Lifecycle
+	// calls reconcile it, and toggling or SetCompact writes through. Keep it alive across root
 	// reconstruction to retain the preference after a theme change.
 	CompactState *bool
 }
@@ -45,6 +45,7 @@ func NewRootList(items []list.Item, opts RootListOpts) *RootListScreen {
 }
 
 func (s *RootListScreen) Init(sh *core.Shared) tea.Cmd {
+	s.PickerScreen.Init(sh)
 	if s.init != nil {
 		return s.init(sh)
 	}
@@ -59,6 +60,9 @@ func (s *RootListScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core
 
 func (s *RootListScreen) Receive(sh *core.Shared, payload any) core.Action {
 	s.PickerScreen.Receive(sh, payload)
+	if _, ok := payload.(core.MsgListDensityChanged); ok {
+		return core.Action{}
+	}
 	if s.receive != nil {
 		return s.receive(sh, payload)
 	}

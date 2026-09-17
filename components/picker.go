@@ -27,7 +27,8 @@ type PickerScreen struct {
 	popStop    bool
 
 	// dens owns the delegate/pagination/row-height agreement. RootListScreen can
-	// attach an app-owned preference so root reconstruction retains the choice.
+	// attach an explicit preference; otherwise lifecycle methods resolve one from
+	// the app's optional core.ListDensityProvider.
 	dens         Density
 	densityKey   key.Binding
 	compactState *bool
@@ -52,14 +53,16 @@ type PickerOpts struct {
 
 	// Compact picks the starting row density: the one-line core.CompactDelegate instead of
 	// the default three-row title/description/spacer. DensityKey flips it live;
-	// an unspecified binding defaults to DefaultDensityKey.
+	// an unspecified binding defaults to DefaultDensityKey. An app implementing
+	// core.ListDensityProvider overrides the starting density on first use.
 	//
 	// Rows need no new method: in compact form an item's Description becomes the muted
 	// suffix after its title (core.compactText). A row with a real SuffixText, or with a
 	// prefix, mark or color, keeps all of those — see core.SuffixItem.
 	//
 	// DisableDensityToggle suppresses the built-in key and its help entry, even
-	// with a custom DensityKey. Programmatic density methods remain available.
+	// with a custom DensityKey. The picker still follows an app-wide preference,
+	// and programmatic density methods remain available.
 	Compact              bool
 	DensityKey           key.Binding
 	DisableDensityToggle bool
@@ -139,6 +142,10 @@ func (s *PickerScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 // picker already on the navigation stack. It also lets a picker rebuild its rows
 // on any broadcast claimed by a configured Refresh closure.
 func (s *PickerScreen) Receive(sh *core.Shared, payload any) core.Action {
+	s.syncDensity(sh)
+	if _, ok := payload.(core.MsgListDensityChanged); ok {
+		return core.Action{} // presentation only; never run the data refresh hook
+	}
 	if _, ok := payload.(core.MsgThemeChanged); ok {
 		// Restyle, not SetDelegate(core.NewDelegate()): it rebuilds the CURRENT density's
 		// delegate, so a theme switch cannot silently undo a density the user had flipped.
@@ -158,7 +165,10 @@ func (s *PickerScreen) CrumbLabel(short bool) string {
 	return CrumbSegment(short, s.crumbShort, s.crumb, s.list.Title)
 }
 
-func (s *PickerScreen) Init(*core.Shared) tea.Cmd { return nil }
+func (s *PickerScreen) Init(sh *core.Shared) tea.Cmd {
+	s.syncDensity(sh)
+	return nil
+}
 
 func (s *PickerScreen) Filtering() bool { return s.list.FilterState() == list.Filtering }
 
@@ -169,6 +179,7 @@ func (s *PickerScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 // update shares list dispatch with RootListScreen. Only navigation and hook
 // fallback differ: roots do not pop, and their unhandled keys reach row handlers.
 func (s *PickerScreen) update(sh *core.Shared, msg tea.Msg, root bool) core.Action {
+	s.syncDensity(sh)
 	onSelect := func() core.Action {
 		if s.OnSelect != nil {
 			if root {
@@ -196,6 +207,9 @@ func (s *PickerScreen) update(sh *core.Shared, msg tea.Msg, root bool) core.Acti
 				return core.Action{}, false
 			}
 			s.ToggleDensity()
+			if s.compactState != nil {
+				return core.PropagateAll(core.MsgListDensityChanged{}), true
+			}
 			return core.Action{}, true
 		}
 		if s.OnKey != nil {
@@ -225,9 +239,7 @@ func (s *PickerScreen) View(*core.Shared) string     { return core.RenderList(s.
 func (s *PickerScreen) HelpView(*core.Shared) string { return core.ShortHelp(s.list, core.HelpMinimal) }
 
 func (s *PickerScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
-	if s.compactState != nil {
-		s.dens.SetCompact(&s.list, *s.compactState)
-	}
+	s.syncDensity(sh)
 	s.dens.Fit(&s.list, width, bodyHeight)
 }
 
@@ -245,6 +257,20 @@ func (s *PickerScreen) SetItems(items []list.Item) {
 
 // ---------- density ----------
 
+// syncDensity binds lazily because constructors do not take Shared. An explicit
+// RootListOpts.CompactState wins. Init covers pushed/replaced screens; Receive
+// covers inactive roots; SetSize and Update also support direct component hosts.
+func (s *PickerScreen) syncDensity(sh *core.Shared) {
+	if s.compactState == nil && sh != nil {
+		if app, ok := sh.App.(core.ListDensityProvider); ok {
+			s.compactState = app.ListDensity()
+		}
+	}
+	if s.compactState != nil {
+		s.dens.SetCompact(&s.list, *s.compactState)
+	}
+}
+
 // Compact reports the current row density.
 func (s *PickerScreen) Compact() bool { return s.dens.Compact() }
 
@@ -258,7 +284,8 @@ func (s *PickerScreen) ToggleDensity() {
 }
 
 // SetCompact sets the row density, carrying the cursor, the page and an applied /-filter
-// across the flip. See Density.SetCompact.
+// across the flip. Once bound, it also writes the shared preference. Broadcast
+// core.MsgListDensityChanged afterwards to update other live lists immediately.
 func (s *PickerScreen) SetCompact(compact bool) {
 	if s.compactState != nil {
 		*s.compactState = compact

@@ -47,10 +47,26 @@ broadcast, and `Receive` for broadcasts that return actions. Theme styling and
 `Refresh` run before `Receive`. `List()` exposes selection and title customization;
 use `SetItems()` to replace rows without losing an active filter.
 
-Set `RootListOpts.CompactState` to an app-owned `*bool` to share density across
-tabs and retain it when roots are reconstructed. Its value overrides `Compact`;
-the component writes through on toggles and reconciles other roots during sizing.
-Without it, density belongs to the screen instance.
+Implement `core.ListDensityProvider` on the app context to share density across
+standard roots and pickers, including menus constructed by other packages:
+
+```go
+func (c *Ctx) ListDensity() *bool { return &c.ListCompact }
+```
+
+Keep that pointer stable for the app session. The preference overrides `Compact`
+when a screen first initializes, sizes, receives a broadcast, or handles input.
+Toggling writes through and broadcasts `core.MsgListDensityChanged`; live lists
+update in place without running their `Refresh`/`Receive` callbacks or rebuilding
+roots. New pickers and reconstructed roots inherit the same choice. File panels
+and custom lists do not participate automatically, and nothing is saved to disk.
+
+`RootListOpts.CompactState` remains an explicit override, taking precedence over
+the app provider. Without either, density stays local to the screen. Disabling a
+picker's shortcut still lets it follow the shared preference. After a programmatic
+preference change, return `core.PropagateAll(core.MsgListDensityChanged{})` to
+update existing lists immediately; `SetCompact` and `ToggleDensity` write through
+once the screen has bound its preference through a lifecycle call.
 
 `components.NewModularScreen` arranges panels as columns of weighted rows.
 For nested arrangements, `components.NewModularLayout` accepts horizontal and
