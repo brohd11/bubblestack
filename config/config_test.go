@@ -89,3 +89,77 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Fatalf("Theme = %q, want empty", cfg.Theme)
 	}
 }
+
+func TestListDensityRoundTripPreservesSettings(t *testing.T) {
+	home := withHome(t)
+	dir := filepath.Join(home, ".bubblestack")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yml")
+	if err := os.WriteFile(path, []byte("# shared preferences\nfuture_knob: keepme\ntheme: mono\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, compact := range []bool{true, false} {
+		if err := SaveListDensity(compact); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := ListDensity(); !ok || got != compact {
+			t.Fatalf("ListDensity() = %v, %v; want %v, true", got, ok, compact)
+		}
+		if got := Theme(); got != "mono" {
+			t.Fatalf("density save changed theme to %q", got)
+		}
+		if err := SaveTheme("amber"); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := ListDensity(); !ok || got != compact {
+			t.Fatal("theme save changed density")
+		}
+		out, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, retained := range []string{"# shared preferences", "future_knob: keepme"} {
+			if !strings.Contains(string(out), retained) {
+				t.Fatalf("lost %q in config:\n%s", retained, out)
+			}
+		}
+		if err := SaveTheme("mono"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestListDensityUnavailable(t *testing.T) {
+	for _, content := range []string{"", "theme: mono\n", "list_density: spacious\n", "list_density: [\n"} {
+		t.Run(content, func(t *testing.T) {
+			home := withHome(t)
+			if content != "" {
+				dir := filepath.Join(home, ".bubblestack")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "config.yml"), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, ok := ListDensity(); ok {
+				t.Fatal("missing or invalid density must leave the app default")
+			}
+		})
+	}
+	t.Run("unreadable and unwritable", func(t *testing.T) {
+		home := withHome(t)
+		// A directory at the config path fails reads/writes even when run as root.
+		if err := os.MkdirAll(filepath.Join(home, ".bubblestack", "config.yml"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ListDensity(); ok {
+			t.Fatal("unreadable config must leave the app default")
+		}
+		if err := SaveListDensity(true); err == nil {
+			t.Fatal("expected a save error")
+		}
+	})
+}

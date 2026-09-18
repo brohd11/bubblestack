@@ -86,6 +86,7 @@ type Config struct {
 // the tabs, and blocks on the bubbletea program until the user quits.
 func Run(cfg Config) error {
 	sh := core.NewShared(cfg.App)
+	initListDensity(sh)
 	sh.Chrome = &core.Chrome{Breadcrumb: core.NewBreadcrumbPane(), Output: cfg.Output, Status: cfg.Status}
 	if cfg.Header != nil {
 		sh.Chrome.Header = core.NewHeaderPane(cfg.Header)
@@ -114,4 +115,21 @@ func Run(cfg Config) error {
 	// here before the program starts.
 	_, err := tea.NewProgram(r).Run()
 	return err
+}
+
+// initListDensity runs before any root is constructed. Persistence is an app
+// startup concern: NewShared and screens used directly never touch the config.
+func initListDensity(sh *core.Shared) {
+	app, ok := sh.App.(core.ListDensityProvider)
+	if !ok {
+		return
+	}
+	state := app.ListDensity()
+	if state == nil {
+		return
+	}
+	if compact, saved := config.ListDensity(); saved {
+		*state = compact
+	}
+	sh.SaveListDensity = config.SaveListDensity
 }

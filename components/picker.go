@@ -208,6 +208,12 @@ func (s *PickerScreen) update(sh *core.Shared, msg tea.Msg, root bool) core.Acti
 			}
 			s.ToggleDensity()
 			if s.compactState != nil {
+				// Only app-owned changes are global preferences. An explicit,
+				// independent root override must not overwrite the user's default.
+				if app, ok := sh.App.(core.ListDensityProvider); ok &&
+					app.ListDensity() == s.compactState && sh.SaveListDensity != nil {
+					_ = sh.SaveListDensity(s.Compact())
+				}
 				return core.PropagateAll(core.MsgListDensityChanged{}), true
 			}
 			return core.Action{}, true

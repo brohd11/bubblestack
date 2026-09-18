@@ -16,6 +16,11 @@ import (
 type Shared struct {
 	App    any     // consumer-owned context; recover it with App[T]
 	Chrome *Chrome // optional header/status/output furniture (nil ⇒ fullscreen)
+	// SaveListDensity is wired by bubblestack.Run for participating apps. Standard
+	// lists call it once per user toggle of the app-owned preference. Nil keeps
+	// direct component/router hosts free of persistence side effects. Save failures
+	// do not prevent the live density change, matching theme persistence.
+	SaveListDensity func(compact bool) error
 
 	width  int
 	height int

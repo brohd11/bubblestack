@@ -1,6 +1,7 @@
 package components
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
@@ -19,6 +20,11 @@ func (a *densityApp) Receive(_ *core.Shared, payload any) core.Action {
 func TestSessionDensityAcrossRouterStack(t *testing.T) {
 	app := &densityApp{}
 	sh := core.NewShared(app)
+	var saves []bool
+	sh.SaveListDensity = func(compact bool) error {
+		saves = append(saves, compact)
+		return nil
+	}
 	items := []list.Item{Item{Name: "alpha", Desc: "first"}, Item{Name: "beta", Desc: "second"}}
 	var roots []*RootListScreen
 	refreshes, receives := 0, 0
@@ -90,6 +96,56 @@ func TestSessionDensityAcrossRouterStack(t *testing.T) {
 	step(keyMsg("]"))
 	if !r.Top().(*RootListScreen).Compact() {
 		t.Fatal("switching to a rebuilt inactive root must retain density")
+	}
+	if len(saves) != 3 || !saves[0] || saves[1] || !saves[2] {
+		t.Fatalf("expected one save per user toggle across roots/pickers, got %v", saves)
+	}
+}
+
+func TestDensityPersistenceOwnership(t *testing.T) {
+	for _, kind := range []string{"app", "same override", "independent override", "local", "disabled", "save failure"} {
+		t.Run(kind, func(t *testing.T) {
+			app := &densityApp{}
+			sh := core.NewShared(app)
+			var saves []bool
+			sh.SaveListDensity = func(compact bool) error {
+				saves = append(saves, compact)
+				if kind == "save failure" {
+					return errors.New("unwritable config")
+				}
+				return nil
+			}
+			opts := RootListOpts{}
+			explicit := false
+			switch kind {
+			case "same override":
+				opts.CompactState = &app.compact
+			case "independent override":
+				opts.CompactState = &explicit
+			case "local":
+				sh.App = nil
+			case "disabled":
+				opts.DisableDensityToggle = true
+			}
+			root := NewRootList(nil, opts)
+			root.Init(sh)
+			root.SetSize(sh, 40, 12)
+			root.SetCompact(true)
+			root.ToggleDensity()
+			root.Receive(sh, core.MsgListDensityChanged{})
+			if len(saves) != 0 {
+				t.Fatal("lifecycle and programmatic changes must not save")
+			}
+			_, act := root.Update(sh, keyMsg("D"))
+			wantSave := kind == "app" || kind == "same override" || kind == "save failure"
+			if wantSave {
+				if len(saves) != 1 || !saves[0] || !app.compact || act.Msg == nil {
+					t.Fatalf("user toggle must save once and still broadcast on failure: saves=%v compact=%v action=%v", saves, app.compact, act)
+				}
+			} else if len(saves) != 0 {
+				t.Fatalf("independent or disabled toggle saved app preference: %v", saves)
+			}
+		})
 	}
 }
 

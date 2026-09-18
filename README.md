@@ -33,7 +33,7 @@ import "github.com/brohd11/bubblestack"
 
 `components.NewPicker(items, PickerOpts{Title: "Choose"})` builds a pushed list;
 `components.NewRootList(items, RootListOpts{PickerOpts: PickerOpts{Title: "Browse"}})`
-builds a tab root. Both start expanded and support `D` to toggle one-line rows by
+builds a tab root. Both default to expanded and support `D` to toggle one-line rows by
 default. Set `Compact: true` to start compact, `DensityKey` to customize the key,
 or `DisableDensityToggle: true` to remove the key and its full-help entry.
 
@@ -59,14 +59,23 @@ when a screen first initializes, sizes, receives a broadcast, or handles input.
 Toggling writes through and broadcasts `core.MsgListDensityChanged`; live lists
 update in place without running their `Refresh`/`Receive` callbacks or rebuilding
 roots. New pickers and reconstructed roots inherit the same choice. File panels
-and custom lists do not participate automatically, and nothing is saved to disk.
+and custom lists do not participate automatically.
+
+For participating apps, `bubblestack.Run` restores `list_density: compact` or
+`list_density: expanded` from `~/.bubblestack/config.yml` before constructing roots.
+User toggles save to that same shared config as theme, so the next app launch
+inherits the choice. Missing or invalid preferences retain the app default; save
+failures do not prevent live changes. Running apps keep their own preference until
+restarted. Direct component/router hosts do not read or write this config.
 
 `RootListOpts.CompactState` remains an explicit override, taking precedence over
 the app provider. Without either, density stays local to the screen. Disabling a
 picker's shortcut still lets it follow the shared preference. After a programmatic
 preference change, return `core.PropagateAll(core.MsgListDensityChanged{})` to
 update existing lists immediately; `SetCompact` and `ToggleDensity` write through
-once the screen has bound its preference through a lifecycle call.
+once the screen has bound its preference through a lifecycle call. Programmatic
+changes do not save automatically. An independent `CompactState` override does
+not overwrite the saved app preference.
 
 `components.NewModularScreen` arranges panels as columns of weighted rows.
 For nested arrangements, `components.NewModularLayout` accepts horizontal and
