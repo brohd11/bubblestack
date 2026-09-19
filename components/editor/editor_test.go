@@ -805,18 +805,18 @@ func TestEditorUnfocusedRender(t *testing.T) {
 }
 
 // TestEditorWordDelete covers word/line deletes: alt+backspace (and ctrl+w) delete
-// the run before the cursor with its preceding whitespace, joining at column 0; alt+delete
+// the run before the cursor, preserving preceding whitespace and joining at column 0; alt+delete
 // deletes the word ahead, pulling the next line up at end of line; ctrl+u/ctrl+k
 // delete to the line start/end.
 func TestEditorWordDelete(t *testing.T) {
 	s, _ := newEditor(Opts{})
 
-	// Mid-word: alt+backspace deletes the fragment and its preceding whitespace.
+	// Mid-word: alt+backspace deletes the fragment, preserving preceding whitespace.
 	s.setContent("foo bar baz")
 	s.curY, s.curX = 0, 6 // inside "bar", after the 'a'
 	s.key(nil, keyMsg("alt+backspace"))
-	if got := buffer(s); got != "foor baz" {
-		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foor baz")
+	if got := buffer(s); got != "foo r baz" {
+		t.Fatalf("alt+backspace mid-word: buffer = %q, want %q", got, "foo r baz")
 	}
 
 	// At a word start (after spaces): the run of spaces is a token of its own, so the
@@ -932,17 +932,36 @@ func TestEditorBackwardWordDeleteWhitespace(t *testing.T) {
 		for _, tc := range []struct {
 			name, before, after string
 		}{
+			{"word at end", "my word is|", "my word |"},
+			{"single space before tail", "my word |is", "my |is"},
+			{"single trailing space", "my word |", "my |"},
+			{"two trailing spaces", "my word  |", "my word|"},
+			{"long trailing gap", "my word        |", "my word|"},
 			{"trailing spaces", "my text is here                     |", "my text is here|"},
-			{"word and space", "my text is here|", "my text is|"},
-			{"mid-word", "foo ba|r", "foo|r"},
+			{"word and space", "my text is here|", "my text is |"},
+			{"mid-word", "foo ba|r", "foo |r"},
+			{"two spaces before tail", "foo  |bar", "foo|bar"},
 			{"spaces before tail", "foo   |bar", "foo|bar"},
-			{"word before tail", "foo   bar| baz", "foo| baz"},
-			{"tabs", "foo\t\tbar|", "foo|"},
-			{"unicode whitespace", "é\u00a0\u2003猫| tail", "é| tail"},
+			{"word before tail", "foo   bar| baz", "foo   | baz"},
+			{"tabs before word", "foo\t\tbar|", "foo\t\t|"},
+			{"single tab", "foo\t|bar", "foo|bar"},
+			{"multiple tabs", "foo\t\t|bar", "foo|bar"},
+			{"unicode whitespace before word", "é\u00a0\u2003猫| tail", "é\u00a0\u2003| tail"},
+			{"single nonbreaking space", "é\u00a0|tail", "é|tail"},
+			{"single em space", "é\u2003|tail", "é|tail"},
 			{"mixed trailing whitespace", "é \t\u2003|tail", "é|tail"},
-			{"punctuation and spaces", "foo  #|tag", "foo|tag"},
-			{"indented word", "previous\n\t  word|", "previous\n|"},
+			{"tab then space", "foo\t |tail", "foo|tail"},
+			{"punctuation and spaces", "foo  #|tag", "foo  |tag"},
+			{"space after punctuation", "foo  # |tag", "foo  |tag"},
+			{"bracket boundary", "foo[bar|", "foo[|"},
+			{"parenthesis boundary", "foo(bar |tail", "foo(|tail"},
+			{"brace boundary", "foo{bar|", "foo{|"},
+			{"comma boundary", "foo,bar|", "foo,|"},
+			{"indented word", "previous\n\t  word|", "previous\n\t  |"},
+			{"indented word and space", "previous\n\t  word |", "previous\n\t  |"},
 			{"indentation only", "previous\n\t  |tail", "previous\n|tail"},
+			{"single space at line start", "previous\n |tail", "previous\n|tail"},
+			{"single space only", " |", "|"},
 			{"newline", "here\n|", "here|"},
 			{"newline after spaces", "here   \n|tail", "here   |tail"},
 			{"blank line", "here\n\n|tail", "here\n|tail"},
@@ -1006,7 +1025,7 @@ func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 		}
 	}
 
-	// Whitespace is a token of its own: a press with spaces before the caret takes the
+	// Multiple spaces are a token of their own: a press before the caret takes the
 	// spaces and stops at the word, while text after the cursor remains untouched.
 	s.setContent("left/foo.bar   tail")
 	s.curY, s.curX = 0, strings.Index(buffer(s), "tail")
@@ -1020,7 +1039,7 @@ func TestEditorBackwardWordDeleteSymbolBoundaries(t *testing.T) {
 	s.curY, s.curX = 0, len(s.lines[0])
 	for _, want := range []string{
 		"foo-bar #",
-		"foo-bar",
+		"foo-bar ",
 		"foo-",
 		"foo",
 		"",
