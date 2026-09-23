@@ -9,17 +9,10 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// File-type coloring for a listing's rows: what an entry IS, and the color that says so.
-// FilePanel classifies each row once at read time and hands the result to the delegate
-// through core.ColorItem, which applies it as a foreground on the row's title style — no
-// ANSI ever enters a Title(), and the selection accent still outranks everything here.
-//
-// The classification is deliberately cheap. It reads the fs.DirEntry the directory scan
-// already produced and the one fs.FileInfo entryDesc already stats for the size line;
-// nothing here opens a file. A content sniff (goutil/textfile.IsText) would be a truer
-// text-vs-binary answer and costs a 512-byte read PER ROW, which is a different budget
-// from the one this component was built to (see entryDesc) — so the type axis is carried
-// by the extension tables below instead.
+// File-type coloring for listing rows. FilePanel classifies each row once at read time
+// and passes it through core.ColorItem; the selection accent still wins. Classification
+// uses only the directory entry and the stat already taken (no content sniffing), so
+// the type comes from extension tables.
 
 // FileColorMode controls the built-in classification palette, independently of a
 // host's TitleColor override.
@@ -31,9 +24,7 @@ const (
 	FileColorsAll
 )
 
-// FileKind is what one listed entry is, for coloring purposes. The zero value is an
-// ordinary file, which is drawn unstyled — so an unclassified row inherits the terminal's
-// own foreground rather than a color this package chose for it.
+// FileKind is what a listed entry is. The zero value is an ordinary, unstyled file.
 type FileKind int
 
 const (
@@ -49,18 +40,10 @@ const (
 	KindArchive
 )
 
-// The palette is raw ANSI 0-15 rather than theme colors, following the convention
-// gitstack/repoui/logrender.go sets out for git's decorations: these are SEMANTIC — they
-// mean "this is a directory", not "this is emphasis" — and resolving against the user's own
-// sixteen-color palette is what makes a listing match the terminal it sits in, the way ls
-// does. core.Theme's five colors are framework roles and shouldn't grow filesystem
-// vocabulary. Being terminal-defined, they also stay legible on a light background without
-// the AdaptiveColor pairs the theme presets need.
-//
-// The scheme: the bright half is structure you act on (folders, links, programs), the
-// normal half is content you read. The yellow family carries the text axis, brightness
-// separating source from prose and data. Nothing is final — this one function is the whole
-// knob.
+// FileKindColor uses raw ANSI 0-15 rather than theme colors: these are semantic, like
+// ls, and follow the user's terminal palette (legible on light backgrounds too). Bright
+// colors are structure (folders, links, programs), normal ones content; the yellow
+// family is text.
 func FileKindColor(k FileKind) color.Color {
 	switch k {
 	case KindDir:
@@ -86,21 +69,11 @@ func FileKindColor(k FileKind) color.Color {
 	}
 }
 
-// ClassifyFile names the kind of one listed entry. info is the entry's own fs.FileInfo (an
-// lstat, so a symlink reports itself rather than its target) and may be nil when the stat
-// failed — the exec test is then skipped and the extension tables answer instead, so a
-// row whose stat failed loses a distinction rather than its color.
-//
-// Precedence, and why: a symlink is what the row IS whatever it points at; a directory
-// next, so the dot-test can split it; then the dot-test on files, because "private" is a
-// category the user reads as one regardless of suffix; then the exec bit, which outranks a
-// suffix because a runnable .sh is a program before it is a shell script; then the tables.
+// ClassifyFile names an entry's kind. info is its lstat, possibly nil (then the exec test
+// is skipped). Precedence: symlink, directory, dotfile, executable, extension tables.
 func ClassifyFile(d fs.DirEntry, info fs.FileInfo) FileKind {
 	name := d.Name()
-	// The link's own type, before the directory test below — deliberately, so a symlink to
-	// a folder stays symlink-colored even though FilePanel.read has by now resolved its
-	// IsDir. That is the ls convention, and on a row that otherwise reads as an ordinary
-	// folder it is the only thing left saying an indirection is involved.
+	// Symlink before directory, even when the link targets a folder, as ls does.
 	if d.Type()&fs.ModeSymlink != 0 {
 		return KindSymlink
 	}
@@ -135,13 +108,8 @@ func isHiddenName(name string) bool {
 	return strings.HasPrefix(name, ".") && name != "." && name != ".."
 }
 
-// The tables are keyed by lowercase extension WITH the dot, the same key shape as the
-// framework's highlighter registry (highlight.go). An extension in none of them is an
-// ordinary file — the tables are meant to be extended, not exhaustive.
-//
-// codeExts is gote's chromaExts list (the extensions chroma has a lexer for), which is
-// already curated by language family, plus the markdown pair chroma deliberately leaves to
-// bubblestack's own highlighter — minus the data and prose formats, which belong to docExts.
+// The tables are keyed by lowercase extension with the dot, and are meant to be extended.
+// codeExts covers the languages chroma lexes plus markdown; data and prose are docExts.
 var codeExts = set(
 	".go", ".py", ".rb", ".rs", ".java", ".lua", ".php", ".pl", ".r",
 	".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",

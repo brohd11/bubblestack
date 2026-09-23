@@ -5,10 +5,8 @@ package editor
 
 // ---------- delimiter pairs ----------
 
-// deleteEmptyAutoPair removes the delimiters immediately around the caret when they
-// form one of the active profile's auto-closing pairs. Adjacency is deliberate: pair
-// provenance is not stored, so a manually formed empty pair behaves like an inserted
-// one. The caller's existing key transaction keeps both removals in one undo step.
+// deleteEmptyAutoPair removes an auto-closing pair around the caret (typed or not: no
+// provenance is kept), inside the key's undo step.
 func (s *Screen) deleteEmptyAutoPair() bool {
 	if s.curX == 0 {
 		return false
@@ -27,16 +25,14 @@ func (s *Screen) deleteEmptyAutoPair() bool {
 	return true
 }
 
-// surroundSelection wraps the selection in open/close and keeps the original text
-// selected, so repeating the key nests another pair: word → *word* → **word**. The
-// closer goes in first — inserting the opener first would shift a single-line
-// selection's end column out from under the second splice.
+// surroundSelection wraps the selection in open/close and keeps the text selected, so the
+// key nests (word → *word* → **word**). The closer goes in first so the selection's end
+// column stays valid.
 func (s *Screen) surroundSelection(open, close rune) {
 	start, end := s.selStart, s.selEnd
 	if end.x == 0 && end.y > start.y {
-		// A triple-clicked line takes the newline ending it, and a closer at column 0 of
-		// the next line reads as wrapping the break rather than the text. Pull it back to
-		// the end of the last selected line; the selection narrows to the text it wrapped.
+		// A selection ending at column 0 took the newline; wrap the text of the last selected
+		// line instead.
 		end = textPos{end.y - 1, len(s.lines[end.y-1])}
 	}
 	s.replaceText(end, end, string(close))

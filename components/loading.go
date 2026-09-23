@@ -11,15 +11,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// loadingScreen is the spinner shown while an upstream fetch is in flight. It is
-// context-agnostic: the caller supplies the title, a Run closure that builds the
-// fetch command from a cancellable context, and an onResult closure that turns the
-// fetch result (releasesMsg / branchesMsg / …) into the next navigation command.
-// loadingScreen itself names no domain type.
-//
-// esc cancels the fetch: Init owns a context.WithCancel handed to Run, and a
-// keypress calls cancel and pops back — so a slow/unreachable host can be abandoned
-// without waiting it out (a cancellable Run threads ctx into its network call).
+// LoadingScreen shows a spinner while a fetch runs. Run builds the fetch from a
+// cancellable context and onResult turns its result into the next navigation. esc
+// cancels the fetch and pops.
 type LoadingScreen struct {
 	Title      string
 	Crumb      string // optional breadcrumb segment; defaults to Title
@@ -50,9 +44,7 @@ func (s *LoadingScreen) Init(sh *core.Shared) tea.Cmd {
 
 func (s *LoadingScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if k, ok := msg.(tea.KeyPressMsg); ok {
-		// esc cancels the in-flight fetch (its ctx unwinds the request) and pops back.
-		// The cancelled fetch still returns a result to the screen we pop to, which
-		// doesn't recognize it and ignores it.
+		// esc cancels the fetch and pops; its late result is ignored by the screen below.
 		if core.MatchKey(k.String(), core.Keys.Back) {
 			if s.cancel != nil {
 				s.cancel()

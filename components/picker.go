@@ -8,14 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// PickerScreen is the reusable list picker: a styled list that pops on back,
-// runs OnSelect on enter, and optionally handles extra keys (e.g. archive on
-// 'a'). It backs the asset/branch submenu and is the building block for any new
-// flow that needs "pick one of these, then do X".
-//
-// Configure it with NewPicker. The closures return the navigation command to run
-// (push/pop/…); the picker stays on screen itself, so they never need a reference
-// back to it.
+// PickerScreen is the reusable list picker: pops on back, runs OnSelect on enter, and can
+// handle extra keys. Build it with NewPicker; its closures return the navigation to run.
 type PickerScreen struct {
 	list       list.Model
 	crumb      string // breadcrumb segment; defaults to the list title when ""
@@ -26,17 +20,15 @@ type PickerScreen struct {
 	refresh    func(*core.Shared, any) ([]list.Item, bool)
 	popStop    bool
 
-	// dens owns the delegate/pagination/row-height agreement. RootListScreen can
-	// attach an explicit preference; otherwise lifecycle methods resolve one from
-	// the app's optional core.ListDensityProvider.
+	// dens keeps the delegate, pagination and row height in agreement; set explicitly by
+	// RootListScreen or resolved from the app's core.ListDensityProvider.
 	dens         Density
 	densityKey   key.Binding
 	compactState *bool
 }
 
-// PickerOpts configures a PickerScreen. OnKey is optional; when it reports
-// handled=true the key is consumed (and its command, if any, run), otherwise the
-// key falls through to the list.
+// PickerOpts configures a PickerScreen. OnKey, when it reports handled, consumes the key;
+// otherwise the key goes to the list.
 type PickerOpts struct {
 	Title      string
 	Crumb      string        // optional breadcrumb segment; defaults to Title
@@ -51,27 +43,17 @@ type PickerOpts struct {
 	InitialIndex int    // cursor starts here; 0 = first item (default)
 	Dir          string // directory this picker concerns; enables the global Terminal key (DirLocator)
 
-	// Compact picks the starting row density: the one-line core.CompactDelegate instead of
-	// the default three-row title/description/spacer. DensityKey flips it live;
-	// an unspecified binding defaults to DefaultDensityKey. An app implementing
-	// core.ListDensityProvider overrides the starting density on first use.
-	//
-	// Rows need no new method: in compact form an item's Description becomes the muted
-	// suffix after its title (core.compactText). A row with a real SuffixText, or with a
-	// prefix, mark or color, keeps all of those — see core.SuffixItem.
-	//
-	// DisableDensityToggle suppresses the built-in key and its help entry, even
-	// with a custom DensityKey. The picker still follows an app-wide preference,
-	// and programmatic density methods remain available.
+	// Compact starts the list in the one-line delegate (an item's Description becomes its
+	// muted suffix); DensityKey flips it live (default DefaultDensityKey), and an app's
+	// core.ListDensityProvider overrides the start. DisableDensityToggle removes the key and
+	// its help entry; the app-wide preference still applies.
 	Compact              bool
 	DensityKey           key.Binding
 	DisableDensityToggle bool
 }
 
-// DefaultDensityKey is the framework's row-density chord, so every picker (and every
-// FilePanelOpts.DensityKey) that wants one spells the same key. D rather than the more
-// obvious C: core.Keys.Clear owns "C" and the router consumes it in globalKey before any
-// screen is offered the keystroke.
+// DefaultDensityKey is the shared row-density chord. D, because the router consumes C
+// (core.Keys.Clear) before screens see it.
 var DefaultDensityKey = key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "density"))
 
 var _ core.Filterer = (*PickerScreen)(nil)
@@ -97,9 +79,7 @@ func newPicker(items []list.Item, opts PickerOpts, root bool) *PickerScreen {
 		help = append(append([]key.Binding{}, opts.Help...), core.DirKeyHints()...)
 	}
 	if len(opts.DensityKey.Keys()) > 0 {
-		// A (?)-menu entry, never a bar one: ShortHelp's short branch is a fixed literal by
-		// design, and a density flip is a command. newSelectList files extras into both
-		// AdditionalShortHelpKeys and AdditionalFullHelpKeys; only the full one is read here.
+		// A (?)-menu entry only: a density flip is a command, not bar material.
 		help = append(append([]key.Binding{}, help...), core.Hint("density", opts.DensityKey))
 	}
 	build := core.NewSelectList
@@ -137,10 +117,8 @@ func (s *PickerScreen) PopStop() bool { return s.popStop }
 // Terminal key opens a terminal there. Empty dir ⇒ no locator (the key falls through).
 func (s *PickerScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 
-// Receive restyles the live list on a theme broadcast: bubbles caches both its
-// delegate and list styles, so changing core's palette alone does not repaint a
-// picker already on the navigation stack. It also lets a picker rebuild its rows
-// on any broadcast claimed by a configured Refresh closure.
+// Receive restyles the list on a theme broadcast (bubbles caches its styles) and rebuilds
+// the rows on broadcasts a Refresh closure claims.
 func (s *PickerScreen) Receive(sh *core.Shared, payload any) core.Action {
 	s.syncDensity(sh)
 	if _, ok := payload.(core.MsgListDensityChanged); ok {
@@ -235,10 +213,8 @@ func (s *PickerScreen) update(sh *core.Shared, msg tea.Msg, root bool) core.Acti
 		}
 		return density()
 	}
-	// listDispatchRows rather than listDispatch: the row height a click is divided by is
-	// the live delegate's, and a compact list that kept the three-row constant would select
-	// a row three places off.
-	return listDispatchRows(sh, &s.list, msg, sh.BodyY(), s.dens.ItemRows(), onSelect, onKey, nil)
+	// The live delegate's row height, or a compact list's clicks land three rows off.
+	return listDispatch(sh, &s.list, msg, sh.BodyY(), s.dens.ItemRows(), onSelect, onKey, nil)
 }
 
 func (s *PickerScreen) View(*core.Shared) string     { return core.RenderList(s.list) }
@@ -263,9 +239,9 @@ func (s *PickerScreen) SetItems(items []list.Item) {
 
 // ---------- density ----------
 
-// syncDensity binds lazily because constructors do not take Shared. An explicit
-// RootListOpts.CompactState wins. Init covers pushed/replaced screens; Receive
-// covers inactive roots; SetSize and Update also support direct component hosts.
+// syncDensity binds lazily (constructors lack Shared). An explicit CompactState wins.
+// Init, Receive, SetSize and Update all call it, covering pushed screens, inactive roots
+// and direct hosts.
 func (s *PickerScreen) syncDensity(sh *core.Shared) {
 	if s.compactState == nil && sh != nil {
 		if app, ok := sh.App.(core.ListDensityProvider); ok {
@@ -289,9 +265,9 @@ func (s *PickerScreen) ToggleDensity() {
 	s.SetCompact(!compact)
 }
 
-// SetCompact sets the row density, carrying the cursor, the page and an applied /-filter
-// across the flip. Once bound, it also writes the shared preference. Broadcast
-// core.MsgListDensityChanged afterwards to update other live lists immediately.
+// SetCompact sets the density, keeping the cursor, page and applied filter, and writes
+// the shared preference once bound. Broadcast core.MsgListDensityChanged to update other
+// lists.
 func (s *PickerScreen) SetCompact(compact bool) {
 	if s.compactState != nil {
 		*s.compactState = compact

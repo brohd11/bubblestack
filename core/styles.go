@@ -7,16 +7,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// The palette and its derived styles are owned by the theme (see theme.go). The
-// four colors are the secondary/muted gray (borders, labels, help, list
-// descriptions), the brighter near-white log text, the border gray, and the
-// selection accent. applyTheme resolves the active theme's Color pairs against the
-// detected background into these vars and rebuildStyles rebuilds everything below from
-// them; init applies the default theme at startup.
-//
-// They are resolved colors rather than pairs so they stay valid arguments to
-// lipgloss's Foreground/Background — which is how consumers outside this package use
-// them. The unresolved pairs live on the Theme.
+// The resolved palette and derived styles. applyTheme resolves the active theme's pairs
+// into these colors and rebuildStyles derives the styles; init applies the default. They
+// are resolved colors so they work directly with lipgloss.
 var (
 	MutedColor     color.Color
 	logColor       color.Color
@@ -27,17 +20,13 @@ var (
 	statusStyle lipgloss.Style
 	logStyle    lipgloss.Style
 
-	// tab strip: sits under the header, active tab highlighted, inactive muted,
-	// closed off from the content below by a full-width rule. The switch keys are
-	// shown in the help bar (ShortHelp), not here.
+	// Tab strip: active tab accented, others muted, a rule below.
 	tabStripStyle  lipgloss.Style
 	activeTabStyle lipgloss.Style
 	tabStyle       lipgloss.Style
 	tabRuleStyle   lipgloss.Style
 
-	// breadcrumb bar: drawn by the router under the tab strip from the live nav
-	// stack. Upstream segments + separators are muted; the current (top) segment
-	// takes the accent. See RenderBreadcrumb.
+	// Breadcrumb bar: upstream segments muted, the current one accented.
 	breadcrumbBarStyle  lipgloss.Style
 	breadcrumbRuleStyle lipgloss.Style
 	crumbMutedStyle     lipgloss.Style
@@ -47,9 +36,8 @@ var (
 	headerStyle lipgloss.Style
 	labelStyle  lipgloss.Style
 
-	// listStyles are the bubbles list styles, reused to render breadcrumb/title
-	// bars and static help so they align with the real lists. rebuildStyles resets
-	// them from the defaults and themes the title bar each apply.
+	// listStyles are bubbles' list styles, reused for title bars and static help so they
+	// match real lists.
 	listStyles list.Styles
 )
 
@@ -77,20 +65,20 @@ func rebuildStyles() {
 	headerStyle = lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder()).BorderForeground(BorderColor)
 	labelStyle = lipgloss.NewStyle().Foreground(MutedColor)
 
-	// Reset the list styles from the defaults, then theme the title bar so
-	// breadcrumbs (RenderTitleBar) and list titles (StyleList) follow the accent
-	// instead of bubbles' built-in purple. OnFocusedColor is the theme's text-on-
-	// accent color, so a dark accent can still read.
+	// Reset the list styles and theme the title bar with the accent; OnFocusedColor keeps its
+	// text readable.
 	listStyles = list.DefaultStyles(isDark)
 	listStyles.Title = listStyles.Title.Background(FocusedColor).Foreground(OnFocusedColor)
 }
 
-// LogStyle is the themed style for output/log text, exported so a custom (or the
-// default components) output pane renders log lines in the active palette. Read at
-// render time, it picks up theme switches (rebuildStyles reassigns logStyle).
+// MutedStyle is the themed muted-foreground style (labels, hints, secondary text).
+func MutedStyle() lipgloss.Style { return labelStyle }
+
+// AccentStyle is the themed bold accent style (the current item, an active toggle).
+func AccentStyle() lipgloss.Style { return crumbCurStyle }
+
+// LogStyle is the themed style for log text, read at render time.
 func LogStyle() lipgloss.Style { return logStyle }
 
-// StatusStyle is the themed style for the transient status line, exported so a custom
-// (or the default components) status element renders in the active palette. Read at
-// render time, it picks up theme switches (rebuildStyles reassigns statusStyle).
+// StatusStyle is the themed style for the status line, read at render time.
 func StatusStyle() lipgloss.Style { return statusStyle }

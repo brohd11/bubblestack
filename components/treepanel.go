@@ -11,9 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// TreeNode is one stable item in a TreePanel. ID uniquely identifies the logical node across
-// SetNodes refreshes, which lets the panel retain folds while its backing data changes.
-// A new node starts expanded unless Collapsed asks otherwise.
+// TreeNode is one item in a TreePanel. ID is stable across SetNodes, so folds survive
+// data changes. New nodes start expanded unless Collapsed.
 type TreeNode struct {
 	ID        string
 	Item      core.SuffixItem
@@ -21,18 +20,16 @@ type TreeNode struct {
 	Collapsed bool
 }
 
-// TreePanelOpts contains the host behavior that is not intrinsic to a tree. OnSelect
-// receives the original node rather than the private rendered row. With no hook, a
-// components.CompactItem dispatches its own Pick closure as it does in ListPanel.
+// TreePanelOpts holds host behavior. OnSelect gets the original node; without it a
+// CompactItem dispatches its own Pick.
 type TreePanelOpts struct {
 	OnSelect func(*core.Shared, TreeNode) core.Action
 	Help     []key.Binding
 	Border   bool
 }
 
-// TreePanel is a compact, filterable tree in a ModularScreen pane. Branch state belongs
-// to the panel; filtering temporarily exposes every node so collapsed descendants remain
-// searchable, then restores the visible fold shape when the filter is cleared.
+// TreePanel is a compact, filterable tree panel. Filtering shows every node so collapsed
+// ones are searchable, and the folds come back when the filter clears.
 type TreePanel struct {
 	panel       *CompactListPanel
 	opts        TreePanelOpts
@@ -230,9 +227,8 @@ func (p *TreePanel) keyRow(sh *core.Shared, k string, item list.Item) (core.Acti
 	return core.Action{}, false
 }
 
-// Select moves to id without opening its ancestors. If it is hidden by a fold, the
-// deepest visible ancestor is selected instead. It returns false only when neither the
-// ID nor one of its ancestors is in the current view.
+// Select moves to id without opening its ancestors, selecting the deepest visible
+// ancestor if it is folded away. false when neither is in view.
 func (p *TreePanel) Select(id string) bool {
 	for id != "" {
 		for i, item := range p.panel.List().VisibleItems() {

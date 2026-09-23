@@ -7,18 +7,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// CompletionStop describes one snippet tab stop using rune offsets into
-// CompletionEdit.Text. Index zero is the final caret. Positive indices are
-// visited in ascending order; Start and End are a half-open placeholder range.
+// CompletionStop is one snippet tab stop, in rune offsets into CompletionEdit.Text. Index
+// 0 is the final caret; positive indices are visited in order. [Start, End) is the
+// placeholder.
 type CompletionStop struct {
 	Index      int
 	Start, End int
 }
 
-// CompletionEdit is an atomic, externally supplied completion replacement.
-// PairTrailingOpener asks the editor to complete one final configured, asymmetric
-// delimiter for plain-text completions. Stops make the insertion a snippet and disable
-// pair synthesis because the producer already owns its exact text and caret positions.
+// CompletionEdit is an atomic completion replacement. PairTrailingOpener asks the editor
+// to close one trailing asymmetric delimiter for plain completions. Stops make it a
+// snippet and disable pairing.
 type CompletionEdit struct {
 	Range              Range
 	Text               string
@@ -37,10 +36,9 @@ type editorCompletionSession struct {
 	final  textPos
 }
 
-// ApplyCompletion replaces a range as one undo step and installs any supplied snippet
-// stops. Completion text is sanitized by the same rules as paste; stop offsets must
-// refer to that sanitized text, so an offset-changing control character rejects a
-// structured snippet instead of silently moving its placeholders.
+// ApplyCompletion replaces a range as one undo step and installs any snippet stops. Text
+// is sanitized like a paste; if that would shift the stop offsets, the snippet is
+// rejected.
 func (s *Screen) ApplyCompletion(edit CompletionEdit) bool {
 	start := textPos{y: edit.Range.Start.Line, x: edit.Range.Start.Column}
 	end := textPos{y: edit.Range.End.Line, x: edit.Range.End.Column}
@@ -202,9 +200,8 @@ func completionEditingKey(k string, m tea.KeyPressMsg) bool {
 	return false
 }
 
-// handleCompletionKey owns only the temporary snippet gestures. Ordinary edits continue
-// through key so they retain language hooks and history; non-editing commands first end
-// the session and then keep their normal meaning.
+// handleCompletionKey handles only the snippet gestures. Ordinary edits go through key;
+// other commands end the snippet session and keep their meaning.
 func (s *Screen) handleCompletionKey(k string, m tea.KeyPressMsg) bool {
 	if s.completion == nil {
 		return false

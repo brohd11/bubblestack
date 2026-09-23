@@ -8,9 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Buffer mutation for Screen — inserting, deleting, splitting lines — and the undo
-// history that wraps it. Every text change is a range replacement, and the current key
-// event records only the replaced text rather than copying the whole buffer.
+// Buffer mutation and undo history for Screen. Every change is a range replacement, and a
+// key event records only the text it replaced.
 
 // ---------- buffer editing ----------
 
@@ -182,10 +181,9 @@ func textEnd(start textPos, text string) textPos {
 	}
 }
 
-// applyTextReplacement performs the raw buffer splice without touching history or edit
-// generations. It does rebase the exact highlight snapshot before moving the lines.
-// Single-line replacements keep the outer line slice intact, making an ordinary
-// keystroke proportional to its line rather than to the document.
+// applyTextReplacement splices the buffer without touching history, rebasing the exact
+// highlight snapshot. Single-line edits keep the line slice, so a keystroke costs its line
+// rather than the document.
 func (s *Screen) applyTextReplacement(start, end textPos, inserted string) {
 	s.rebaseHighlightRows(start, end, inserted)
 	s.rebaseHighlightOverlay(start, end, inserted)
@@ -245,13 +243,9 @@ func (s *Screen) replaceText(start, end textPos, inserted string) textPos {
 	return textEnd(start, inserted)
 }
 
-// splitPastedLines turns arbitrary incoming text into the buffer lines it should become.
-// Bracketed paste arrives as one KeyMsg carrying the payload verbatim, so this is where
-// the line breaks and the runes that have no display cell are dealt with: '\n' ends a
-// line, '\r' ends a line and swallows a following '\n' (CRLF), tabs stay raw the way the
-// tab key inserts them (expandLine owns their width), and every other control rune is
-// dropped — leaving one in the buffer breaks the same row geometry the editorTabWidth
-// note describes. Always returns at least one line.
+// splitPastedLines turns incoming text into buffer lines: \n, \r and \r\n end lines, tabs
+// stay raw, and other control runes are dropped (they would break row geometry). It
+// always returns at least one line.
 func splitPastedLines(text string) [][]rune {
 	out := [][]rune{{}}
 	rs := []rune(text)
@@ -276,9 +270,8 @@ func splitPastedLines(text string) [][]rune {
 	return out
 }
 
-// insertText sanitizes and inserts text at the cursor, splitting it across buffer lines.
-// This is the path every rune-bearing key and paste takes. The surrounding history
-// transaction makes the whole payload one undo step.
+// insertText sanitizes and inserts text at the caret, as one undo step. Every typed key
+// and paste goes through it.
 func (s *Screen) insertText(text string) {
 	parts := splitPastedLines(text)
 	var b strings.Builder

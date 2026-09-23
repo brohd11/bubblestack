@@ -13,24 +13,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Clickable links in rendered content: finding them, and deciding what a click on one
-// means. The two halves are deliberately separate, because the SEAM IS THE RENDERED
-// STRING, not the call that produced it.
-//
-// RenderMarkdown wraps every link's label in an OSC 8 hyperlink escape (see inlineOver),
-// which costs no display cells and therefore survives wrapping, indenting, table layout
-// and everything else the renderer does after a span is styled — the reason a link's
-// finished row and column can be recovered at all. ScanLinks reads those spans back out
-// of the finished text, so any pane holding OSC 8 content can hit-test it without the
-// renderer, its width, or its Render closure being in scope.
+// Clickable links in rendered content. RenderMarkdown wraps link labels in OSC 8 escapes,
+// which cost no cells and survive wrapping and layout; ScanLinks reads them back from the
+// finished text, so any pane can hit-test links without the renderer in scope.
 
-// Link is one hyperlink span found in rendered content: where it sits, what it says, and
-// where it points. Row and Col are CONTENT coordinates — the row within the whole
-// rendered block (before any scroll offset) and the display column within that row — so a
-// pane converts a click by subtracting its own chrome and adding its scroll offset.
-//
-// Path and Exists are filled in by LinkHooks.Do, which is the only thing that knows the
-// directory a relative target resolves against; ScanLinks leaves them zero.
+// Link is a hyperlink span in rendered content. Row and Col are content coordinates
+// (before scrolling); a pane subtracts its chrome and adds its scroll offset. Path and
+// Exists are filled in by LinkHooks.Do.
 type Link struct {
 	Target string // the destination exactly as the markdown wrote it
 	Text   string // the label's visible text on this row, unstyled
@@ -55,14 +44,9 @@ func (m LinkMap) At(row, col int) (Link, bool) {
 	return Link{}, false
 }
 
-// ScanLinks finds the OSC 8 hyperlink spans in rendered content, walking it with the ANSI
-// decoder so that escape sequences cost no columns and wide graphemes cost what they
-// really occupy.
-//
-// A link left open at the end of a row continues onto the next one and lands a span on
-// each: ansi.Wrap carries an escape with the word it precedes, so a label the wrap split
-// has its opening sequence on the first row only. Following the state across rows is what
-// keeps the second half clickable — the terminal's own rendering of it is what's lost.
+// ScanLinks finds the OSC 8 spans in rendered content, measuring columns in display cells.
+// A link continuing across a wrap is followed onto the next row, so both halves stay
+// clickable.
 func ScanLinks(rendered string) LinkMap {
 	// The overwhelmingly common case is a page with no links: skip the walk entirely.
 	// Both OSC forms are checked so the fast path can't disagree with hyperlinkTarget.
@@ -111,12 +95,8 @@ func ScanLinks(rendered string) LinkMap {
 	return links
 }
 
-// hyperlinkTarget reads an OSC 8 sequence's target. ok is false for any other OSC, and
-// the target is empty for the reset form (OSC 8 ; ; ST), which closes the open link.
-//
-// The payload is split into at most three fields so a target holding its own ";" (a query
-// string) survives; the params field between the command and the target is the part of
-// the OSC 8 spec nothing here uses.
+// hyperlinkTarget reads an OSC 8 sequence's target (empty for the closing form); ok is
+// false for other OSCs. Splitting into at most three fields keeps a ";" in the target.
 func hyperlinkTarget(seq string) (string, bool) {
 	payload := seq
 	switch {
@@ -137,19 +117,12 @@ func hyperlinkTarget(seq string) (string, bool) {
 	return fields[2], true
 }
 
-// LinkHooks is what a click on a link does, one closure per kind of destination. A nil
-// hook means a click on that kind does nothing, which is the default everywhere: a
-// component renders links whether or not anyone wired them.
-//
-// The split is by destination rather than by consumer because two of the three answers
-// are the same everywhere — a URL goes to the browser, a file the app can't display gets
-// revealed in the file manager — while the third is exactly what differs: gote opens a
-// text file as an editor buffer, an embedded manual opens its own sibling page and must
-// never reach outside its embedded FS.
+// LinkHooks decides what a click on a link does, one hook per kind of destination (URL,
+// text file, other file); nil hooks do nothing. The URL and file cases are the same
+// everywhere; the text case is what differs between apps.
 type LinkHooks struct {
-	// Base is the directory a relative target resolves against; "" leaves targets
-	// unresolved (Link.Path empty), which is what an embedded page set wants — it has no
-	// directory, and its own hook matches on the target instead.
+	// Base is the directory relative targets resolve against; "" leaves them unresolved (an
+	// embedded page set matches targets itself).
 	Base string
 
 	URL  func(*core.Shared, Link) core.Action // a scheme, "//" or "www."
@@ -157,19 +130,12 @@ type LinkHooks struct {
 	File func(*core.Shared, Link) core.Action // any other path: a binary, an image, a directory
 }
 
-// linkScheme matches a URL scheme. Two or more characters before the ":" deliberately:
-// one would make the "C:" of a Windows path a scheme, and no scheme worth opening is a
-// single letter.
+// linkScheme matches a URL scheme of two or more characters, so "C:" is not one.
 var linkScheme = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]+:`)
 
-// Do classifies a link and hands it to the matching hook, resolving a relative path
-// against Base and sniffing its content (goutil/textfile, so a file with no extension at
-// all is judged correctly) to choose between Text and File. A path that does not resolve
-// — every link in an embedded manual, and a broken one anywhere — goes to Text with
-// Exists false, leaving "is this real?" to the hook that knows.
-//
-// A bare "#fragment" is an in-page anchor and does nothing: the renderer re-flows a page,
-// so it has no heading index to jump to.
+// Do classifies a link and calls the matching hook: URLs to URL, and paths resolved
+// against Base and sniffed (textfile.IsText) to Text or File. Unresolvable paths go to Text
+// with Exists false. A bare "#fragment" does nothing.
 func (h LinkHooks) Do(sh *core.Shared, l Link) core.Action {
 	target := strings.TrimSpace(l.Target)
 	if target == "" || strings.HasPrefix(target, "#") {

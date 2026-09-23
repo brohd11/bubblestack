@@ -2,20 +2,15 @@ package editor
 
 import "strings"
 
-// The comment toggle. It sits beside the block-indent gestures rather than with them
-// because it is the same shape — walk the lines a selection spans, splice each one, then
-// carry the selection and caret over the columns that moved — but answers a different
-// question per line, and the direction has to be decided for the whole span before any of
-// it is touched.
+// The comment toggle: walk the lines a selection spans, splice each, and carry the
+// selection and caret over the columns that moved. The direction is decided once for the
+// whole span.
 
-// commentSpace is what separates a delimiter from the text it comments out on the way in.
-// Uncommenting does not require it: hand-written comments have it or not, and a toggle that
-// refused "//foo" would be a toggle that silently did nothing.
+// commentSpace follows the delimiter when commenting. Uncommenting does not require it.
 const commentSpace = " "
 
-// toggleComment comments or uncomments every line the selection spans, or the caret's line
-// when there is no selection. A profile with neither delimiter has no gesture at all and
-// this is a no-op — including in the history, since replaceText is never reached.
+// toggleComment comments or uncomments the selection's lines (or the caret's line). A
+// profile with no delimiter makes it a no-op.
 func (s *Screen) toggleComment() {
 	if s.lineComment == "" && s.blockComment[0] == "" {
 		return
@@ -26,9 +21,8 @@ func (s *Screen) toggleComment() {
 		return // nothing but blank lines
 	}
 
-	// One decision for the whole span: uncomment only when every non-blank line already
-	// carries the delimiter. A partly commented block therefore finishes the job rather
-	// than flipping each line and leaving it just as mixed as before.
+	// Uncomment only when every non-blank line is already commented, so a mixed block ends up
+	// fully commented.
 	remove := true
 	for y := first; y <= last && remove; y++ {
 		if line := strings.TrimSpace(string(s.lines[y])); line != "" {
@@ -78,10 +72,8 @@ func (s *Screen) toggleComment() {
 	s.wantX = s.curX
 }
 
-// commentColumn is where the delimiter goes: the shallowest indentation any non-blank line
-// in the span has. Not column zero, which throws away the block's shape, and not each
-// line's own indent, which leaves a ragged left edge that no longer round-trips. false
-// means the span holds nothing worth commenting.
+// commentColumn is the shallowest indent among the span's non-blank lines, keeping the
+// block's shape and round-tripping. false when the span has nothing to comment.
 func (s *Screen) commentColumn(first, last int) (int, bool) {
 	col, found := 0, false
 	for y := first; y <= last; y++ {
@@ -179,9 +171,7 @@ func (s *Screen) removeComment(y, col int) int {
 	return -width
 }
 
-// shiftCommentCol carries a column across a splice made at col. Positions ahead of the
-// delimiter move with the text; ones before it — a caret sitting in the indentation — stay
-// where they are, and none may fall behind the insertion point.
+// shiftCommentCol moves a column across a splice at col; columns before it stay put.
 func shiftCommentCol(x, col, delta int) int {
 	if x < col {
 		return x

@@ -3,7 +3,7 @@ package editor
 import (
 	"strings"
 
-	"github.com/brohd11/bubblestack/internal/tuitest"
+	"github.com/brohd11/bubblestack/tuitest"
 
 	tea "charm.land/bubbletea/v2"
 )

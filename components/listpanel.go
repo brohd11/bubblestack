@@ -14,14 +14,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// ListPanel is a picker-style list.Model packaged as a ModularScreen panel — the
-// sidebar half of a list-plus-detail layout. It is driven by the same
-// listDispatch skeleton as PickerScreen, so enter picks (the opts hook, else a
-// self-dispatching Item), the wheel moves the cursor, WrapNav wraps at the ends,
-// and /-filtering all behave exactly as they do on a full picker screen. The one
-// deliberate difference is Back: a PickerScreen binds esc to Pop because it IS
-// the screen, while a ListPanel shares its screen with sibling panels — so esc
-// returns handled=false and the host ModularScreen's pop fires instead.
+// ListPanel is a picker-style list packaged as a ModularScreen panel (the sidebar of a
+// list-plus-detail layout). It shares PickerScreen's dispatch, except Back: a panel
+// shares its screen, so esc is left to the host ModularScreen's pop.
 type ListPanel struct {
 	list      list.Model
 	focused   bool
@@ -36,15 +31,13 @@ type ListPanel struct {
 	height   int    // outer cell height, so the list can be re-sized when the filter line appears
 	itemRows int    // delegate height + spacing; drives mouse and overlay geometry
 
-	// ownFilter: this panel draws the filter line itself (SetShowFilter is off on the
-	// list), so the header costs a row only while a filter is live. Compact panels only —
-	// see NewCompactListPanel.
+	// ownFilter: the panel draws the filter line itself, so it costs a row only while a
+	// filter is live. Compact panels only.
 	ownFilter bool
 
-	// Marquee state, live only on a CompactListPanel (see startMarquee). marquee is the
-	// cell offset core.CompactDelegate reads through a pointer; marqueeID identifies this
-	// panel's own ticks; hold is the frames left in the current end-dwell; lastSel detects
-	// a cursor move so each row starts from its left edge.
+	// Marquee state (compact panels, see startMarquee): marquee is the offset the delegate
+	// reads, marqueeID tags this panel's ticks, hold is the remaining end-dwell frames, and
+	// lastSel detects a cursor move.
 	marquee   int
 	marqueeID int64 // 0 ⇒ this panel doesn't marquee (every non-compact ListPanel)
 	ticking   bool
@@ -60,33 +53,18 @@ var _ PanelHelper = (*ListPanel)(nil)
 var _ panelInitializer = (*ListPanel)(nil)
 var _ FocusNotifier = (*ListPanel)(nil)
 
-// ListPanelOpts mirrors the PickerOpts hooks a sidebar list needs: OnSelect runs
-// on enter (default: a self-dispatching Item picks itself), OnKey claims extra
-// row keys before WrapNav, and Help adds help-bar bindings shown while the panel
-// is focused.
-//
-// Border opts the panel into the framework's framed look (the one ScrollContainer
-// and a bordered editor.Screen wear): the list's own title bar is dropped and the
-// title becomes the frame's top-edge legend, tinted by focus — so a sidebar denotes
-// which pane is live even when its cursor doesn't. It is a plain option rather than
-// a core.Borderer implementation because a panel only ever lives inside a
-// ModularScreen: there is no standalone case for the embedder to distinguish.
-// Default off, so existing sidebars render unchanged.
+// ListPanelOpts mirrors the PickerOpts hooks a sidebar needs: OnSelect on enter (default:
+// a self-dispatching Item), OnKey for extra row keys before WrapNav, and Help for the bar
+// while focused. Border draws the shared frame with the title as its focus-tinted legend.
 type ListPanelOpts struct {
 	OnSelect func(*core.Shared, list.Item) core.Action
 	OnKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	Help     []key.Binding
 	Border   bool
 
-	// OnPointer claims a click on a row before the default, with right saying which
-	// button. It is the only place a list can tell a CLICK from an enter — the two share
-	// OnSelect otherwise — so it exists for the component whose two must differ. The row
-	// is already selected when it runs, so a hook that raises a menu can anchor to the
-	// cursor exactly as the keyboard path does.
-	//
-	// handled=false falls back to the default for that button, and nil (the default) IS
-	// that fallback for both: a left click is enter, a right click is nothing. A list that
-	// does not set this behaves exactly as it always has.
+	// OnPointer handles a click on a row before the default, right reporting which button;
+	// the row is already selected. It is how a list tells a click from enter. handled=false
+	// (or a nil hook) falls back: left acts as enter, right does nothing.
 	OnPointer func(*core.Shared, list.Item, bool) (core.Action, bool)
 }
 
@@ -105,17 +83,12 @@ var _ Panel = (*CompactListPanel)(nil)
 // row marquees whenever its name plus suffix is wider than the column — see startMarquee.
 func NewCompactListPanel(items []list.Item, title string, opts ListPanelOpts) *CompactListPanel {
 	p := newListPanel(core.NewCompactList, items, title, opts, compactListItemRows)
-	// The panel draws the filter itself (filterLine), so bubbles draws no header at all:
-	// with the title off too (Border blanks it) that is the empty row a compact sidebar
-	// used to carry above its first item, and the second row the filter's own bottom
-	// padding used to add. SetShowFilter is presentational ONLY — the filter still runs,
-	// since bubbles dispatches on filterState alone (list.Model.Update).
+	// The panel draws the filter itself (filterLine), so bubbles draws no header. The
+	// filter still runs: SetShowFilter only affects drawing.
 	p.ownFilter = true
 	p.list.SetShowFilter(false)
-	// bubbles forces MarginTop(1) onto pagination whenever a delegate has zero
-	// spacing. Inline rendering suppresses that margin while keeping the dots; add
-	// back PaginationStyle's left padding through its transform so only the blank
-	// ROW disappears and the paginator stays aligned exactly where it was.
+	// bubbles adds MarginTop(1) to pagination for zero-spacing delegates. Render it inline to
+	// drop that blank row, restoring the left padding so the dots stay aligned.
 	paginationIndent := strings.Repeat(" ", p.list.Styles.PaginationStyle.GetPaddingLeft())
 	p.list.Styles.PaginationStyle = p.list.Styles.PaginationStyle.
 		Inline(true).
@@ -139,11 +112,8 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 		bordered:  opts.Border,
 		itemRows:  itemRows,
 	}
-	// A bordered panel has no title bar — the legend took it — but bubbles still draws its
-	// header section, and an EMPTY section is still a row (listHeaderHeight's table). That
-	// row was the blank line above the first item of every framed panel, paid for whether or
-	// not a filter was live. Drawing the filter ourselves turns it into a row that appears
-	// only while one IS live. Unbordered panels keep their title bar and are untouched.
+	// A bordered panel has no title bar, but bubbles would still draw an empty header row.
+	// Drawing the filter ourselves means that row appears only while a filter is live.
 	if opts.Border {
 		p.ownFilter = true
 		p.list.SetShowFilter(false)
@@ -151,29 +121,18 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 	return p
 }
 
-// ---------- marquee ----------
-//
-// A compact row's name and suffix compete for one narrow column, and the loser used to
-// vanish without so much as an ellipsis (core.CompactDelegate.Render's leftovers rule). So
-// the SELECTED row slides instead: name and suffix are windowed as one string, dwelling at
-// each end, until the whole thing has been read. The panel owns the clock because it is the
-// only piece that knows the two things which decide whether the clock should run at all —
-// whether this pane has focus, and where the cursor is.
-//
-// The loop is self-limiting: it re-arms only while a focused panel's selected row actually
-// overflows, so it stops on its own the moment focus moves to a sibling pane or the cursor
-// lands on a row that fits. Nothing here is a router or Config change — the tick rides out
-// on the core.Action{Cmd} lane ModularScreen.Update already batches, and comes back through
-// its non-key broadcast.
+// Marquee: in a compact row the selected row's name and suffix slide as one string,
+// dwelling at each end, instead of being truncated. The panel owns the clock because it
+// knows focus and cursor. It re-arms only while the focused panel's selected row
+// overflows, so it stops by itself. Ticks ride ModularScreen's non-key broadcast.
 const (
 	marqueeInterval = 130 * time.Millisecond
 	marqueeHold     = 8 // frames of dwell at each end, ~1s
 )
 
-// marqueeIDs hands each marqueeing panel a distinct, non-zero clock id. The broadcast lane
-// delivers every tick to EVERY panel, so a panel that acted on a sibling's tick would
-// re-arm alongside it and the tick count would double on each pass. Atomic because a screen
-// can be built inside a cmd, off the tea goroutine.
+// marqueeIDs gives each marqueeing panel a distinct non-zero clock id: every panel
+// receives every tick, and acting on a sibling's would double the rate. Atomic because
+// screens can be built off the tea goroutine.
 var marqueeIDs atomic.Int64
 
 type marqueeTickMsg struct{ id int64 }
@@ -182,28 +141,24 @@ func marqueeTick(id int64) tea.Cmd {
 	return tea.Tick(marqueeInterval, func(time.Time) tea.Msg { return marqueeTickMsg{id: id} })
 }
 
-// startMarquee opts this panel in and points the delegate at the offset the tick advances.
-// It replaces the delegate rather than taking a constructor argument, which keeps
-// core.NewCompactList's signature (and every existing caller's output) untouched.
+// startMarquee opts this panel in and points the delegate at the offset the ticks
+// advance.
 func (p *ListPanel) startMarquee() {
 	p.marqueeID = marqueeIDs.Add(1)
 	p.hold = marqueeHold
 	p.list.SetDelegate(core.CompactDelegate{Offset: &p.marquee})
 }
 
-// marqueeOverflow reports the last useful offset for the selected row, and false when the
-// row fits, the list is filtered, or this panel doesn't marquee at all. It measures against
-// core.CompactTextWidth of the list's own width — the same number Render fits the row into,
-// so the panel driving the offset and the delegate consuming it can't disagree about which
-// rows move.
+// marqueeOverflow reports the selected row's last useful offset, and false when it fits,
+// the list is filtered, or the panel does not marquee. It measures against the same width
+// Render uses.
 func (p *ListPanel) marqueeOverflow() (int, bool) {
 	if p.marqueeID == 0 || p.list.FilterState() != list.Unfiltered {
 		return 0, false
 	}
 	tw := core.CompactTextWidth(p.list.Width())
-	// CompactMarquee resolves the row's contract itself (SuffixItem, else list.DefaultItem),
-	// and reports ok=false for a row neither delegate can render — so the panel driving the
-	// clock and the delegate fitting the row cannot disagree about which rows move.
+	// CompactMarquee resolves the row's contract itself and rejects rows neither delegate can
+	// render.
 	row, over := core.CompactMarquee(p.list.SelectedItem(), tw)
 	if !over {
 		return 0, false
@@ -227,9 +182,8 @@ func (p *ListPanel) marqueeStep(max int) {
 	}
 }
 
-// marqueeTicked handles a tick. A tick from another panel's clock is consumed and dropped;
-// our own either advances and re-arms, or — the panel having lost focus or the cursor having
-// moved to a row that fits — stops the loop and resets the row to its left edge.
+// marqueeTicked drops other panels' ticks. Its own either advance and re-arm, or stop and
+// reset the row when focus is lost or the row fits.
 func (p *ListPanel) marqueeTicked(t marqueeTickMsg) core.Action {
 	if t.id != p.marqueeID {
 		return core.Action{}
@@ -243,9 +197,8 @@ func (p *ListPanel) marqueeTicked(t marqueeTickMsg) core.Action {
 	return core.Async(marqueeTick(p.marqueeID))
 }
 
-// marqueeStart arms the loop if it is idle and there is something to scroll, and reports
-// the tick to emit (nil when the marquee doesn't apply, is already running, the panel is
-// unfocused, or the selected row fits).
+// marqueeStart arms the loop when idle and there is something to scroll, returning the
+// tick to emit or nil.
 func (p *ListPanel) marqueeStart() tea.Cmd {
 	if p.marqueeID == 0 || p.ticking || !p.focused {
 		return nil
@@ -257,16 +210,13 @@ func (p *ListPanel) marqueeStart() tea.Cmd {
 	return marqueeTick(p.marqueeID)
 }
 
-// OnFocus implements FocusNotifier: taking focus starts the marquee immediately. Without
-// it the pane-navigation key that granted focus is consumed by the host and never reaches
-// here, so tabbing into a sidebar and pressing nothing left the row sitting still until
-// some unrelated message happened along.
+// OnFocus implements FocusNotifier so the marquee starts on focus: the pane key that
+// granted focus never reaches the panel.
 func (p *ListPanel) OnFocus() tea.Cmd { return p.marqueeStart() }
 
-// marqueeArm re-syncs on any other message: a cursor move resets the row to its left edge,
-// and an idle-but-eligible marquee gets started. OnFocus covers the focus transition, but
-// this stays the safety net for the paths that carry no cmd — above all the host's
-// SetFocused, which returns the keys from the output pane through core.FocusableScreen.
+// marqueeArm re-syncs after any other message: a cursor move resets the row, and an idle
+// eligible marquee starts. It also covers focus returned through SetFocused, which carries
+// no cmd.
 func (p *ListPanel) marqueeArm(act core.Action) core.Action {
 	if p.marqueeID == 0 {
 		return act
@@ -278,14 +228,11 @@ func (p *ListPanel) marqueeArm(act core.Action) core.Action {
 	return act
 }
 
-// Init implements panelInitializer, arming the very first tick. Unconditionally, unlike
-// every later arm: at Init the panel has not been sized, so there is no width to measure a
-// row against. By the time that tick lands SetSize has run, and marqueeTicked's own check
-// either keeps the loop going or ends it there.
+// Init arms the first tick unconditionally: the panel is not sized yet, and
+// marqueeTicked re-checks once it is.
 func (p *ListPanel) Init(*core.Shared) tea.Cmd {
-	// The ticking guard makes a second Init a no-op: panels outlive the ModularScreen that
-	// holds them (gote rebuilds its layout on every sidebar toggle), and a second clock on
-	// one panel would share the first's id, so each pass would arm two ticks, then four.
+	// A second Init is a no-op: panels outlive the layout holding them, and a second clock
+	// with the same id would double the ticks every pass.
 	if p.marqueeID == 0 || p.ticking {
 		return nil
 	}
@@ -297,9 +244,8 @@ func (p *ListPanel) Focus()        { p.focused = true }
 func (p *ListPanel) Blur()         { p.focused = false }
 func (p *ListPanel) Focused() bool { return p.focused }
 
-// SetItems replaces the rows (e.g. a refresh after the detail panel reloads), keeping
-// any live filter applied to the new set — see SetListItems for why that needs saying.
-// The re-size covers the filter collapsing to nothing on the new rows.
+// SetItems replaces the rows keeping any live filter (see SetListItems), re-sizing in case
+// the filter's line appears or goes.
 func (p *ListPanel) SetItems(items []list.Item) {
 	SetListItems(&p.list, items)
 	p.sizeList()
@@ -309,22 +255,12 @@ func (p *ListPanel) SetItems(items []list.Item) {
 // doesn't cover (SelectedItem, Index, FilterState).
 func (p *ListPanel) List() *list.Model { return &p.list }
 
-// Capturing reports an active /-filter: while filtering, the host ModularScreen
-// routes every keystroke here (bar its reserved pane keys), so the filter
-// input never loses a character to the router's global single-key shortcuts.
+// Capturing reports an active /-filter, so the host routes every key here.
 func (p *ListPanel) Capturing() bool { return p.list.FilterState() == list.Filtering }
 
-// UpdatePanel runs the picker dispatch (listDispatch) with the one host-owned key
-// carved out first: Back is the screen's pop, so it is not consumed here (contrast
-// PickerScreen, which binds Back to Pop itself) — unless a filter is APPLIED, which
-// esc clears before the pop is reached. While filtering, esc stays —
-// listDispatch's filtering branch feeds it to the list, which cancels the filter.
-// tab needs no carve-out now that the host owns no such key: unfiltered the list
-// binds nothing to it, and while filtering bubbles takes it as "accept the filter".
-// The wheel only moves the cursor while
-// focused: the host focuses the panel under the cursor before forwarding a
-// press, and anything that still arrives unfocused (a broadcast) must not roll
-// an unfocused sidebar.
+// UpdatePanel runs listDispatch but leaves Back to the host's pop, unless a filter is
+// applied (esc clears it first). While typing a filter, esc cancels it. The wheel only
+// moves the cursor while focused.
 func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	if t, ok := msg.(marqueeTickMsg); ok {
 		return p.marqueeTicked(t), true
@@ -334,10 +270,8 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 	}
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		if k := km.String(); core.MatchKey(k, core.Keys.Back) && !p.Capturing() {
-			// An APPLIED filter is the one thing back must clear before it pops: the
-			// carve-out below hands esc to the host, so bubbles' own ClearFilter binding
-			// (live in exactly this state) could never be reached, leaving a filtered
-			// list with no way out of the filter but to open it and empty it by hand.
+			// An applied filter must be clearable: Back goes to the host below, so bubbles'
+			// ClearFilter binding would otherwise be unreachable.
 			if p.list.FilterState() == list.FilterApplied {
 				p.list.ResetFilter()
 				p.sizeList()
@@ -365,53 +299,36 @@ func (p *ListPanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 		}
 		return core.Action{}, false
 	}
-	// Built like the two above, and nil when the caller set no hook — listDispatchRows
-	// reads a nil onPointer as "the default for both buttons", so this must stay nil
-	// rather than become a closure that always answers unhandled.
+	// Must stay nil without a hook: listDispatch reads nil as "default for both buttons".
 	var onPointer func(right bool) (core.Action, bool)
 	if p.onPointer != nil {
 		onPointer = func(right bool) (core.Action, bool) {
 			return p.onPointer(sh, p.list.SelectedItem(), right)
 		}
 	}
-	// ModularScreen has already translated a mouse event into panel-local
-	// coordinates. The panel's own chrome — the top frame row, and the filter line
-	// when one is live — still sits above the list, so remove it before
-	// listDispatchRows does its list-local math.
+	// Coordinates are already panel-local; subtract the panel's own chrome (frame row,
+	// live filter line) for the list-local math.
 	rows := p.filterRows()
-	act := p.marqueeArm(listDispatchRows(sh, &p.list, msg, p.chromeRows(), p.itemRows, onSelect, onKey, onPointer))
-	// The key just handled may have opened or closed the filter, which changes how much
-	// height the list has. Re-size on the transition only — every message would otherwise
-	// pay for a pagination recompute.
+	act := p.marqueeArm(listDispatch(sh, &p.list, msg, p.chromeRows(), p.itemRows, onSelect, onKey, onPointer))
+	// Re-size only when the filter line appeared or went, which changes the list's height.
 	if p.filterRows() != rows {
 		p.sizeList()
 	}
 	return act, true
 }
 
-// PanelHelp contributes the list's select hint plus any caller-supplied bindings to the
-// host's help bar while this panel is focused.
-//
-// Not the filter key. What a panel contributes lands on a bar, so it is held to the bar's
-// own cap (see core.ShortHelp): panel-local NAVIGATION, not the panel's command set. Select
-// is nav — it is in ShortHelp's sparse literal too — while "/" is a command and belongs in
-// the (?) menu, where ShortHelp's full help gives it a whole column and gote's overlay names
-// it. Filtering is unaffected: the key still dispatches, and filterLine still says so on
-// screen once a filter is applied, which is the part that actually needed saying.
+// PanelHelp adds the select hint and the caller's Help to the host's bar while focused.
+// Not the filter key: panel help follows the bar's rule (navigation only, see
+// core.ShortHelp), and "/" belongs in the (?) menu.
 func (p *ListPanel) PanelHelp() []key.Binding {
 	return append([]key.Binding{
 		core.Hint("select", core.Keys.Select),
 	}, p.help...)
 }
 
-// filterLine is the panel-drawn filter row, empty when no filter is live. It exists
-// because bubbles draws the filter only while it is being TYPED (list.titleView), and
-// the status bar that would otherwise name an applied one is off framework-wide: an
-// accepted filter left the list with rows missing and nothing on screen saying why.
-//
-// The look is bubbles' own, deliberately — the yellow "Filter: " prompt with the query
-// in plain text is what the user already recognizes. core.RenderFilter owns that shared
-// rendering for both this panel and full-screen lists.
+// filterLine is the panel-drawn filter row, empty when none is live. bubbles only draws
+// the filter while it is typed, and with the status bar off an applied filter would
+// otherwise hide rows with no explanation. It uses bubbles' own look via core.RenderFilter.
 func (p *ListPanel) filterLine() string {
 	if !p.ownFilter {
 		return ""
@@ -420,10 +337,8 @@ func (p *ListPanel) filterLine() string {
 	if line == "" {
 		return ""
 	}
-	// The indent is the one bubbles' TitleBar carried (its left padding), so the line
-	// still sits over the rows' own left pad; only the bottom padding — the blank row
-	// under it — is gone. Truncated rather than left to wrap: a query wider than the
-	// column would become a second row, and filterRows promises exactly one.
+	// Indented like bubbles' title bar, and truncated rather than wrapped: filterRows promises
+	// exactly one row.
 	w := max(p.listWidth()-filterIndent, 1)
 	return lipgloss.NewStyle().PaddingLeft(filterIndent).Render(ansi.Truncate(line, w, "…"))
 }
@@ -447,10 +362,8 @@ func (p *ListPanel) filterRows() int {
 	return 1
 }
 
-// RowY is the panel-relative row at which visible item idx starts — the frame's top
-// edge and the filter line included, where CompactListItemRow counts only rows inside
-// the list. It is what an overlay anchored over a row must use: those two offsets used
-// to be a constant a caller could hard-code, and the filter line makes them vary.
+// RowY is the panel-relative row where visible item idx starts, frame edge and filter line
+// included: what an overlay anchored on a row must use.
 func (p *ListPanel) RowY(idx int) (int, bool) {
 	row, ok := listItemRow(&p.list, idx, p.itemRows)
 	if !ok {
@@ -459,9 +372,8 @@ func (p *ListPanel) RowY(idx int) (int, bool) {
 	return row + p.chromeRows(), true
 }
 
-// chromeRows is what sits above the list inside the panel: the frame's top edge, then
-// the filter line. Both the click math (mouseYOff) and RowY are built on it, so they
-// cannot drift apart.
+// chromeRows is what sits above the list in the panel (frame edge, filter line). Click
+// math and RowY both use it.
 func (p *ListPanel) chromeRows() int {
 	rows := p.filterRows()
 	if p.bordered {
@@ -470,11 +382,7 @@ func (p *ListPanel) chromeRows() int {
 	return rows
 }
 
-// View renders the list under its filter line (when one is live), framed when
-// ListPanelOpts.Border asked for it — then the focused arg tints the frame and its
-// title legend. Unbordered (the default) the panel draws nothing of its own and the
-// arg only answers the Panel contract: the list cursor already marks which panel is
-// live.
+// View renders the list under its filter line, framed and focus-tinted when Border is set.
 func (p *ListPanel) View(focused bool) string {
 	body := p.list.View()
 	if line := p.filterLine(); line != "" {
@@ -483,25 +391,19 @@ func (p *ListPanel) View(focused bool) string {
 	if p.bordered {
 		body = Frame(p.title, body, p.innerWidth(), focused)
 	}
-	// A panel's rendered footprint is also ModularScreen's hit-test geometry. Keep
-	// it within the allocation even if an embedded model ever over-renders again;
-	// clipping the bottom preserves every panel and the router chrome above it.
+	// Clip to the allocation: the rendered footprint is also the host's hit-test geometry.
 	return lipgloss.NewStyle().MaxHeight(p.height).Render(body)
 }
 
-// SetSize takes the outer cell dims; the list gets them verbatim unless the panel
-// is bordered, in which case the frame comes off both axes first. The filter line
-// comes off the height too, so the list's own pagination knows about the row the
-// panel is drawing above it.
+// SetSize takes outer dims; the frame (when bordered) and the filter line come off before
+// the list sees them.
 func (p *ListPanel) SetSize(width, height int) {
 	p.width, p.height = width, height
 	p.sizeList()
 }
 
-// sizeList applies the stored outer dims to the list, net of the panel's own chrome.
-// Called again whenever the filter line appears or goes (see UpdatePanel): the list
-// computes PerPage from the height it was given and View clamps its body to the same
-// number, so a header height that changes without this clips the last row.
+// sizeList sizes the list to the stored dims minus the panel's chrome. It runs again when
+// the filter line comes or goes, or the list's PerPage would clip the last row.
 func (p *ListPanel) sizeList() {
 	w, h := p.listWidth(), p.height
 	if p.bordered {

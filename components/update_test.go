@@ -89,7 +89,7 @@ func TestListItemAt(t *testing.T) {
 		t.Fatalf("a titled list's header is the bar plus its bottom pad, got %d", got)
 	}
 	for _, row := range []int{0, 1} {
-		if _, ok := listItemAt(&l, row); ok {
+		if _, ok := listItemAt(&l, row, listItemRows); ok {
 			t.Fatalf("row %d is the title section, not an item", row)
 		}
 	}
@@ -100,21 +100,21 @@ func TestListItemAt(t *testing.T) {
 		5: 1, // first row of item 1
 		8: 2,
 	} {
-		if got, ok := listItemAt(&l, row); !ok || got != want {
+		if got, ok := listItemAt(&l, row, listItemRows); !ok || got != want {
 			t.Errorf("row %d: got (%d, %v), want (%d, true)", row, got, ok, want)
 		}
 	}
 	// Past the last item (10 items → rows 2..31) is dead space.
-	if _, ok := listItemAt(&l, 32); ok {
+	if _, ok := listItemAt(&l, 32, listItemRows); ok {
 		t.Fatal("row 32 is past the last item")
 	}
 
 	// Page two: the same view row names a different item.
-	if _, ok := listItemAt(&l, 2+l.Paginator.PerPage*listItemRows); ok {
+	if _, ok := listItemAt(&l, 2+l.Paginator.PerPage*listItemRows, listItemRows); ok {
 		t.Fatal("the row after the current page must not select the next page")
 	}
 	l.Paginator.Page = 1
-	if got, ok := listItemAt(&l, 2); !ok || got != 7 {
+	if got, ok := listItemAt(&l, 2, listItemRows); !ok || got != 7 {
 		t.Errorf("page 1 row 2: got (%d, %v), want (7, true)", got, ok)
 	}
 }
@@ -139,7 +139,7 @@ func TestListHeaderHeightFollowsFilter(t *testing.T) {
 	if got := listHeaderHeight(&l); got != 1 {
 		t.Fatalf("an untitled list's header is the one empty section row, got %d", got)
 	}
-	if got, ok := listItemAtRows(&l, 1, compactListItemRows); !ok || got != 0 {
+	if got, ok := listItemAt(&l, 1, compactListItemRows); !ok || got != 0 {
 		t.Fatalf("unfiltered, row 1 is item 0, got (%d, %v)", got, ok)
 	}
 
@@ -150,10 +150,10 @@ func TestListHeaderHeightFollowsFilter(t *testing.T) {
 	if got := listHeaderHeight(&l); got != 2 {
 		t.Fatalf("the filter input adds a row to the header, got %d", got)
 	}
-	if _, ok := listItemAtRows(&l, 1, compactListItemRows); ok {
+	if _, ok := listItemAt(&l, 1, compactListItemRows); ok {
 		t.Error("row 1 is the filter input while filtering, not the top item")
 	}
-	if got, ok := listItemAtRows(&l, 2, compactListItemRows); !ok || got != 0 {
+	if got, ok := listItemAt(&l, 2, compactListItemRows); !ok || got != 0 {
 		t.Fatalf("filtering, row 2 is item 0, got (%d, %v)", got, ok)
 	}
 	// The inverse has to move with it, or the overlay boxes anchored on it drift.
@@ -165,7 +165,7 @@ func TestListHeaderHeightFollowsFilter(t *testing.T) {
 	if got := listHeaderHeight(&l); got != 1 {
 		t.Fatalf("an applied filter has no input line, header = %d", got)
 	}
-	if got, ok := listItemAtRows(&l, 1, compactListItemRows); !ok || got != 0 {
+	if got, ok := listItemAt(&l, 1, compactListItemRows); !ok || got != 0 {
 		t.Fatalf("applied, row 1 is item 0 again, got (%d, %v)", got, ok)
 	}
 }
@@ -173,7 +173,7 @@ func TestListHeaderHeightFollowsFilter(t *testing.T) {
 // TestListItemAtEmpty guards the degenerate list: every click misses.
 func TestListItemAtEmpty(t *testing.T) {
 	l := clickList(0, 80, 24)
-	if _, ok := listItemAt(&l, 1); ok {
+	if _, ok := listItemAt(&l, 1, listItemRows); ok {
 		t.Fatal("an empty list has no clickable row")
 	}
 }
@@ -191,7 +191,7 @@ func TestListItemRow(t *testing.T) {
 			t.Errorf("idx %d: got (%d, %v), want (%d, true)", idx, row, ok, want)
 		}
 		// Inverse consistency: the row maps back to the item.
-		if back, ok := listItemAt(&l, row); !ok || back != idx {
+		if back, ok := listItemAt(&l, row, listItemRows); !ok || back != idx {
 			t.Errorf("idx %d: listItemAt(row %d) = (%d, %v), want (%d, true)", idx, row, back, ok, idx)
 		}
 	}
@@ -229,11 +229,11 @@ func TestCompactListGeometry(t *testing.T) {
 		if !ok || row != header+idx {
 			t.Fatalf("idx %d row = (%d, %v), want (%d, true)", idx, row, ok, header+idx)
 		}
-		if back, ok := listItemAtRows(&l, row, compactListItemRows); !ok || back != idx {
+		if back, ok := listItemAt(&l, row, compactListItemRows); !ok || back != idx {
 			t.Fatalf("row %d maps back to (%d, %v), want (%d, true)", row, back, ok, idx)
 		}
 	}
-	if _, ok := listItemAtRows(&l, header+l.Paginator.PerPage, compactListItemRows); ok {
+	if _, ok := listItemAt(&l, header+l.Paginator.PerPage, compactListItemRows); ok {
 		t.Fatal("compact pagination/blank row must not select the next page")
 	}
 	firstNextPage := l.Paginator.PerPage

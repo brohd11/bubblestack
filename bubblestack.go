@@ -1,12 +1,6 @@
-// Package bubblestack is the consumer-facing entry point to the TUI framework: a
-// thin facade over core that hides the Shared/Router/bubbletea wiring behind a
-// single Run call. A consumer supplies only its own context, optional header/output
-// chrome, theme, and tabs; everything else is constructed here.
-//
-// This is deliberately a small surface. The deeper API — navigation commands,
-// chrome/style helpers, reusable screens — still lives in core and components and
-// is imported directly; only the few names the entry point touches are re-exported
-// below.
+// Package bubblestack is the entry point to the TUI framework: Run wires Shared, Router
+// and bubbletea from a Config. Navigation, chrome helpers and reusable screens are
+// imported directly from core and components.
 package bubblestack
 
 import (
@@ -32,53 +26,37 @@ type (
 // from ChromeMask() to claim the whole canvas without importing core.
 var FullscreenMask = core.FullscreenMask
 
-// Config is the consumer-supplied input to Run. App and Tabs are required; Header,
-// Output, Status, and Theme are optional. A nil Header ⇒ no header box; a nil Output ⇒
-// no output pane (pass components.NewLogPane() for the default scrollable log); a nil
-// Status ⇒ no status line (pass components.NewStatusLine() for the default).
+// Config is the input to Run. App and Tabs are required. Nil Header, Output or Status
+// leave that chrome out (components.NewLogPane and NewStatusLine are the defaults).
 type Config struct {
 	App    any                       // consumer context, recovered via core.App[T]
 	Header func(*core.Shared) string // persistent context box (nil ⇒ none)
-	// HeaderClick fires on a left click anywhere in the header box, given the click's
-	// terminal cell coordinates (the header starts at row 0, so y is also the
-	// header-local row). nil ⇒ header clicks fall through to the body screen.
+	// HeaderClick fires on a left click in the header box, with cell coordinates (y is also
+	// the header-local row). nil lets clicks fall through.
 	HeaderClick func(sh *core.Shared, x, y int) core.Action
 	Output      core.Output     // below-body pane (nil ⇒ none)
 	Status      core.Status     // transient status line (nil ⇒ none)
 	Tabs        []core.TabEntry // top-level tabs
-	// Theme names a startup theme. Empty ⇒ the framework loads the shared
-	// ~/.bubblestack/config.yml theme (what the theme picker persists), falling back to
-	// the built-in default when that too is unset. Set it only to force a theme and
-	// bypass the user's saved choice.
+	// Theme forces a startup theme, bypassing the user's saved choice in
+	// ~/.bubblestack/config.yml. Empty uses the saved theme, else the default.
 	Theme string
 
-	// RefreshAction is the Action returned by the global Refresh key (Keys.Refresh),
-	// fired from any screen/depth except while text is captured. nil ⇒ the key is
-	// left to the active screen.
+	// RefreshAction backs the global Refresh key (not while text is captured); nil leaves the
+	// key to the screen.
 	RefreshAction func(*core.Shared) core.Action
 
-	// TerminalAction is the Action returned by the global Terminal key (Keys.Terminal),
-	// given the directory resolved from the top screen's core.DirLocator, fired from any
-	// screen/depth except while text is captured. Wire it to a launcher (e.g.
-	// sysopen.TerminalInline). nil ⇒ the key is left to the active screen.
+	// TerminalAction backs the Terminal key with the top screen's DirLocator directory (e.g.
+	// sysopen.TerminalInline); nil leaves the key to the screen.
 	TerminalAction func(dir string) core.Action
 
-	// TerminalWindowAction is the Action returned by the global TerminalWindow key
-	// (Keys.TerminalWindow) — the detached-window sibling of TerminalAction, resolved from
-	// the same core.DirLocator. Wire it to a launcher (e.g. sysopen.Terminal). nil ⇒ the key
-	// is left to the active screen.
+	// TerminalWindowAction backs the TerminalWindow key the same way (e.g. sysopen.Terminal).
 	TerminalWindowAction func(dir string) core.Action
 
-	// OpenDirAction is the Action returned by the global OpenDir key (Keys.OpenDir) — the
-	// file-manager sibling of TerminalAction, resolved from the same core.DirLocator. Wire
-	// it to a launcher (e.g. sysopen.Path(dir, false)). nil ⇒ the key is left to the active
-	// screen.
+	// OpenDirAction backs the OpenDir key the same way (e.g. sysopen.Path(dir, false)).
 	OpenDirAction func(dir string) core.Action
 
-	// Init is an app-level startup command, batched with the initial screen's Init
-	// when the program starts (run once, asynchronously). Use it for app-wide
-	// background work that isn't tied to any one tab (e.g. a self-update check whose
-	// result writes the shared status line). nil ⇒ no app-level startup command.
+	// Init is an app-wide startup command run once alongside the first screen's Init (a
+	// self-update check, say).
 	Init func(*core.Shared) tea.Cmd
 }
 
@@ -92,9 +70,7 @@ func Run(cfg Config) error {
 		sh.Chrome.Header = core.NewHeaderPane(cfg.Header)
 		sh.Chrome.Header.OnClick = cfg.HeaderClick
 	}
-	// An explicit Config.Theme wins; otherwise fall back to the shared store (the picker's
-	// persisted choice, applied across every bubblestack app). An empty result leaves the
-	// built-in default.
+	// An explicit Config.Theme wins over the shared saved theme.
 	theme := cfg.Theme
 	if theme == "" {
 		theme = config.Theme()
@@ -108,11 +84,8 @@ func Run(cfg Config) error {
 	r.SetTerminalWindowAction(cfg.TerminalWindowAction)
 	r.SetOpenDirAction(cfg.OpenDirAction)
 	r.SetInit(cfg.Init)
-	// Alt screen and mouse reporting are no longer program options: they are fields on
-	// the tea.View the router returns each render (see core.Router.View). Terminal
-	// background detection is likewise a message now — tea.BackgroundColorMsg, which
-	// core.Router.Update feeds to the adaptive palette — so nothing has to be primed
-	// here before the program starts.
+	// Alt screen, mouse reporting and background detection are handled through the router's
+	// View and messages in v2, so nothing needs priming here.
 	_, err := tea.NewProgram(r).Run()
 	return err
 }

@@ -9,10 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Highlighting has two layers. hl is the last exact, full-document snapshot and
-// hlRows keeps its unaffected rows attached to the live buffer through line splices.
-// hlPreview is a small synchronous fragment parse over the part of the viewport whose
-// lexical state may have changed. A factory-backed exact parse later replaces both.
+// Highlighting has two layers: hl, the last exact full-document snapshot (hlRows keeps
+// unaffected rows attached through splices), and hlPreview, a small synchronous parse of
+// the viewport rows whose state may have changed. A background exact parse replaces both.
 
 func (s *Screen) resetHighlightRows() {
 	s.hlRows = nil
@@ -35,9 +34,8 @@ func (s *Screen) acceptHighlight(h Highlighter, seq int) {
 	s.hlDirty, s.hlAnchor, s.hlAnchorSnapshot, s.hlFar = -1, -1, -1, false
 }
 
-// highlightAnchor translates the active snapshot's restart hint back into the current
-// buffer. The search is deliberately bounded: walking an enormous multiline construct
-// on every key would merely move the old parse stall into cache maintenance.
+// highlightAnchor maps the snapshot's restart hint into the current buffer, within a
+// bounded search.
 func (s *Screen) highlightAnchor(row int) (currentRow, snapshotRow int, far bool) {
 	if row < 0 || row >= len(s.hlRows) || s.hl == nil {
 		return row, -1, false
@@ -61,9 +59,8 @@ func (s *Screen) highlightAnchor(row int) (currentRow, snapshotRow int, far bool
 	return row, oldRow, restart != oldRow
 }
 
-// rebaseHighlightRows mirrors a raw text replacement against the exact snapshot. Rows
-// outside the replacement retain their old snapshot row; replacement rows are holes
-// until the provisional or exact parser fills them.
+// rebaseHighlightRows adjusts the snapshot for a replacement: untouched rows keep their
+// snapshot row, replaced rows are holes until reparsed.
 func (s *Screen) rebaseHighlightRows(start, end textPos, inserted string) {
 	if s.hl == nil {
 		return
@@ -125,9 +122,8 @@ func (s *Screen) previewCovers(row int) bool {
 	return s.hlPrevSeq == s.editSeq && row >= s.hlPrevFrom && row <= s.hlPrevTo
 }
 
-// refreshHighlightPreview performs the only parse allowed in the keystroke path. It
-// starts at a cached lexical boundary when one is nearby, stops at the viewport bottom,
-// and never crosses the fixed physical-line budget.
+// refreshHighlightPreview is the only parse on the keystroke path, bounded by the
+// viewport and a fixed line budget, starting from a nearby lexical boundary.
 func (s *Screen) refreshHighlightPreview() {
 	if s.hlFactory == nil || s.hlDirty < 0 || len(s.lines) == 0 {
 		return
@@ -176,9 +172,8 @@ func (s *Screen) highlightRefreshCmd(seq int, delay time.Duration) tea.Cmd {
 	})
 }
 
-// startHighlightParse starts at most one full parse. A fresh highlighter instance is
-// both the worker and the immutable result, so rendering never reads the object a
-// background goroutine is mutating.
+// startHighlightParse starts at most one full parse, on a fresh highlighter that becomes
+// the immutable result, so rendering never reads an instance being parsed.
 func (s *Screen) startHighlightParse() tea.Cmd {
 	if s.hlFactory == nil || s.hlParsing || s.hlSeq == s.editSeq {
 		return nil
@@ -237,9 +232,8 @@ func (s *Screen) handleHighlightReady(m editorHighlightReadyMsg) core.Action {
 	return core.Async(s.startHighlightParse())
 }
 
-// Receive lets versioned highlight work — and the drag auto-scroll clock, which is
-// addressed the same way — arrive through PropagateAll even while this editor is embedded
-// beneath a menu or dialog.
+// Receive lets highlight results and the drag auto-scroll clock reach this editor through
+// PropagateAll even under a menu or dialog.
 func (s *Screen) Receive(sh *core.Shared, payload any) core.Action {
 	switch m := payload.(type) {
 	case tea.BlurMsg:

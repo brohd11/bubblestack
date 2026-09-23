@@ -14,12 +14,9 @@ type highlightOverlayRange struct {
 	style    *lipgloss.Style
 }
 
-// SetHighlightOverlay replaces the host overlay for the current buffer generation.
-// It returns false, without disturbing the live overlay, when seq is stale. A current
-// empty set is meaningful: it clears the previous answer.
-//
-// Individual malformed ranges are dropped. That tolerance matches syntax highlighting's
-// general failure mode — one bad range loses color, never text or the rest of the answer.
+// SetHighlightOverlay replaces the host overlay for buffer generation seq, returning
+// false without changes when seq is stale. An empty set clears the overlay. Malformed
+// ranges are dropped individually.
 func (s *Screen) SetHighlightOverlay(seq int, ranges []HighlightRange) bool {
 	if seq != s.editSeq {
 		return false
@@ -47,17 +44,14 @@ func (s *Screen) SetHighlightOverlay(seq int, ranges []HighlightRange) bool {
 	return true
 }
 
-// ClearHighlightOverlay removes host styling immediately. It is used when a buffer takes
-// on a different path/language; ordinary edits retain and structurally rebase unaffected
-// rows instead.
+// ClearHighlightOverlay removes host styling, for a path or language change.
 func (s *Screen) ClearHighlightOverlay() {
 	s.hlOverlay = nil
 	s.hlOverlayRows = nil
 }
 
-// rebaseHighlightOverlay mirrors a text replacement against the positional overlay.
-// Every touched row becomes a hole while rows below a line splice keep pointing at the
-// immutable answer that still describes their text.
+// rebaseHighlightOverlay adjusts the overlay for a text replacement: touched rows lose
+// their overlay, rows below a splice keep theirs.
 func (s *Screen) rebaseHighlightOverlay(start, end textPos, inserted string) {
 	if len(s.hlOverlayRows) != len(s.lines) || start.y < 0 || end.y >= len(s.hlOverlayRows) {
 		if s.hlOverlayRows != nil {
@@ -79,9 +73,8 @@ func (s *Screen) rebaseHighlightOverlay(start, end textPos, inserted string) {
 	s.hlOverlayRows = out
 }
 
-// applyHighlightOverlay cuts lexical spans at the host ranges for row. The implementation
-// uses a per-rune style key because a range may land inside any span and lipgloss.Style
-// itself is not comparable.
+// applyHighlightOverlay cuts row's lexical spans at the host ranges, using a per-rune key
+// (lipgloss.Style is not comparable).
 func (s *Screen) applyHighlightOverlay(row int, spans []Span) []Span {
 	if row < 0 || row >= len(s.hlOverlayRows) {
 		return spans

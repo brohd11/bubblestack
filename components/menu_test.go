@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
-	"github.com/brohd11/bubblestack/internal/tuitest"
+	"github.com/brohd11/bubblestack/tuitest"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"

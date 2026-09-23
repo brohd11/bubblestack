@@ -11,16 +11,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// LogPane is the default core.Output: a scrollable log shown in a bordered box below
-// the body. New lines auto-reveal it (Log), the Output key (o) toggles it, and while
-// focused it scrolls. Supply it via bubblestack.Config.Output, or implement
-// core.Output for a custom pane. It is context-agnostic — it names no domain type.
-//
-// It has two render modes over the same in-memory lines. Truncated (the default) gives
-// each entry one row, which the viewport clips at the pane edge — fine for short lines,
-// but a long one (a deep filesystem path, say) has a tail no amount of scrolling can
-// reach. Wrapped (the Wrap key, w — see core.Wrapper) folds each entry across as many
-// rows as it needs, bulleting it so the entry still reads as one unit.
+// LogPane is the default core.Output: a scrollable log in a bordered box below the body.
+// New lines reveal it, o toggles it, and it scrolls while focused. Truncated mode gives
+// each entry one clipped row; wrapped mode (w) folds entries with a bullet so long paths
+// stay readable.
 type LogPane struct {
 	vp     viewport.Model
 	logs   []string
@@ -48,9 +42,7 @@ func (p *LogPane) Shown() bool { return p.shown }
 func (p *LogPane) Toggle()     { p.shown = !p.shown }
 func (p *LogPane) Hide()       { p.shown = false }
 
-// ToggleWrap switches between the truncated and wrapped render modes (core.Wrapper).
-// The re-render is immediate rather than waiting on the next SetSize, and it lands at
-// the bottom: the newly-wrapped tail is what a reader turns wrap on to see.
+// ToggleWrap switches render mode immediately, landing at the bottom.
 func (p *LogPane) ToggleWrap() {
 	p.wrap = !p.wrap
 	p.vp.SetContent(p.content())
@@ -65,10 +57,8 @@ func (p *LogPane) Clear() {
 	p.vp.SetContent("")
 }
 
-// SetSize lays the viewport out for the terminal: full-width text and a fixed ~25%
-// of the terminal height, so the log fills a stable region and scrolls past it
-// rather than growing line by line. The router re-sets content here each cycle, so
-// freshly appended lines appear without LogPane tracking the router.
+// SetSize lays out a full-width pane at about a quarter of the terminal height. The
+// router re-sets the content each cycle.
 func (p *LogPane) SetSize(termWidth, termHeight int) {
 	p.width, p.height = termWidth, termHeight
 	p.vp.SetWidth(p.innerWidth())
@@ -95,21 +85,9 @@ func (p *LogPane) GotoTop()    { p.vp.GotoTop() }
 
 // innerWidth is the text width inside the box (full width minus header-margin parity,
 // side borders, and the 1-col padding on each side).
-func (p *LogPane) innerWidth() int {
-	w := p.width - 2 - 2 - 2
-	if w < 10 {
-		w = 10
-	}
-	return w
-}
+func (p *LogPane) innerWidth() int { return max(p.width-2-2-2, 10) }
 
-func (p *LogPane) contentHeight() int {
-	n := p.height / 4
-	if n < 3 {
-		n = 3
-	}
-	return n
-}
+func (p *LogPane) contentHeight() int { return max(p.height/4, 3) }
 
 // In wrapped mode an entry's first row carries the bullet and its continuations are
 // indented under it, so entry boundaries survive folding.
@@ -136,37 +114,20 @@ func (p *LogPane) content() string {
 	return b.String()
 }
 
-// wrapEntry folds one entry to the pane width. ansi.Wrap (rather than Wordwrap) breaks
-// word boundaries when it has to, so an unbroken token wider than the pane — the deep
-// filesystem path that motivates the mode — is split instead of left overlong for the
-// viewport to clip straight back off.
+// wrapEntry folds one entry to the pane width, splitting unbroken tokens (paths) too.
 func (p *LogPane) wrapEntry(line string) string {
-	w := p.innerWidth() - lipgloss.Width(logBullet)
-	if w < 1 {
-		w = 1
-	}
-	rows := strings.Split(ansi.Wrap(line, w, logBreaks), "\n")
-	for i, r := range rows {
-		if i == 0 {
-			rows[i] = logBullet + r
-			continue
-		}
-		rows[i] = logIndent + r
-	}
-	return strings.Join(rows, "\n")
+	w := max(p.innerWidth()-lipgloss.Width(logBullet), 1)
+	return hangRows(ansi.Wrap(line, w, logBreaks), logBullet, logIndent)
 }
 
-// View draws the log inside a bordered box whose top edge is interrupted by an
-// "Output" legend (plus a scroll hint while focused). Wrapped mode is advertised in the
-// legend either way, so the render mode is visible without focusing the pane.
+// View draws the log in a box with an "Output" legend (plus a scroll hint while focused);
+// wrapped mode shows in the legend either way.
 func (p *LogPane) View(focused bool) string {
 	label := "Output"
 	if p.wrap {
 		label = "Output [wrap]"
 	}
 	if focused {
-		// Derived from the keymap for the same reason ScrollContainer's is: a spelled-out
-		// legend goes stale silently the next time one of these keys is rebound.
 		label += " · " + core.Legend(
 			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
 			core.Hint("back", core.Keys.ToggleOutput, core.Keys.Back),
@@ -175,11 +136,5 @@ func (p *LogPane) View(focused bool) string {
 		)
 	}
 
-	// Include the horizontal padding in the run between the corners. frameBox adds
-	// the border cells back for lipgloss v2, whose Width includes the border; keeping
-	// that arithmetic in the shared helpers prevents the hand-drawn top edge and the
-	// box below it from drifting apart.
-	inner := p.innerWidth() + 2
-	content := frameBox(inner, focused).Padding(0, 1).Render(p.vp.View())
-	return frameTop(label, inner, focused) + "\n" + content
+	return paddedFrame(label, p.innerWidth(), focused, p.vp.View())
 }

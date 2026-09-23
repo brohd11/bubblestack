@@ -14,10 +14,8 @@ func wrapperOutput(ch *Chrome) (Wrapper, bool) {
 	return w, ok
 }
 
-// quitAction resolves a global quit (q / ctrl+c): the stack is consulted top-down
-// for a QuitGater that handles it, so a modal pushed above the gating screen (a
-// save-as line edit over the editor) doesn't silence it. With no taker the quit
-// is an unconditional tea.Quit.
+// quitAction resolves q / ctrl+c by walking the stack top-down for a QuitGater, so a modal
+// above the gating screen does not silence it; otherwise it quits.
 func (r *Router) quitAction() Action {
 	for i := len(r.stack) - 1; i >= 0; i-- {
 		if g, ok := r.stack[i].(QuitGater); ok {
@@ -29,15 +27,18 @@ func (r *Router) quitAction() Action {
 	return Async(tea.Quit)
 }
 
-// dirKeyAction resolves a DirLocator-based global key (Terminal, TerminalWindow, OpenDir):
-// when action is wired, k matches b, the top screen isn't capturing text, and it advertises
-// a directory, it returns (action(dir), true). Otherwise (Action{}, false) so the key falls through to
-// the active screen — preserving any row-level handling it does itself.
+// capturingText reports whether the top screen is capturing typed text that k would feed.
+// A modified key types nothing, so it never counts.
+func (r *Router) capturingText(k string) bool {
+	f, ok := r.Top().(Filterer)
+	return ok && f.Filtering() && !modifiedKey(k)
+}
+
+// dirKeyAction resolves a DirLocator-based global key (Terminal, TerminalWindow, OpenDir)
+// at the top screen's directory. It reports false, letting the key fall through to the
+// screen, when the action is unwired, the screen is capturing text, or it has no directory.
 func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Action) (Action, bool) {
-	if action == nil || !MatchKey(k, b) {
-		return Action{}, false
-	}
-	if f, ok := r.Top().(Filterer); ok && f.Filtering() && !modifiedKey(k) {
+	if action == nil || !MatchKey(k, b) || r.capturingText(k) {
 		return Action{}, false
 	}
 	if loc, ok := r.Top().(DirLocator); ok {
@@ -48,34 +49,19 @@ func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Actio
 	return Action{}, false
 }
 
-// globalKey handles the keys available in any screen. It returns (act, true) when it
-// consumed the key — act carries a control message resolved inline and/or an async cmd
-// (e.g. tea.Quit or an output-scroll cmd) — or (Action{}, false) to let the active
-// screen handle it. Pointer receiver: [ / ] mutate active/stack, which must persist
-// back to Update's router.
+// globalKey handles the keys available in any screen, reporting whether it consumed k.
+// Pointer receiver: tab switching mutates active/stack.
 func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 	k := msg.String()
 	if k == "ctrl+c" {
 		return r.quitAction(), true
 	}
 
-	// Refresh fires from any screen/depth except while text is captured (a filtering
-	// list or a focused form, both reporting Filtering()). The action is
-	// consumer-supplied so core names no domain type. Placed before the
-	// output-focused branch so it works even with the output pane focused.
-	if r.refreshAction != nil && MatchKey(k, Keys.Refresh) {
-		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
-			return r.refreshAction(r.sh), true
-		}
+	// Before the output-focused branch, so refresh works with the pane focused too.
+	if r.refreshAction != nil && MatchKey(k, Keys.Refresh) && !r.capturingText(k) {
+		return r.refreshAction(r.sh), true
 	}
 
-	// Terminal ("t") hands this process's terminal to a shell, TerminalWindow ("T") opens a
-	// detached window, and OpenDir ("ctrl+t") opens the file manager — all three at the top
-	// screen's directory from any depth, which is the whole point: they work once you've
-	// drilled into a repo, not only on the list row. dirKeyAction gates each on text capture
-	// (a filtering list / focused form can still type the letter) and resolves the directory
-	// from the top screen's DirLocator; a screen that isn't one lets the key fall through so
-	// its own row-level handling still gets it.
 	if act, ok := r.dirKeyAction(k, Keys.Terminal, r.terminalAction); ok {
 		return act, true
 	}
@@ -89,23 +75,11 @@ func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 	ch := r.sh.Chrome
 	outputOn := ch != nil && ch.Output != nil
 
-	// Wrap flips a render mode between truncated and folded. Two things can own that
-	// mode — the output pane and the top screen (a diff, say) — so focus decides which
-	// one the key means: the pane while it holds focus, otherwise the screen if it wraps
-	// at all, and the pane when it doesn't. That keeps w pointed at whatever the user is
-	// actually looking at, and leaves the pane reachable (O, then w) from a screen that
-	// wraps.
-	//
-	// Both sides are optional capabilities (Wrapper), so neither an Output nor a screen
-	// without one ever consumes the key. Filtering screens keep a literal w (a
-	// modified-key combo would pass the gate — see modifiedKey); a focused pane means
-	// the screen isn't reading keys anyway, so the gate doesn't apply there.
+	// Wrap goes to the output pane while it is focused, otherwise to the top screen if it
+	// wraps, otherwise to the pane.
 	if MatchKey(k, Keys.Wrap) {
-		f, isFilterer := r.Top().(Filterer)
-		filtering := isFilterer && f.Filtering() && !modifiedKey(k)
 		paneFocused := outputOn && ch.outputFocused
-
-		if paneFocused || !filtering {
+		if paneFocused || !r.capturingText(k) {
 			if w, ok := r.Top().(Wrapper); ok && !paneFocused {
 				w.ToggleWrap()
 				return Action{}, true
@@ -117,26 +91,18 @@ func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 		}
 	}
 
-	// Mouse capture costs the terminal's own drag-select, which is the only way to copy
-	// a path back out of the log, so it toggles from any screen — like Output/Wrap, and
-	// above the focused branch, whose fall-through would otherwise swallow the key. The
-	// status line reports the trade rather than just the state, since reclaiming
-	// selection is the whole reason to press it.
-	if MatchKey(k, Keys.Mouse) {
-		if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
-			// v2 has no enable/disable command: mouse reporting is a field on the
-			// tea.View the next render returns, which Router.View reads off mouseOn.
-			r.mouseOn = !r.mouseOn
-			if r.mouseOn {
-				return SetStatus("mouse on · wheel scrolls"), true
-			}
-			return SetStatus("mouse off · text selection on"), true
+	// Mouse capture costs the terminal's drag-select, so it toggles from any screen (above
+	// the focused branch, which would swallow it). Router.View reads mouseOn.
+	if MatchKey(k, Keys.Mouse) && !r.capturingText(k) {
+		r.mouseOn = !r.mouseOn
+		if r.mouseOn {
+			return SetStatus("mouse on · wheel scrolls"), true
 		}
+		return SetStatus("mouse off · text selection on"), true
 	}
 
-	// When the output pane holds focus, navigation keys scroll it; everything
-	// else either toggles back or clears. Top/Bottom are matched here rather than
-	// left to the viewport's own keymap, which binds neither.
+	// A focused output pane takes navigation keys. Top/Bottom are matched here because the
+	// viewport's own keymap binds neither.
 	if outputOn && ch.outputFocused {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput), MatchKey(k, Keys.Back):
@@ -161,14 +127,9 @@ func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 		return Async(ch.Output.Update(msg)), true
 	}
 
-	// O jumps into the output pane, o shows/hides it, c clears the log, [ / ]
-	// switch top-level tabs (only at the root, so the live stack always belongs
-	// to the active tab), and alt+u unwinds a deep stack back to the root for a
-	// quick exit — unless the active screen is capturing filter text (and even
-	// then, a modified-key combo passes: it types no text — see modifiedKey).
-	// The output keys pass through (no consume) when there is no output pane, so a
-	// chromeless app can bind O/o itself.
-	if f, ok := r.Top().(Filterer); !ok || !f.Filtering() || modifiedKey(k) {
+	// The output keys pass through when there is no output pane, so a chromeless app can
+	// bind them itself.
+	if !r.capturingText(k) {
 		switch {
 		case MatchKey(k, Keys.ToggleOutput):
 			if !outputOn {
@@ -195,17 +156,13 @@ func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 			r.clearOutput()
 			return Action{}, true
 		case MatchKey(k, Keys.Quit):
-			// q is the global quit, handled once here for every screen (the filter
-			// gate above keeps it from firing while a list/form is capturing text).
 			return r.quitAction(), true
 		case MatchKey(k, Keys.NextTab):
 			return Action{}, r.switchTab(1)
 		case MatchKey(k, Keys.PrevTab):
 			return Action{}, r.switchTab(-1)
 		case MatchKey(k, Keys.Unwind):
-			// Unwind a deep stack back to the root for a quick exit. Only consume it
-			// when there's something to unwind, so at the root the key passes through
-			// to the active screen instead of being swallowed.
+			// At the root there is nothing to unwind, so the key passes through.
 			if len(r.stack) > 1 {
 				return ResetToRoot(), true
 			}
@@ -214,36 +171,24 @@ func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 	return Action{}, false
 }
 
-// mouse claims a wheel over the output pane — router-owned chrome no screen can see —
-// and leaves every other mouse event to the active screen, which is how a DocScreen's
-// viewport receives it. It returns (act, true) only when it consumed the event.
-//
-// Scrolling the pane also focuses it. That isn't incidental: resize re-pins an
-// unfocused pane to the bottom on every message, so a wheel that scrolled without
-// focusing would snap straight back. Focus already means "the user is reading rather
-// than tailing" here, so the wheel just says so — and the pane's border and legend
-// announce it, with O/esc returning as they do from a keyboard focus.
+// mouse claims clicks on router chrome and wheel notches over the output pane, reporting
+// whether it consumed the event; everything else goes to the screen. Scrolling the pane
+// also focuses it, or resize would re-pin it to the bottom.
 func (r *Router) mouse(mm tea.MouseMsg) (Action, bool) {
-	// v2 splits the old Action field into distinct message types. Only clicks and
-	// wheel notches are the router's business; motion and release fall through
-	// untouched to the active screen, which is what drives editor drag-select.
+	// Only clicks and wheel notches are the router's; motion and release go to the screen
+	// (editor drag-select).
 	switch mm.(type) {
 	case tea.MouseClickMsg, tea.MouseWheelMsg:
 	default:
 		return Action{}, false
 	}
 	msg := mm.Mouse()
-	// A press aimed at the body returns output-pane focus to it: the pane grabs
-	// focus on wheel (below), and the keyboard has O/esc to come back — but a
-	// click or wheel over the body must release it too, or the pane keeps the
-	// keys (and keeps the screen dimmed) after the mouse has moved on.
+	// A click or wheel over the body takes focus back from the output pane.
 	if ch := r.sh.Chrome; ch != nil && ch.outputFocused &&
 		!(r.outputVisible() && r.inOutput(msg.Y)) {
 		r.setOutputFocused(false)
 	}
-	// A left click on a breadcrumb segment pops the stack back to it — the mouse
-	// analog of hammering esc. Router-owned chrome, so it lives here with the
-	// output-pane wheel claim below.
+	// A left click on a breadcrumb segment pops back to it.
 	if msg.Button == tea.MouseLeft {
 		if act, ok := r.headerClick(msg.X, msg.Y); ok {
 			return act, true
@@ -274,11 +219,9 @@ func (r *Router) mouse(mm tea.MouseMsg) (Action, bool) {
 	return Async(ch.Output.Update(mm)), true
 }
 
-// headerClick hit-tests a left click against the header box — the topmost chrome,
-// rows [0, header height). A hit fires the consumer's HeaderPane.OnClick with the
-// click's cell coordinates (y is also the header-local row, for a closure that
-// sub-divides its box). Returns handled=false when the header is masked, hidden,
-// or has no OnClick, so the click falls through to whatever lies below.
+// headerClick fires HeaderPane.OnClick for a left click in the header box, with cell
+// coordinates (y is also the header-local row). False when the header is masked, hidden or
+// has no handler.
 func (r *Router) headerClick(x, y int) (Action, bool) {
 	if r.currentMask().Header {
 		return Action{}, false
@@ -293,12 +236,8 @@ func (r *Router) headerClick(x, y int) (Action, bool) {
 	return ch.Header.OnClick(r.sh, x, y), true
 }
 
-// tabClick hit-tests a left click against the tab strip: the tab under the cursor
-// is activated and unwound to its root in one message (ShowTab) — the mouse analog
-// of the [ / ] tab keys, but available from any depth. Only the strip's first row
-// is live; the rule below it is dead space. Returns handled=false for clicks
-// anywhere else (masked/absent strip, the rule row, past the last tab) so the
-// active screen still gets them.
+// tabClick activates the clicked tab, unwound to its root (ShowTab), from any depth. Only
+// the strip's first row is live; other clicks fall through.
 func (r *Router) tabClick(x, y int) (Action, bool) {
 	mask := r.currentMask()
 	if mask.TabStrip || len(r.tabs) < 2 {
@@ -325,12 +264,8 @@ func (r *Router) tabClick(x, y int) (Action, bool) {
 	return Action{}, false
 }
 
-// crumbClick hit-tests a left click against the breadcrumb bar: the segment
-// under the cursor maps to a stack depth (crumbTrail pairs segments with stack
-// indices), and the router pops back to it. Returns handled=false for clicks
-// anywhere else — the bar's rule row, separators, a truncated trail (segments
-// are cut, so no span is trustworthy), or with the pane hidden/masked — so the
-// active screen still gets its own clicks.
+// crumbClick pops back to the clicked breadcrumb segment. Rule rows, separators, a
+// truncated trail and a hidden bar fall through.
 func (r *Router) crumbClick(x, y int) (Action, bool) {
 	mask := r.currentMask()
 	if mask.Breadcrumb || len(r.stack) < 2 {
@@ -369,25 +304,17 @@ func (r *Router) crumbClick(x, y int) (Action, bool) {
 	return Action{}, false
 }
 
-// inOutput reports whether terminal row y falls inside the output box. The box is
-// bottom-anchored chrome — frame stacks the status line, the output box, then the help
-// bar against the bottom edge — so its rows are the Height() sitting above the help.
-// Clamped at 0 for terminals too short to hold all router-owned chrome.
+// inOutput reports whether row y is inside the output box, which sits above the help bar
+// at the bottom.
 func (r Router) inOutput(y int) bool {
 	top := r.Top()
 	last := r.sh.height - r.helpHeightFor(top, r.maskOf(top)) - 1
-	first := last - r.sh.Chrome.Output.Height() + 1
-	if first < 0 {
-		first = 0
-	}
+	first := max(last-r.sh.Chrome.Output.Height()+1, 0)
 	return y >= first && y <= last
 }
 
-// switchTab moves the active tab by delta (wrapping), but only at the root — when
-// drilled into a sub-screen the live stack belongs to the active tab and must not
-// be swapped out from under it. The cached root preserves the tab's prior state.
-// Reports whether it switched; when it didn't, the key passes through to the
-// active screen (so [ / ] can be typed into a form at depth).
+// switchTab moves the active tab by delta (wrapping), only at the root, and reports
+// whether it did; otherwise the key passes to the screen.
 func (r *Router) switchTab(delta int) bool {
 	if len(r.tabs) < 2 || len(r.stack) != 1 {
 		return false
@@ -413,11 +340,8 @@ func (r *Router) clearOutput() {
 	r.setOutputFocused(false)
 }
 
-// setOutputFocused is the single writer for the output pane's focus flag, so the
-// body screen's focus always tracks it: on a transition the top screen is told
-// via FocusableScreen (a ModularScreen dims its active pane, a form its border)
-// and told again when the keys return. Screens without the capability render
-// the same either way.
+// setOutputFocused is the single writer of the output pane's focus, telling the top screen
+// via FocusableScreen on each transition.
 func (r *Router) setOutputFocused(on bool) {
 	ch := r.sh.Chrome
 	if ch == nil || ch.outputFocused == on {

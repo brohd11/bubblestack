@@ -29,9 +29,8 @@ func (s *Screen) LineText(line int) (string, bool) {
 	return string(s.lines[line]), true
 }
 
-// CursorAnchor returns the caret's absolute terminal cell when it is currently
-// visible. An absolute origin is available for embedded editors after their parent has
-// rendered at least once; standalone editors therefore report false.
+// CursorAnchor returns the caret's absolute cell when visible. Only embedded editors
+// know their origin (after a first render); standalone ones report false.
 func (s *Screen) CursorAnchor() (x, y int, visible bool) {
 	if !s.focused || !s.hasOrigin || s.h < 1 || s.w < 1 {
 		return 0, 0, false
@@ -53,11 +52,9 @@ func (s *Screen) CursorAnchor() (x, y int, visible bool) {
 		s.originY + s.insetY() + viewRow, true
 }
 
-// Reveal moves the caret to p and brings it on screen, centering the row when it was
-// not already visible. It clears the selection but changes no text, so it records no
-// undo step. A position naming a line the buffer does not have is rejected and changes
-// nothing — which is what lets a caller aim at a buffer whose file is still loading and
-// simply try again on the next update.
+// Reveal moves the caret to p and brings it on screen (centered if it was off), clearing
+// the selection without an undo step. A line beyond the buffer is rejected, so a caller
+// can retry once a file finishes loading.
 func (s *Screen) Reveal(p Position) bool {
 	if p.Line < 0 || p.Line >= len(s.lines) {
 		return false
@@ -73,11 +70,8 @@ func (s *Screen) Reveal(p Position) bool {
 	return true
 }
 
-// centerIfOffscreen puts the caret's row in the middle of the viewport when it is not
-// already on it. clampScroll alone scrolls the minimum distance, which lands a jump
-// target on the very first or last row with no context around it; a jump the user did
-// not scroll to themselves should arrive somewhere they can read. A caret already on
-// screen is left exactly where it sits, so this never disturbs ordinary editing.
+// centerIfOffscreen centers the caret's row when it is off screen, so a jump lands with
+// context around it; an on-screen caret is left alone.
 func (s *Screen) centerIfOffscreen() {
 	if s.w < 1 || s.h < 1 {
 		return
@@ -93,10 +87,8 @@ func (s *Screen) centerIfOffscreen() {
 	s.clampScrollBounds()
 }
 
-// SelectRange reveals r's start and highlights r. The caret lands on the START, not the
-// end: the range is something the caller found for the user (a definition's name, the
-// span a hover describes), so the reading position is its beginning. An empty or
-// inverted range reveals without highlighting, since a selection needs start < end.
+// SelectRange reveals r's start and selects r, caret at the start. An empty or inverted
+// range reveals without selecting.
 func (s *Screen) SelectRange(r Range) bool {
 	start := textPos{y: r.Start.Line, x: r.Start.Column}
 	end := textPos{y: r.End.Line, x: r.End.Column}
@@ -110,10 +102,8 @@ func (s *Screen) SelectRange(r Range) bool {
 	return true
 }
 
-// ReplaceRange applies one externally supplied edit through the editor's ordinary
-// delta history. The replacement is one undo step, clears the selection, and leaves
-// the caret immediately after the inserted text. Invalid ranges are rejected without
-// changing the buffer.
+// ReplaceRange applies one external edit as one undo step, clearing the selection and
+// leaving the caret after the inserted text. Invalid ranges change nothing.
 func (s *Screen) ReplaceRange(r Range, text string) bool {
 	start := textPos{y: r.Start.Line, x: r.Start.Column}
 	end := textPos{y: r.End.Line, x: r.End.Column}
@@ -135,18 +125,10 @@ type Edit struct {
 	Text  string
 }
 
-// ApplyEdits applies a whole set of externally supplied edits as ONE undo step. The set
-// is applied in reverse document order, so every range still names the text it was
-// computed against — the edits are stated in terms of the buffer as it stands, and
-// working backwards means an earlier edit's length change cannot move a later one. A
-// formatter returning three hundred edits must cost one ctrl+z, not three hundred.
-//
-// The whole set is validated first: any invalid or overlapping range rejects everything
-// and leaves the buffer untouched, because a half-applied format is worse than none.
-//
-// The caret is preserved by line and column rather than followed to an edit's end —
-// these edits are a reformat of text the user is sitting in, not an insertion they
-// asked for at a point — and clamped to wherever that lands in the new buffer.
+// ApplyEdits applies a set of external edits as one undo step, in reverse document order
+// so each range still refers to the original text. Any invalid or overlapping range
+// rejects the whole set. The caret keeps its line and column (clamped), since these are
+// reformats around it.
 func (s *Screen) ApplyEdits(edits []Edit) bool {
 	if len(edits) == 0 {
 		return false
@@ -182,9 +164,8 @@ func (s *Screen) ApplyEdits(edits []Edit) bool {
 				textPos{y: edit.Range.End.Line, x: edit.Range.End.Column},
 				cleanExternalText(edit.Text))
 		}
-		// Inside the mutation, not after it: editAtomic ends with clampScroll, which
-		// reads the caret's line — and a set that deleted lines can leave the caret
-		// pointing past the buffer it was measured against.
+		// Clamp inside the mutation: editAtomic's clampScroll reads the caret's line, which may
+		// now be past the end.
 		s.curY = min(max(caret.Line, 0), len(s.lines)-1)
 		s.curX = min(max(caret.Column, 0), len(s.lines[s.curY]))
 		s.wantX = s.curX
@@ -192,9 +173,8 @@ func (s *Screen) ApplyEdits(edits []Edit) bool {
 	return true
 }
 
-// cleanExternalText turns arbitrary supplied text into buffer-legal lines, the same
-// normalization a bracketed paste gets: control runes with no display cell are dropped
-// and every line ending becomes a plain newline.
+// cleanExternalText normalizes supplied text like a paste: control runes dropped, line
+// endings made \n.
 func cleanExternalText(text string) string {
 	parts := splitPastedLines(text)
 	var clean strings.Builder

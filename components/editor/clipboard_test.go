@@ -211,7 +211,7 @@ func TestEditorChordsDoNotType(t *testing.T) {
 // TestEditorUnknownAltRunesDoNotType is the editor-side backstop for malformed
 // terminal escape input. The program filter drops the known SGR fragment pair, but an
 // unrecognized Alt rune must never become text or delete the current selection even
-// when an Screen is driven without bubblestack.Run.
+// when a Screen is driven without bubblestack.Run.
 func TestEditorUnknownAltRunesDoNotType(t *testing.T) {
 	s, sh := newEditor(Opts{})
 	s.setContent("abcdef")

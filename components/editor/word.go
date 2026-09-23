@@ -11,11 +11,9 @@ import "unicode"
 // alnum/punct classes — keep it stupidly simple).
 func isWordSpace(r rune) bool { return unicode.IsSpace(r) }
 
-// editorWordClass groups runes into whitespace / word (letters, digits, '_') / everything
-// else. It is the notion of a word that double-click selection and backward word deletion
-// share; the whitespace-only split word movement uses is too coarse for both — it would
-// take all of "foo.bar(baz)" as one word — so punctuation forms its own runs and a
-// double-click on the '.' in "foo.bar" takes just the dot.
+// editorWordClass groups runes into whitespace, word (letters, digits, '_') and
+// punctuation, for double-click selection and word deletion (finer than word movement,
+// so "foo.bar" selects "foo", ".", "bar" separately).
 func editorWordClass(r rune) int {
 	switch {
 	case isWordSpace(r):
@@ -27,10 +25,8 @@ func editorWordClass(r rune) int {
 	}
 }
 
-// wordBoundsAt returns the half-open column range of the run of same-class runes around
-// col. Unlike wordBackPos/wordForwardPos it is a pure function of the line and does not
-// swallow the whitespace next to the word. A column past the end of the line takes the
-// last run, which is where a click in the empty space right of the text lands.
+// wordBoundsAt returns the [start, end) run of same-class runes around col, without the
+// adjacent whitespace. Past the end of the line it takes the last run.
 func wordBoundsAt(line []rune, col int) (int, int) {
 	if len(line) == 0 {
 		return 0, 0
@@ -49,12 +45,9 @@ func wordBoundsAt(line []rune, col int) (int, int) {
 	return from, to
 }
 
-// wordBackPos is the position WordBackward would move to from the cursor: at column 0 the
-// previous line's end (the caller treats that one as a plain move), else back over the word
-// runes left of the caret and then over the spaces before them. It lands on the BACK of the
-// previous word ("foo bar|"), mirroring wordForwardPos landing on the FRONT of the next one
-// ("foo |bar") — so the two stop on opposite sides of a gap, and a left/right round trip from
-// a word front toggles across it rather than returning.
+// wordBackPos is where WordBackward moves: at column 0 the previous line's end, else back
+// over word runes then the spaces before them. It lands behind the previous word, the
+// mirror of wordForwardPos.
 func (s *Screen) wordBackPos() (int, int) {
 	y, x := s.curY, s.curX
 	if x == 0 {
@@ -93,11 +86,8 @@ func (s *Screen) wordForwardPos() (int, int) {
 	return y, x
 }
 
-// deleteWordBackPos deletes one editorWordClass run, preserving whitespace before it.
-// Exactly one ordinary space before the caret is deleted with the preceding run;
-// longer whitespace runs, tabs, and other Unicode whitespace are deleted on their own.
-// Word and symbol runs stay separate, so repeated presses peel "src/foo.md" apart
-// as "md", ".", "foo", "/", "src".
+// deleteWordBackPos deletes one editorWordClass run, plus one ordinary space before the
+// caret; longer whitespace is deleted on its own. "src/foo.md" peels as md . foo / src.
 func (s *Screen) deleteWordBackPos() (int, int) {
 	y, x := s.curY, s.curX
 	if x == 0 {
@@ -131,9 +121,7 @@ func (s *Screen) moveWordForward() {
 	s.curY, s.curX, s.wantX = y, x, x
 }
 
-// deleteRange removes the text from (y1, x1) to (y2, x2), merging the two line ends
-// into y1 and dropping the lines between. An empty range is a no-op (and stays
-// clean); the caller owns the cursor afterwards.
+// deleteRange removes (y1, x1)..(y2, x2), joining the ends. The caller owns the caret.
 func (s *Screen) deleteRange(y1, x1, y2, x2 int) {
 	s.replaceText(textPos{y1, x1}, textPos{y2, x2}, "")
 }

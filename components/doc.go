@@ -9,15 +9,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// DocScreen is the reusable read-only text page: a scrollable viewport under an
-// optional title bar, popped with esc. It backs any "show the user a page of prose"
-// flow (help, docs, a release note) without the caller reimplementing viewport
-// plumbing.
-//
-// It is context-agnostic — the body comes from a Render closure that is handed the
-// text width and returns the finished string, so the caller owns all formatting
-// (markdown, plain text, a rendered table) and DocScreen owns only scrolling. Render
-// is re-run when the width changes, which is what lets a caller re-wrap on resize.
+// DocScreen is a read-only scrollable page under an optional title, popped with esc. The
+// body comes from a Render(width) closure, re-run when the width changes, so the caller
+// owns formatting and DocScreen owns scrolling.
 type DocScreen struct {
 	Title      string // in-body title bar (core.WithTitle); empty ⇒ none
 	Crumb      string // breadcrumb segment (CrumbLabel); defaults to Title
@@ -73,17 +67,13 @@ func (s *DocScreen) Init(*core.Shared) tea.Cmd { return nil }
 // terminal edge. The Render closure is handed the width net of both gutters.
 const gutter = "  "
 
-// SetSize lays the viewport out under the title bar and re-renders the body when the
-// width changed — Render is width-dependent (it wraps), so a resize must re-run it,
-// while a height-only change (the output pane opening) must not.
+// SetSize re-renders only when the width changed; a height-only change keeps the render.
 func (s *DocScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	h := bodyHeight
 	if s.Title != "" {
 		h -= lipgloss.Height(core.RenderTitleBar(s.Title))
 	}
-	if h < 1 {
-		h = 1
-	}
+	h = max(h, 1)
 	s.vp.SetWidth(width)
 	s.vp.SetHeight(h)
 	if width == s.width {
@@ -97,16 +87,11 @@ func (s *DocScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	s.vp.SetContent(core.IndentLines(body, gutter))
 }
 
-// SetEmbedded implements core.Embeddable: hosted as a pane (components.ScreenPanel) the
-// page is handed pane-relative mouse coordinates, so it must not subtract the router's
-// body offset the way a standalone pushed page must. Geometry only — nothing about how
-// the page looks changes.
+// SetEmbedded implements core.Embeddable: embedded, mouse coordinates are pane-relative.
 func (s *DocScreen) SetEmbedded(v bool) { s.embedded = v }
 
-// clickLink answers the link under a click, in the page's own content coordinates: the
-// gutter off the left, the title bar and the scroll offset off the top, and the chrome
-// above the body only when this page IS the body. hit=false means the click landed on
-// ordinary text and belongs to the viewport.
+// clickLink maps a click to a link in content coordinates (gutter, title, scroll offset
+// and, standalone, the body offset removed). hit=false leaves it to the viewport.
 func (s *DocScreen) clickLink(sh *core.Shared, x, y int) (core.Action, bool) {
 	if len(s.links) == 0 {
 		return core.Action{}, false
@@ -126,10 +111,7 @@ func (s *DocScreen) clickLink(sh *core.Shared, x, y int) (core.Action, bool) {
 
 // textWidth is the width handed to Render: the terminal minus a gutter on each side.
 func (s *DocScreen) textWidth() int {
-	w := s.width - 2*len(gutter)
-	if w < 20 {
-		w = 20
-	}
+	w := max(s.width-2*len(gutter), 20)
 	return w
 }
 
@@ -146,10 +128,8 @@ func (s *DocScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Acti
 				return s, act
 			}
 		}
-		// The bar advertises core.Keys.Up/Down for scrolling, but the viewport's own
-		// keymap knows only its subset (up/k, down/j) — so the alias keys (alt+w/alt+s,
-		// and anything a new scheme adds) were advertised and dead. Scroll here instead,
-		// after OnKey so a caller can still claim one of these.
+		// Scroll on core.Keys.Up/Down here: the viewport's own keymap misses the alias keys the
+		// help bar advertises. After OnKey, so a caller can claim them.
 		switch {
 		case core.MatchKey(k, core.Keys.Up):
 			s.vp.ScrollUp(1)

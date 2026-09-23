@@ -11,76 +11,29 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// MenuScreen is the floating dropdown / context menu: a small bordered box of rows the
-// router composites over the screen below it (core.Overlayer) at a caller-supplied
-// anchor (core.OverlayPositioner), rather than the full-screen list a PickerScreen
-// draws. It is the chooser that stays next to the thing it acts on — the menu a button
-// drops down, the menu a right-click raises over a row — where a PickerScreen would
-// replace the very view the choice is about.
+// MenuScreen is a floating dropdown or context menu: a small bordered box of rows
+// composited over the screen below at a caller-supplied anchor, next to the thing it acts
+// on (where a PickerScreen would replace the view).
 //
-// It inherits three things from the overlay machinery and adds nothing to the router:
+// It is modal because only the top screen gets Update; Filtering always reports true so
+// the router's single-key shortcuts cannot fire underneath, and QuitGate closes the menu
+// on ctrl+c. Submenus are a Pick that pushes another menu at ChildAnchor. The callback
+// owns dismissal: a Pick that wants the menu gone returns core.Pop(). Esc closes one
+// level; set a child's OnCancel to core.Pop(n) to close a cascade. It adds no breadcrumb
+// segment, since a dropdown is not a place.
 //
-//   - MODAL FOR FREE: only Router.Top() receives Update, so a pushed menu owns the keys.
-//     Filtering() reports true unconditionally (the LineEditScreen precedent) so the
-//     router's global single-key shortcuts (q/O/o/c/t/T/[/]) can't fire underneath it.
-//     ctrl+c is the one key that runs ahead of that gate, so QuitGate answers it instead:
-//     it closes the menu rather than letting a host's unsaved-changes confirm stack on
-//     top of one.
-//   - CASCADES FOR FREE: z-order is stack order and every overlay composites over the
-//     deepest non-overlay screen's whole frame, so a submenu pushed over its parent
-//     leaves the parent drawn. An item opens one by returning core.Push of a second
-//     menu anchored at the parent's ChildAnchor(); MenuItem carries no "has submenu"
-//     bit, because a submenu is just a Pick that pushes.
-//   - THE CALLBACK OWNS THE DISMISSAL: like DialogScreen.OnYes and LineEditScreen.OnDone,
-//     a Pick that wants the menu gone returns core.Pop() (or core.Seq(core.Pop(), act))
-//     itself. The menu never pops on select, which is exactly what lets a Pick push a
-//     submenu instead.
+// Rows are hand-rolled rather than a bubbles list so every rendered row maps to an item
+// for hit-testing, and place() agrees with View() to the cell (menu_test.go pins both).
 //
-// Rows are hand-rolled rather than a wrapped bubbles list.Model: a menu wants to be
-// exactly as wide as its widest label and exactly as tall as its item count, with no
-// title bar, filter row, pagination row or page-based scrolling to make the row math
-// conditional. That math is the whole ballgame here — every rendered row has to map back
-// to an item index for click hit-testing, and place() has to agree with View() to the
-// cell (menu_test.go pins both).
-//
-// Esc closes ONE level: a plain core.Pop, the same thing esc means everywhere else in
-// the stack. A caller who wants esc to collapse a whole cascade sets the child's
-// OnCancel to core.Pop(n) — nesting depth is known where the menu is built.
-//
-// It contributes NO breadcrumb segment — deliberately not a core.Crumber, the stance
-// LineEditScreen takes (lineedit.go) and the opposite of every full-screen component's.
-// A dropdown is not a place you navigated to, so a trail that grew a segment each time
-// one opened would flicker a step in and out on every right-click.
-//
-// Known compromises, all of them consequences of keeping this inside the component:
-//
-//  1. core.Shared has no Height() accessor, so the menu can only see the BODY rect
-//     (Shared.BodyY() plus the bodyHeight handed to SetSize). It confines its box to
-//     that rect and never spills over the header, tab strip, output pane or help bar.
-//     That is also what makes it correct: the body rect is strictly inside the region
-//     the router clamps to, so the router's clamp is a no-op and place() is exactly
-//     where the box lands — which is what Update can then hit-test against.
-//  2. The router only re-SetSizes the base and the top screen, so a parent menu in a
-//     cascade keeps a stale termW/bodyH if the terminal is resized while a submenu is
-//     open. LineEditScreen has the same latent issue; fixing it is a core change.
-//  3. A click on the parent's box while a submenu is up only closes the submenu — it is
-//     "outside" the child, and cannot also be forwarded to the parent, which is not
-//     Top(). The second click acts on the parent.
-//  4. The router claims some clicks before the menu sees them (router_keys.go): tab-strip
-//     and breadcrumb clicks unwind the stack out from under a live menu, dismissing it
-//     (the menu draws no segment of its own, but the ones behind it are still hittable);
-//     a header click
-//     runs the consumer's HeaderPane.OnClick, which could push over a live menu; an
-//     output-pane click moves keyboard focus, leaving the menu drawn but keyless until
-//     esc. All three are call-site concerns.
-//  5. Right-click is claimed per call site, not globally. editor.Screen takes it when its
-//     host sets editor.Opts.ContextMenu — the first in-tree consumer, and the worked
-//     example of anchoring with AnchorAt in absolute cells from inside a pane. Everywhere
-//     else the button is still up for grabs, and two screens on one stack must not both
-//     claim it; this component arbitrates nothing.
-//  6. MenuItem.Hint is INERT TEXT. It renders the accelerator column, but this version
-//     dispatches no accelerators and does no type-ahead; a hint that reads like a key is
-//     a promise the menu does not yet keep.
+// Limitations:
+//  1. It only sees the body rect, so the box never covers chrome; that also makes place()
+//     exactly where the router draws it.
+//  2. A parent menu keeps its old size if the terminal is resized while a submenu is open.
+//  3. A click on the parent while a submenu is up only closes the submenu.
+//  4. Tab-strip and breadcrumb clicks unwind the stack under a live menu; header clicks
+//     run HeaderPane.OnClick; output-pane clicks take focus from it.
+//  5. Right-click is claimed per call site (editor.Opts.ContextMenu); nothing arbitrates.
+//  6. MenuItem.Hint is display-only: no accelerators or type-ahead are dispatched.
 type MenuScreen struct {
 	items    []MenuItem
 	anchor   MenuAnchor
@@ -94,17 +47,13 @@ type MenuScreen struct {
 	bodyH int // body height, from SetSize
 	bodyY int // absolute row the body starts at, from Shared.BodyY()
 
-	// OnSelect, when set, claims every selection wholesale — the item's own Pick is
-	// not consulted (the PickerScreen precedent). Both follow the callback-owns-the-
-	// dismissal convention.
+	// OnSelect, when set, handles every selection instead of the item's Pick.
 	OnSelect func(*core.Shared, MenuItem, int) core.Action
 	// OnCancel runs on esc/left and on a dismissing click; nil ⇒ a plain core.Pop.
 	OnCancel func(*core.Shared) core.Action
 }
 
-// Items are the menu's rows as built, including any separators — the finished row set
-// a caller assembled through MenuOpts plus whatever the constructor added. Read-only:
-// the slice backs the live menu, so callers must not mutate it.
+// Items returns the menu's rows as built, separators included. Do not mutate it.
 func (s *MenuScreen) Items() []MenuItem { return s.items }
 
 var _ core.Overlayer = (*MenuScreen)(nil)
@@ -112,14 +61,10 @@ var _ core.OverlayPositioner = (*MenuScreen)(nil)
 var _ core.Filterer = (*MenuScreen)(nil)
 var _ core.QuitGater = (*MenuScreen)(nil)
 
-// MenuItem is one row of a MenuScreen.
-//
-// Separator draws a muted rule and is never selectable; Disabled renders muted and is
-// skipped by keyboard nav and ignored by clicks. Hint is right-aligned muted text — an
-// accelerator label, or a "›" marking a row that opens a submenu — and is display-only
-// (see the type comment). Pick runs on enter or a click and owns its own dismissal; a
-// nil Pick is an inert row (the Item convention), consuming the enter and leaving the
-// menu up.
+// MenuItem is one row of a MenuScreen. Separator draws a muted rule and is never
+// selectable; Disabled rows are muted and skipped. Hint is right-aligned display-only text
+// (an accelerator label, or "›" for a submenu). Pick runs on enter or a click and owns the
+// dismissal; a nil Pick is an inert row.
 type MenuItem struct {
 	Label     string
 	Hint      string
@@ -128,37 +73,27 @@ type MenuItem struct {
 	Separator bool
 }
 
-// MenuAnchor is where a menu's box opens, in absolute terminal cells.
-//
-// X, Y is the PREFERRED top-left corner. FlipX and FlipY are the edges the box flips
-// away from when it doesn't fit in that direction: a right→left flip puts the box's
-// right edge at FlipX-1, a below→above flip puts its bottom row at FlipY-1. That is why
-// they are edges rather than "the anchor cell" — it is the only way to express both
-// "flip back over the pointer" (a context menu) and "flip clear of the button" (a
-// dropdown) with one rule. A zero FlipX/FlipY means "same as X/Y"; NewMenu normalizes,
-// so a bare MenuAnchor{X: x, Y: y} is a legal no-flip anchor.
+// MenuAnchor is where a menu opens, in absolute cells. X, Y is the preferred top-left;
+// FlipX and FlipY are the edges it flips away from when it does not fit (right edge at
+// FlipX-1, bottom row at FlipY-1), which expresses both "flip back over the pointer" and
+// "flip clear of the button". Zero flips mean "same as X/Y".
 type MenuAnchor struct{ X, Y, FlipX, FlipY int }
 
-// AnchorAt is the context-menu anchor: the box's top-left lands on the pointer cell, and
-// when it doesn't fit it flips back OVER the pointer (right edge / bottom row on the
-// pointer cell itself), the way a desktop context menu behaves near a screen edge.
+// AnchorAt is the context-menu anchor: top-left on the pointer cell, flipping back over it
+// near an edge.
 func AnchorAt(x, y int) MenuAnchor {
 	return MenuAnchor{X: x, Y: y, FlipX: x + 1, FlipY: y + 1}
 }
 
-// AnchorBelow is the button anchor: the widget occupies cell (x, y), the menu opens on
-// the row BELOW it, and when there is no room it flips to sit entirely above it — the
-// button is never covered either way.
+// AnchorBelow is the button anchor: the menu opens below cell (x, y), or entirely above it
+// when there is no room.
 func AnchorBelow(x, y int) MenuAnchor {
 	return MenuAnchor{X: x, Y: y + 1, FlipX: x + 1, FlipY: y}
 }
 
-// AnchorListRow anchors a menu to visible item idx of a list whose own view has its
-// top-left at absolute cell (originX, originY) — Shared.BodyY() for a full-screen list,
-// the PaneOriginer origin for one inside a pane. The menu opens on the first row below
-// the whole item and flips clear above it, so the row it acts on stays visible. ok is
-// false when idx is scrolled off-page; the caller picks the fallback, as with
-// ListItemRow.
+// AnchorListRow anchors a menu to visible item idx of a list whose view starts at absolute
+// cell (originX, originY): below the item, flipping above it. ok is false when idx is
+// off-page.
 func AnchorListRow(l *list.Model, idx, originX, originY int) (MenuAnchor, bool) {
 	return anchorListRow(l, idx, originX, originY, listItemRows, ListItemRow)
 }
@@ -221,9 +156,8 @@ const (
 	menuGutterW = 2 // the scroll-marker column, present only while the window is short
 )
 
-// dims derives every dimension from state, so nothing has to be cached from a render
-// pass. The gutter is added to contentW BEFORE the terminal clamp — the other order
-// lets the box overflow the terminal by the gutter's width.
+// dims derives every dimension from state. The gutter is added before the terminal clamp,
+// or the box would overflow by the gutter's width.
 func (s *MenuScreen) dims() (w, h, contentW, visible, titleRows int) {
 	if s.title != "" {
 		titleRows = 1
@@ -257,10 +191,8 @@ func (s *MenuScreen) dims() (w, h, contentW, visible, titleRows int) {
 	return contentW + menuChromeW, visible + menuChromeH + titleRows, contentW, visible, titleRows
 }
 
-// place resolves the anchor into the box's actual top-left cell, flipping and then
-// clamping into the body rect. Because the body rect is strictly inside the frame the
-// router clamps to, the router's own clamp is a no-op and this is where the box really
-// lands — which is what makes it safe for Update to hit-test against.
+// place resolves the anchor into the box's top-left, flipping then clamping into the body
+// rect. The router's own clamp is then a no-op, so Update can hit-test against this.
 func (s *MenuScreen) place() (x, y, w, h int) {
 	w, h, _, _, _ = s.dims()
 
@@ -286,10 +218,8 @@ func (s *MenuScreen) place() (x, y, w, h int) {
 	return x, y, w, h
 }
 
-// contentTop is the absolute row of the first item row — the box's top border and any
-// title line above it. Window row i is always contentTop()+i: the scroll markers share
-// the item rows' gutter column rather than taking rows of their own, precisely so this
-// stays exception-free.
+// contentTop is the absolute row of the first item row. Scroll markers share the gutter
+// column, so window row i is always contentTop()+i.
 func (s *MenuScreen) contentTop() int {
 	_, y, _, _ := s.place()
 	_, _, _, _, titleRows := s.dims()
@@ -300,22 +230,11 @@ func (s *MenuScreen) contentTop() int {
 // item range. Called after every cursor move and from SetSize.
 func (s *MenuScreen) clampWindow() {
 	_, _, _, visible, _ := s.dims()
-	if visible >= len(s.items) {
-		s.top = 0
-		return
-	}
-	if s.sel >= 0 {
-		s.top = min(s.top, s.sel)
-		s.top = max(s.top, s.sel-visible+1)
-	}
-	s.top = min(s.top, len(s.items)-visible)
-	s.top = max(s.top, 0)
+	s.top = clampTop(s.top, s.sel, visible, len(s.items))
 }
 
-// ChildAnchor is the anchor a submenu opening off the selected row should use: its left
-// border overlaps this box's right border by one cell so the cascade reads as connected,
-// and its own flip rules put it on the left (right edge flush against this box's left
-// border) or above when there is no room.
+// ChildAnchor is the anchor for a submenu off the selected row: overlapping this box's
+// right border by one cell, flipping to the left or above when there is no room.
 func (s *MenuScreen) ChildAnchor() MenuAnchor {
 	x, _, w, _ := s.place()
 	rowY := s.contentTop()
@@ -333,15 +252,6 @@ func (s *MenuScreen) selectable(i int) bool {
 
 func (s *MenuScreen) firstSelectable() int {
 	for i := range s.items {
-		if s.selectable(i) {
-			return i
-		}
-	}
-	return -1
-}
-
-func (s *MenuScreen) lastSelectable() int {
-	for i := len(s.items) - 1; i >= 0; i-- {
 		if s.selectable(i) {
 			return i
 		}
@@ -374,10 +284,8 @@ func (s *MenuScreen) Select(idx int) {
 	}
 }
 
-// move steps the cursor to the next selectable row in direction dir, skipping separators
-// and disabled rows. It gives up after one full lap, so an all-inert menu is a no-op.
-// wrap is the arrows' behavior; the wheel passes false (WheelNav's convention: keys wrap,
-// the wheel doesn't).
+// move steps to the next selectable row in direction dir, giving up after one lap. Keys
+// wrap; the wheel (wrap false) does not.
 func (s *MenuScreen) move(dir int, wrap bool) {
 	n := len(s.items)
 	if n == 0 || s.sel < 0 {
@@ -407,10 +315,8 @@ func (s *MenuScreen) Init(*core.Shared) tea.Cmd { return nil }
 // IsOverlay marks the screen for compositing over the screen below it.
 func (s *MenuScreen) IsOverlay() bool { return true }
 
-// OverlayPos hands the router the position place() already resolved. The box dims the
-// router passes are ignored: they come from the rendered View, and place() computes the
-// same numbers from state — which is what keeps View and the click hit-test in agreement
-// within a single frame.
+// OverlayPos returns place()'s position. The router's box dims are ignored; place() derives
+// the same numbers from state, keeping View and hit-testing in agreement.
 func (s *MenuScreen) OverlayPos(int, int) (int, int) {
 	x, y, _, _ := s.place()
 	return x, y
@@ -420,16 +326,9 @@ func (s *MenuScreen) OverlayPos(int, int) (int, int) {
 // shortcuts must not fire under it (the LineEditScreen precedent).
 func (s *MenuScreen) Filtering() bool { return true }
 
-// QuitGate implements core.QuitGater: a quit attempt while the menu is up closes the menu
-// instead, and a second press meets whatever gate lies underneath. Without it the router's
-// stack walk skips straight past the menu to the screen below — which is how a host's
-// unsaved-changes confirm ends up drawn on top of an open context menu, with cancelling it
-// dropping the user back into a menu they had already tried to leave. In a cascade each
-// press unwinds one level, since the walk reaches the innermost menu first.
-//
-// It pops directly rather than going through cancel(): OnCancel belongs to the host, and
-// one that returned anything other than a pop would leave ctrl+c — the escape hatch of
-// last resort — unable to make progress. This dismissal is the framework's call.
+// QuitGate implements core.QuitGater: ctrl+c closes the menu, so a host's unsaved-changes
+// confirm never stacks on top of an open menu. It pops directly rather than via OnCancel,
+// which the host could make do something else.
 func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }
 
 // HelpView is empty: the background screen's help bar stays, as with every other overlay.
@@ -508,15 +407,11 @@ func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
 	case core.MatchKey(k, core.Keys.Bottom):
 		s.Select(len(s.items) - 1)
 	}
-	// Keys.Right is deliberately unbound: opening a submenu with → would need to know an
-	// item HAS one, and a submenu here is just a Pick that pushes — so → would have to
-	// mean Select, firing real actions on leaf rows.
+	// Keys.Right stays unbound: a submenu is just a Pick, so → could only mean Select.
 	return core.Action{}
 }
 
-// pick runs the selection handler. OnSelect claims the row wholesale when set, else the
-// item's own Pick; either way the callback owns the dismissal, so a menu that should
-// close returns core.Pop() from it.
+// pick runs OnSelect, or the item's Pick; the callback owns the dismissal.
 func (s *MenuScreen) pick(sh *core.Shared) core.Action {
 	if s.sel < 0 || s.sel >= len(s.items) {
 		return core.Action{}
@@ -548,8 +443,8 @@ func (s *MenuScreen) View(*core.Shared) string {
 		field = max(contentW-menuGutterW, 1)
 	}
 
-	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
-	accent := lipgloss.NewStyle().Foreground(core.FocusedColor).Bold(true)
+	muted := core.MutedStyle()
+	accent := core.AccentStyle()
 
 	rows := make([]string, 0, visible+1)
 	if s.title != "" {
@@ -559,14 +454,7 @@ func (s *MenuScreen) View(*core.Shared) string {
 		idx := s.top + i
 		body := s.row(s.items[idx], idx == s.sel, field, muted, accent)
 		if gutter {
-			mark := " "
-			switch {
-			case i == 0 && s.top > 0:
-				mark = "↑"
-			case i == visible-1 && s.top+visible < len(s.items):
-				mark = "↓"
-			}
-			body += muted.Render(strings.Repeat(" ", menuGutterW-1) + mark)
+			body += scrollGutter(i, visible, s.top, len(s.items))
 		}
 		rows = append(rows, body)
 	}
@@ -575,9 +463,7 @@ func (s *MenuScreen) View(*core.Shared) string {
 	return PopupPanel(strings.Join(rows, "\n"), contentW)
 }
 
-// row renders one item into exactly field cells: label left, hint right. A hint is
-// dropped whole rather than truncated when the field can't hold it plus a cell of label —
-// half an accelerator is worse than none.
+// row renders one item into field cells: label left, hint right (see menuRow).
 func (s *MenuScreen) row(it MenuItem, selected bool, field int, muted, accent lipgloss.Style) string {
 	if it.Separator {
 		return muted.Render(strings.Repeat("─", field))
@@ -591,21 +477,47 @@ func (s *MenuScreen) row(it MenuItem, selected bool, field int, muted, accent li
 		label, hint = accent, accent
 	}
 
-	hintW := ansi.StringWidth(it.Hint)
+	return menuRow(it.Label, it.Hint, field, label, hint)
+}
+
+// menuRow lays out one floating-list row in exactly field cells: label left, hint right.
+// A hint that cannot fit beside at least one label cell is dropped whole.
+func menuRow(labelText, hintText string, field int, labelStyle, hintStyle lipgloss.Style) string {
+	hintW := ansi.StringWidth(hintText)
 	reserve := 0
-	if it.Hint != "" && field-menuHintGap-hintW >= 1 {
+	if hintText != "" && field-menuHintGap-hintW >= 1 {
 		reserve = menuHintGap + hintW
 	} else {
 		hintW = 0
 	}
-	text := ansi.Truncate(it.Label, field-reserve, "…")
-	pad := max(field-ansi.StringWidth(text)-hintW, 0)
-
-	out := label.Render(text) + strings.Repeat(" ", pad)
+	text := ansi.Truncate(labelText, max(field-reserve, 1), "…")
+	out := labelStyle.Render(text) + strings.Repeat(" ", max(field-ansi.StringWidth(text)-hintW, 0))
 	if hintW > 0 {
-		out += hint.Render(it.Hint)
+		out += hintStyle.Render(hintText)
 	}
 	return out
+}
+
+// scrollGutter is the muted gutter cell for window row i: ↑/↓ when more items lie beyond
+// that edge of the window.
+func scrollGutter(i, rows, top, total int) string {
+	mark := " "
+	switch {
+	case i == 0 && top > 0:
+		mark = "↑"
+	case i == rows-1 && top+rows < total:
+		mark = "↓"
+	}
+	return core.MutedStyle().Render(strings.Repeat(" ", menuGutterW-1) + mark)
+}
+
+// clampTop slides a window of visible rows to contain sel (when sel >= 0), then back
+// inside the item range.
+func clampTop(top, sel, visible, total int) int {
+	if sel >= 0 {
+		top = max(min(top, sel), sel-visible+1)
+	}
+	return max(min(top, total-visible), 0)
 }
 
 // fitCells truncates or pads text to exactly w display cells.
@@ -614,7 +526,5 @@ func fitCells(text string, w int) string {
 	return text + strings.Repeat(" ", max(w-ansi.StringWidth(text), 0))
 }
 
-// menuBox is the menu's frame. It is lineEditBox deliberately and not by accident: the
-// floating overlays are one family and should read as one, so the border lives in a
-// single place and a change to it moves them together.
+// menuBox is LineEditBox, so the floating overlays share one frame.
 func menuBox() lipgloss.Style { return LineEditBox() }

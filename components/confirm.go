@@ -7,21 +7,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// DialogScreen is the shared y/n confirm/summary box. It serves two shapes behind the
-// Overlay flag, which is the only behavioral switch:
+// DialogScreen is the shared y/n confirm or popup, selected by Overlay:
+//   - false: a full-screen confirm with its hints in the help bar.
+//   - true: a centered popup over the screen below (core.Overlayer) with its hints inside
+//     the box; the background's help bar and breadcrumb stay.
 //
-//   - Overlay false (a confirm): full-screen, rendered in the body via core.WithTitle,
-//     with its hints in the chrome help bar. Reused by the install/archive/new-plugin
-//     confirms.
-//   - Overlay true (a popup): the router draws it as a centered modal over the screen
-//     below it (core.Overlayer), rendered via core.PopupBox with its hints inside the
-//     box; the background screen's help bar stays, and so does its breadcrumb — a popup
-//     contributes no segment of its own (see CrumbLabel).
-//
-// Either way it is context-agnostic: it renders its body via a closure, and the
-// OnYes/OnKey closures (supplied by the caller) decide what happens — it names no domain
-// type. OnYes runs on confirm (y/enter); No (esc/n) pops it; any other key is handed to
-// OnKey when set.
+// Its body comes from a closure. OnYes runs on y/enter, esc/n pops, and other keys go to
+// OnKey.
 type DialogScreen struct {
 	Title      string // in-body title bar (confirm) / accent line (overlay); omitted ⇒ none
 	Crumb      string // CONFIRM ONLY: breadcrumb segment (CrumbLabel); omitted ⇒ "Conf"
@@ -29,10 +21,8 @@ type DialogScreen struct {
 	Render     func(*core.Shared) string
 	OnYes      func(*core.Shared) core.Action
 	OnKey      func(*core.Shared, string) core.Action // handles keys other than the reserved confirm/cancel keys
-	// OnQuit, when set, answers the router's quit-gate consultation while the
-	// dialog is on top — a quit confirm uses it to keep q/ctrl+c as the
-	// force-quit (without it the stack walk would find the gate that pushed the
-	// dialog and stack another popup). Nil ⇒ the dialog abstains.
+	// OnQuit, when set, answers the quit gate while the dialog is on top, so a quit confirm
+	// keeps q/ctrl+c as force-quit rather than stacking another popup. nil abstains.
 	OnQuit  func(*core.Shared) (core.Action, bool)
 	Help    []key.Binding
 	Overlay bool // draw as a centered modal over the screen below (core.Overlayer)
@@ -71,13 +61,8 @@ func (s *DialogScreen) QuitGate(sh *core.Shared) (core.Action, bool) {
 // over the screen below it (Overlay) rather than full-screen.
 func (s *DialogScreen) IsOverlay() bool { return s.Overlay }
 
-// CrumbLabel contributes the dialog's breadcrumb segment — for the CONFIRM shape only,
-// which uses its Crumb (default "Conf"). An overlay returns "", which crumbTrail skips.
-//
-// That is the stance MenuScreen (menu.go) and LineEditScreen (lineedit.go) already take,
-// and the rule behind all three: a screen that REPLACES the screen below it is somewhere
-// you navigated to and gets a segment; a box drawn OVER one is not, and a trail that grew
-// a segment each time a popup opened would flicker a step in and out under it.
+// CrumbLabel returns Crumb (default "Conf") for a confirm and "" for an overlay: a screen
+// drawn over another is not a place, so it adds no segment.
 func (s *DialogScreen) CrumbLabel(short bool) string {
 	if s.Overlay {
 		return ""
@@ -164,9 +149,8 @@ func CreateConfirmScreen(cs ConfirmSimple) *DialogScreen {
 	}
 }
 
-// CreatePopup builds a text-only acknowledgement popup (title + body, Overlay true):
-// OnYes is the action taken when dismissed with y/enter (defaults to a plain Pop when
-// nil), and Help defaults to the "done" hint.
+// CreatePopup builds an acknowledgement popup; onYes (default Pop) runs on y/enter, and
+// help defaults to "done".
 func CreatePopup(title, body string, onYes core.Action, help ...key.Binding) *DialogScreen {
 	if help == nil {
 		help = DefaultPopupHelp

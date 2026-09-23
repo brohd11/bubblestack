@@ -13,16 +13,13 @@ type RootListOpts struct {
 	PickerOpts
 	Init    func(*core.Shared) tea.Cmd
 	Receive func(*core.Shared, any) core.Action
-	// CompactState optionally shares an app-owned, session density preference.
-	// It overrides both Compact and the app's core.ListDensityProvider. Lifecycle
-	// calls reconcile it, and toggling or SetCompact writes through. Keep it alive across root
-	// reconstruction to retain the preference after a theme change.
+	// CompactState shares an app-owned density preference, overriding Compact and the app's
+	// ListDensityProvider; toggles write through. Keep it across root rebuilds.
 	CompactState *bool
 }
 
-// RootListScreen is a picker-backed tab root. The router owns quitting and tabs;
-// the component owns list interaction, density, theme styling and geometry.
-// App-specific work stays in the Init, OnKey, Refresh and Receive callbacks.
+// RootListScreen is a picker-backed tab root: list interaction, density, theme and
+// geometry, with app work in Init, OnKey, Refresh and Receive.
 type RootListScreen struct {
 	*PickerScreen
 	init    func(*core.Shared) tea.Cmd

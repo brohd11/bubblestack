@@ -1,17 +1,7 @@
-// Package editor is bubblestack's text editor: a full screen buffer with syntax
-// highlighting, undo, block indent, comment toggling, literal search, LSP-shaped
-// completion and edit application, and host-supplied sign columns.
-//
-// It is a components.Screen like any other and composes the shared components —
-// the context menu is a components.MenuScreen, search and save-as are
-// components.LineEditScreen overlays, the overwrite prompt is a
-// components.DialogScreen, and the optional border is components.Frame. It lives in
-// its own package because it is large enough to have its own namespace, not because
-// it is a different kind of thing: consumers import both.
-//
-// Start at New/Opts here; the rest of the package is one type's implementation split
-// by concern (buffer, cursor, scroll, render, highlight, indent, comment, clipboard,
-// completion, language, save, signs, search, word, pairs, external edits).
+// Package editor is bubblestack's text editor screen: syntax highlighting, undo, block
+// indent, comment toggling, search, LSP-shaped completion and edits, and host sign
+// columns. It composes the shared components (MenuScreen, LineEditScreen, DialogScreen,
+// Frame). Start at New and Opts; the other files split one type by concern.
 package editor
 
 import (
@@ -31,47 +21,21 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Screen is the simple nano-like text editor: it loads a file (or starts empty),
-// lets the user type freely, and exits on ctrl+x with a "save modified buffer?"
-// three-way prompt when the buffer is dirty (n = discard & exit, esc/c = cancel, and
-// y = a filename prompt seeded with the current name — nano's "File Name to Write",
-// so saving under a different name is a save-as). Enter splits lines (and may be
-// extended by a handler registered for the file type), tab (or shift+tab, on a
-// standalone screen — see key) inserts a tab except over a selection spanning lines,
-// where it indents every one of them (alt+, and alt+. dedent and indent the same span,
-// alt+i cycles the unit — see indent.go),
-// the arrows move the cursor, ctrl+z/ctrl+y undo and redo logical key events,
-// alt+c/alt+x/alt+v copy, cut and paste through the system clipboard (with no selection
-// the line the cursor is on is the target), and the left mouse button places the cursor
-// and selects with drag/double/triple click.
-// The right button is the context menu, when the host opts into it (Opts.ContextMenu):
-// a press raises a components.MenuScreen at the pointer offering copy/cut/paste — pressing inside an
-// existing selection acts on it, pressing outside puts the caret there first, so a paste
-// lands where the pointer did. Typing a configured surrounding delimiter over a selection wraps the
-// selection in it and keeps it selected, so the key repeats to nest. The wheel scrolls
-// the view without moving the cursor (a cursor move then snaps the view back to it), and
-// when the buffer overflows the viewport a proportional scrollbar takes the rightmost
-// column.
+// Screen is a nano-like editor. ctrl+x exits, prompting to save a dirty buffer (y opens
+// a save-as box seeded with the current name, n discards, esc/c cancels). ctrl+z/ctrl+y
+// undo and redo; alt+c/x/v copy, cut and paste (the whole line with no selection); tab
+// over a multi-line selection indents it (alt+, / alt+. / alt+i: see indent.go). The
+// left mouse button places the caret and selects (drag, double, triple click); the
+// right one raises a copy/cut/paste menu when Opts.ContextMenu is set. The wheel
+// scrolls without moving the caret.
 //
-// It is a standalone screen owning the whole body, not a ModularScreen panel: it
-// captures every keystroke (Filtering reports true the whole time, so the router's
-// global single-key shortcuts never steal typed text — ctrl+c remains the hard quit).
-// Embedded in a pane layout the capture still holds, minus the host's reserved
-// pane keys (core.Keys.PaneNext et al.), which is how the keyboard leaves the pane;
-// Opts.OnExit is then about closing the BUFFER (ctrl+x, with the save prompt),
-// not about escaping a trap. Embedded (ScreenPanel calls SetEmbedded, see
-// core.Embeddable) it reads mouse coordinates as pane-relative and indents the body
-// one column off the pane edge; it denotes focus by muting the body and dropping the
-// cursor, so an unfocused pane reads as inactive without a frame. Whether it draws a
-// frame at all is the instancer's call (Opts.Border) and independent of both.
+// It reports Filtering at all times so the router's single-key shortcuts never steal
+// typed text. Embedded in a pane layout (SetEmbedded), mouse coordinates are
+// pane-relative and focus shows by muting the body; the host's pane keys still leave it.
 //
-// The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea
-// because click-to-cursor needs the scroll offset, which textarea does not export, and
-// because tabs have to be stored raw but never rendered raw (see expandLine).
-// Deliberately minimal: the clipboard verbs are the three alt chords and, when the host
-// opts in, the right-click menu — there is no keyboard selection, which is why the chords
-// fall back to the whole line; optional literal search is enabled by the host through
-// Opts.Search.
+// The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea:
+// click-to-cursor needs the scroll offset, and tabs are stored raw but never rendered raw
+// (see expandLine).
 type Screen struct {
 	path    string // file to load/save; empty ⇒ unsavable scratch buffer
 	baseDir string // directory a relative save-as name resolves against; empty ⇒ the process cwd
@@ -136,7 +100,7 @@ type Screen struct {
 	embedded  bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
 	focused   bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
 
-	originX, originY int  // the pane's absolute top-left (components.components.PaneOriginer)
+	originX, originY int  // the pane's absolute top-left (components.PaneOriginer)
 	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
 
 	w, h  int // viewport dims in cells (the body net of editor chrome), set by SetSize
@@ -190,13 +154,11 @@ type Screen struct {
 // [start,end); mouse endpoint cells are converted to these positions before sorting.
 type textPos struct{ y, x int }
 
-// textRange is a half-open range of display cells within one buffer line. Search
-// results are found in rune columns, then cached in cells so rendering does not
-// repeatedly walk every prefix of a tabbed line.
+// textRange is a half-open range of display cells within one buffer line.
 type textRange struct{ from, to int }
 
 // editorState is the small non-text state restored at one side of a history entry.
-// Viewport browsing is deliberately absent, as it was from the old snapshots.
+// Viewport browsing position is deliberately not restored.
 type editorState struct {
 	curY, curX, wantX int
 	selStart, selEnd  textPos
@@ -215,92 +177,36 @@ type editorHistoryEntry struct {
 	before, after editorState
 }
 
-// wrapRow is one display row of a soft-wrapped buffer line: the half-open chunk
-// [start, end) of that line's display cells (expandLine's output) the row shows. Every
-// buffer line contributes at least one row, and a line ending exactly on the wrap
-// margin contributes a trailing empty one so the caret at end of line has a cell to sit
-// in rather than a position one column past the frame.
+// wrapRow is one display row of a soft-wrapped line: the half-open cell range
+// [start, end) of expandLine's output. A line ending exactly on the margin gets a
+// trailing empty row so the caret has a cell at end of line.
 type wrapRow struct{ line, start, end int }
 
-// Opts configures an Screen. Path names the file to edit; a missing or
-// unreadable file starts an empty buffer that the first save creates (nano's
-// behavior). The exit prompt's "y" may replace Path at runtime (save-as). Title/Crumb
-// default from the path's base name.
+// Opts configures a Screen.
 //
-// OnExit, when set, replaces the exit navigation (ctrl+x on a clean buffer, "n" =
-// discard, and a successful save from the exit prompt): instead of core.Pop() the
-// hook's Action is returned. Embed it in a pane layout (via ScreenPanel) with the
-// hook set — a raw Pop there would dismiss the host ModularScreen, and the router
-// ignores a Pop of the root screen, leaving the editor's capture with no keyboard
-// way out. Standalone use leaves it nil and keeps the Pop.
-//
-// OnRelease, when set, binds esc to "the keys go elsewhere, the buffer stays": the
-// hook's Action is returned and nothing about the buffer changes. It is the light
-// counterpart to OnExit — a pane host points it at its own focus move, so leaving a
-// capturing editor costs one key instead of a pane-nav chord, without closing what
-// you were editing. Left nil, esc is ignored (the editor types everything else, and
-// a bare esc that popped the host would be a trap). The exit prompt keeps its own
-// esc = cancel: that branch runs first.
-//
-// OnSaved, when set, is called after a successful ctrl+s — the save that does NOT
-// exit — with the path actually written, which is the typed one when the save-as box
-// was pointed somewhere new. It is how a host keeps its own bookkeeping in step with a
-// buffer that renamed itself under it (a path-keyed open-file map, a doc list that has
-// a new file in it now). The exit prompt's save does not call it: that path ends in
-// OnExit, which the host is already handling. Left nil, a save is silent — the title
-// bar dropping its (*) marker is the only feedback, which is all a standalone editor
-// needs.
-//
-// Border draws the shared frame (the ScrollContainer look) with the title as its
-// top-edge legend instead of the title bar, the same opt-in ListPanelOpts.Border
-// carries: which chrome an instance wears is the composing caller's choice, not the
-// embedder's, so the same screen can be framed in one layout and plain in another.
-// Default off — an editor denotes focus by muting its text either way.
-//
-// Highlighter adds syntax coloring. Set explicitly, it wins over any highlighter
-// returned by ResolveLanguage and survives save-as/SetPath; as a direct instance it
-// keeps the legacy synchronous debounce. Left nil, the active language config may use
-// its factory for bounded immediate previews and asynchronous exact snapshots. With
-// neither source the editor renders plain. Highlighting is render-only: styles never
-// change cell widths, and a highlighter whose spans don't reconstruct the line exactly
-// is ignored (plain render), so the frame contract — no raw tabs, rectangular body —
-// can't be broken by one.
-//
-// Search enables the editor's ctrl+f literal search. A floating components.LineEditScreen opens
-// over a reserved bar at the editor's bottom edge and every case-insensitive match is
-// highlighted in the buffer. A non-empty query leaves the same bar visible but
-// unfocused after the overlay closes. It is opt-in so the shared editor does not
-// change existing consumers' shortcuts or viewport geometry.
-//
-// ContextMenu enables the right-click menu (copy/cut/paste, see editMenu). It is opt-in
-// for the same reason Search is: it takes the right button away from whatever the host
-// was doing with it, and with it off a right press does nothing at all. ContextItems,
-// when set, is consulted at press time and its rows are appended below a rule, so a host
-// can hang its own entries off the same gesture; returning them fresh per press is what
-// lets a row's Disabled reflect live state. An empty or nil return appends nothing — no
-// dangling separator. ContextItems does NOT imply ContextMenu: one flag gates the whole
-// gesture, so a host can mute it without nil-ing its items. Rows should leave components.MenuItem.Hint
-// empty — the menu dispatches no accelerators, and the editor binds no cut/paste chords.
-//
-// Indent and IndentWidth pick the unit the BLOCK gestures use (see indent.go); a
-// plain tab keypress always inserts a literal '\t' regardless. The zero Indent is
-// IndentAuto, which reads the unit from ResolveLanguage; without a profile it uses a
-// literal tab. IndentWidth is the spaces per level under IndentSpaces; left at zero it
-// follows the profile, and set explicitly it survives a save-as rename the way an
-// explicit Highlighter does.
-//
-// ResolveLanguage is the only path-derived behavior seam. It may provide pairs,
-// structured Enter, an automatic indent unit and a highlighter factory. A nil resolver
-// or nil result leaves the editor literal, and the resolver is consulted again after a
-// save-as or SetPath changes the path.
-//
-// IndentGuides draws a muted vertical guide in the leading whitespace occupied by each
-// complete live indent unit. It is render-only and defaults off.
+//   - Path is the file to edit; a missing one starts empty and the first save creates it.
+//     Title and Crumb default to its base name.
+//   - OnExit replaces the exit navigation (core.Pop). Set it when embedded: a Pop would
+//     dismiss the host layout.
+//   - OnRelease binds esc to "keys go elsewhere, buffer stays" (a pane host's focus move).
+//     Nil leaves esc unbound.
+//   - OnSaved is called with the path written after a ctrl+s save (not the exit
+//     prompt's), so a host can follow a save-as rename.
+//   - Border draws the shared frame with the title as its legend.
+//   - Highlighter overrides ResolveLanguage's highlighter and survives save-as.
+//     Highlighters that do not reconstruct the line exactly are ignored.
+//   - Search enables ctrl+f literal search over a bar reserved at the bottom edge.
+//   - ContextMenu enables the right-click menu; ContextItems appends host rows to it,
+//     consulted per press. Rows should leave Hint empty.
+//   - Indent/IndentWidth pick the unit block indent uses (tab always types '\t'); the
+//     zero value reads it from ResolveLanguage.
+//   - ResolveLanguage supplies pairs, structured Enter, indent unit and highlighter for a
+//     path, and is consulted again when the path changes.
+//   - IndentGuides draws muted guides in leading whitespace.
 type Opts struct {
 	Path string
-	// BaseDir is the directory a RELATIVE name typed into the save box resolves against —
-	// the directory the host opened in, which is rarely the shell the binary was launched
-	// from. Empty leaves the process cwd deciding, which is what a standalone editor wants.
+	// BaseDir resolves a relative name typed into the save box (usually the directory the
+	// host opened in). Empty uses the process cwd.
 	BaseDir         string
 	Title           string
 	HideTitle       bool // omit the title bar or border legend; retain breadcrumb identity
@@ -340,10 +246,9 @@ type editorCopiedMsg struct {
 	cut bool
 }
 
-// editorPastedMsg carries the asynchronous clipboard READ back to Update, where the text
-// is spliced into the buffer. target names the editor that asked: async messages reach an
-// embedded editor through ModularScreen's broadcast to every panel, and a paste mutates
-// the buffer — it must not land in a sibling editor pane that never asked for one.
+// editorPastedMsg carries a clipboard read back to Update. target names the requesting
+// editor: async messages reach every panel of a ModularScreen, and a paste must not land
+// in a sibling.
 type editorPastedMsg struct {
 	target *Screen
 	text   string
@@ -357,11 +262,9 @@ type editorHighlightMsg struct {
 	seq    int
 }
 
-// editorDragScrollMsg is the auto-scroll clock a drag held at the edge of the pane runs on.
-// Motion events only arrive while the pointer MOVES, so a pointer parked past the edge would
-// otherwise scroll once and stop. Addressed like editorHighlightMsg, and for a second reason:
-// ModularScreen's non-key broadcast hands every panel every tick, so an editor acting on a
-// sibling's clock would double the frame rate (the fact listpanel's marqueeIDs exists for).
+// editorDragScrollMsg is the auto-scroll clock for a drag held past the pane edge (motion
+// events stop when the pointer does). Addressed to one editor, since siblings receive
+// every tick too.
 type editorDragScrollMsg struct {
 	target *Screen
 	seq    int
@@ -388,10 +291,8 @@ var (
 	editorPromptStyle = lipgloss.NewStyle().Bold(true)
 )
 
-// editorTabWidth is the display width a tab expands to when rendering. Raw '\t' must
-// never reach the View output: the terminal expands it to the next tab stop while the
-// renderer measures it as zero-width, so the padded frame line overflows, wraps, and
-// every later frame shifts (the "screen advances a line" corruption).
+// editorTabWidth is the display width of a tab. Raw '\t' must never reach View: the
+// terminal expands it while the renderer counts zero width, shifting every later frame.
 const editorTabWidth = 4
 
 // editorHighlightDebounce coalesces full-document parsers while the user is typing.
@@ -407,69 +308,50 @@ const editorHistoryLimit = 100
 // editorWheelStep is how many lines one wheel notch scrolls the viewport.
 const editorWheelStep = 3
 
-// editorHWheelStep is how many display cells one horizontal wheel notch scrolls. Wider
-// than the vertical step because a cell is a fraction of a word, where a line is a whole
-// thought — six lands roughly a word over per notch.
+// editorHWheelStep is the cells one horizontal wheel notch scrolls (about a word).
 const editorHWheelStep = 6
 
-// editorHCaretNearPct and editorHCaretFarPct bound the screen columns the caret is allowed
-// to occupy, BOTH measured from the right edge of the content window: the view scrolls right
-// once the caret is nearer the edge than the first, and left once it is further from it than
-// the second. Measuring from the right is the whole point — the half of the window that
-// carries meaning is the one BEHIND the caret, the text already read — and the gap between
-// the two is the hysteresis that keeps the view still while the caret works inside it.
+// editorHCaretNearPct and editorHCaretFarPct bound the caret's column, both measured from
+// the right edge of the window: scroll right when nearer than the first, left when
+// further than the second. The gap between them keeps the view still while typing.
 const (
 	editorHCaretNearPct = 10
 	editorHCaretFarPct  = 30
 )
 
-// editorDragEdgePct is the band at each edge of the pane where a held drag starts
-// auto-scrolling, as a share of the viewport. Five percent is a couple of rows on an
-// ordinary pane: wide enough to hit without aiming, narrow enough that a selection ending
-// near the edge stays put.
+// editorDragEdgePct is the band at each pane edge, as a share of the viewport, where a
+// held drag auto-scrolls.
 const editorDragEdgePct = 5
 
-// editorDragScrollInterval is the auto-scroll frame. Faster than the marquee's 130ms
-// because this one tracks the hand: the pointer is held still and the view must feel like
-// it is moving continuously under it.
+// editorDragScrollInterval is the auto-scroll frame, fast enough to feel continuous.
 const editorDragScrollInterval = 50 * time.Millisecond
 
-// editorDragScrollUnitY, editorDragScrollUnitX and editorDragScrollMaxUnits shape one
-// auto-scroll step. The units are the slowest useful crawl at the inner edge of the band —
-// one line, and two cells for the same reason editorHWheelStep is wider than
-// editorWheelStep — and the ceiling is how far the ramp goes once the pointer is thrown
-// well past the pane: three units a frame is roughly a screen a second.
+// editorDragScrollUnitY/X are the slowest auto-scroll step at the inner edge of the band;
+// editorDragScrollMaxUnits caps the ramp once the pointer is well past the pane.
 const (
 	editorDragScrollUnitY    = 1
 	editorDragScrollUnitX    = 2
 	editorDragScrollMaxUnits = 3
 )
 
-// editorMultiClickWindow is how long a left press stays eligible to be the
-// second or third click of a same-button multi-click. tea.MouseMsg carries neither a
-// timestamp nor a click count, so the editor keeps both itself.
+// editorMultiClickWindow is how long a press stays eligible to be the second or third
+// click; tea.MouseMsg carries no timestamp or click count.
 const editorMultiClickWindow = 500 * time.Millisecond
 
-// editorControlPlaceholder stands in for a control rune that reached the buffer anyway —
-// a file loaded with a lone '\r' or a NUL, which setContent does not strip. One cell wide,
-// so cellOfCol/colAtCell (which count every non-tab rune as one) stay exact.
+// editorControlPlaceholder replaces a control rune in the buffer (a lone '\r' or NUL from
+// a loaded file). One cell wide, so cellOfCol/colAtCell stay exact.
 const editorControlPlaceholder = '·'
 
-// editorOverflowMark is the one dim cell that stands in the rightmost content column for
-// the rest of a line the window cuts off (unwrapped only — wrapped, every cell is on
-// screen already). It costs a column of text, so clampScroll keeps the caret out of it:
-// a caret hidden under the marker would be worse than the ambiguity the marker fixes.
+// editorOverflowMark marks a line cut off at the right edge (unwrapped only). clampScroll
+// keeps the caret out of its column.
 const editorOverflowMark = '~'
 
 // editorIndentGuide replaces one existing leading-whitespace cell when guides are
 // enabled. Like the overflow and control marks it is exactly one display cell wide.
 const editorIndentGuide = '│'
 
-// expandLine renders a buffer line to display runes, tabs expanded to spaces and any
-// other control rune replaced by a placeholder — none of them may reach View, where the
-// terminal would act on them while the renderer measured them as zero-width. Display
-// cells then equal display-rune indexes (double-width runes are the accepted
-// limitation of this simple editor).
+// expandLine renders a buffer line to display runes: tabs expanded, other control runes
+// replaced, so display cells equal rune indexes. Double-width runes are not handled.
 func expandLine(line []rune) []rune {
 	var out []rune
 	for _, r := range line {
@@ -500,9 +382,8 @@ func cellOfCol(line []rune, col int) int {
 	return cell
 }
 
-// colAtCell is the rune column at or before a display cell — the inverse of cellOfCol
-// for mapping mouse clicks back into the buffer. A click inside a tab's expansion
-// lands on the tab itself.
+// colAtCell maps a display cell back to a rune column, the inverse of cellOfCol. A
+// click inside a tab's expansion lands on the tab.
 func colAtCell(line []rune, cell int) int {
 	c := 0
 	for i, r := range line {
@@ -526,10 +407,8 @@ var _ core.FocusableScreen = (*Screen)(nil)
 var _ core.Receiver = (*Screen)(nil)
 var _ components.PaneOriginer = (*Screen)(nil)
 
-// New builds the screen with an empty buffer; a configured Path is read
-// asynchronously from the FIRST Init (the framework idiom — IO only in the cmd lane).
-// Later Inits never re-read the file; they may resume an outstanding factory-backed
-// highlight parse, while the instance continues to hold the buffer for its lifetime.
+// New builds the screen with an empty buffer; a configured Path is read asynchronously by
+// the first Init.
 func New(opts Opts) *Screen {
 	title := opts.Title
 	if title == "" {
@@ -593,17 +472,10 @@ func (s *Screen) exit(sh *core.Shared) core.Action {
 	return core.Pop()
 }
 
-// Init kicks off the file read when a path is configured; the result arrives as an
-// editorLoadedMsg. No path ⇒ nothing to load.
-//
-// The file read happens once per instance. A host that swaps this editor back into a
-// pane calls Init again (ScreenPanel.SetChild does), and re-reading there would hand
-// setContent the file — discarding unsaved edits, the undo history and the cursor of the
-// very buffer the swap-back exists to return to. The flag is set before the empty-path
-// return, so a scratch buffer that later gains a path (a save-as, or SetPath after the
-// host renamed the file) is never read back off disk either: in both cases the buffer is
-// already the authoritative content. It is set at dispatch rather than on arrival, so a
-// second Init while the first read is in flight cannot queue a duplicate.
+// Init starts the file read, once per instance: a host swapping this editor back into a
+// pane calls Init again, and a re-read would discard unsaved edits. The flag is set at
+// dispatch, and also for an empty path, so a buffer that later gains one is never read
+// back off disk.
 func (s *Screen) Init(*core.Shared) tea.Cmd {
 	if s.loaded {
 		s.refreshHighlightPreview()
@@ -621,11 +493,8 @@ func (s *Screen) Init(*core.Shared) tea.Cmd {
 	}
 }
 
-// SetEmbedded implements core.Embeddable: ScreenPanel calls it when the editor is one
-// pane of a layout. It shifts the geometry only — mouse coordinates arrive
-// pane-relative (no Shared.BodyY to subtract) and the body indents one column off the
-// pane edge so text doesn't butt against a neighbouring pane's border. The look is
-// unaffected: Opts.Border decides the frame.
+// SetEmbedded implements core.Embeddable: embedded, mouse coordinates are pane-relative
+// and the body indents one column off the pane edge. Opts.Border still decides the frame.
 func (s *Screen) SetEmbedded(on bool) {
 	if s.embedded != on {
 		s.embedded = on
@@ -633,10 +502,8 @@ func (s *Screen) SetEmbedded(on bool) {
 	}
 }
 
-// SetFocused implements core.FocusableScreen: the host ModularScreen's focus arrives
-// through ScreenPanel. Unfocused, the editor mutes its body text, drops the cursor and
-// (unbordered) mutes its title bar, so the pane reads as inactive; the router drives
-// the same transition on a standalone editor when the output pane takes the keys.
+// SetFocused implements core.FocusableScreen. Unfocused, the body and (unbordered) title
+// are muted and the caret is hidden.
 func (s *Screen) SetFocused(focused bool) {
 	s.focused = focused
 	if !focused {
@@ -657,9 +524,7 @@ func (s *Screen) SetTitleVisible(visible bool) {
 	}
 }
 
-// Text is the live buffer as one string, lines joined with '\n'. Hosts use this
-// normalized form while the document is being edited (for previews, LSPs, or word
-// counts); saveCmd restores a pure CRLF file's original line endings on disk.
+// Text is the buffer joined with '\n'. saveCmd restores a CRLF file's endings on disk.
 func (s *Screen) Text() string {
 	if s.textSeq == s.editSeq {
 		return s.textCache
@@ -676,18 +541,10 @@ func (s *Screen) Text() string {
 	return s.textCache
 }
 
-// SetText replaces the buffer with content, exactly as a completed load does: the caret
-// returns to the top, the undo history is dropped and the buffer is clean (setContent).
-//
-// It also marks the editor LOADED, which is the point of it. Init's read comes back as an
-// editorLoadedMsg, and the router delivers a message only to the TOP screen — so a host
-// that pushes something over this editor before that read lands loses it, leaving an empty
-// buffer pointed at a file that is not empty. A host already holding the document (it read
-// the file to show it somewhere else) seeds the buffer here instead, and Init then
-// dispatches no read at all rather than one whose result goes nowhere.
-//
-// Setting the flag first matters only when this runs BEFORE Init, which is the case it
-// exists for; afterwards Init has already set it.
+// SetText replaces the buffer as a completed load does (caret to top, history dropped,
+// clean) and marks it loaded, so Init reads nothing. A host already holding the document
+// uses it because the router delivers a load result only to the top screen, and it may
+// have pushed something over this editor before the read landed.
 func (s *Screen) SetText(content string) {
 	s.loaded = true
 	s.setContent(content)
@@ -699,9 +556,8 @@ func (s *Screen) SetPaneOrigin(x, y int) {
 	s.originX, s.originY, s.hasOrigin = x, y, true
 }
 
-// Filtering reports text capture at all times: the editor types every printable key,
-// so the router's global single-key shortcuts (q, o, r, [, ], t, …) must never fire
-// over it. ctrl+c stays the router's hard quit.
+// Filtering reports true at all times: the editor types every printable key. ctrl+c
+// remains the router's quit.
 func (s *Screen) Filtering() bool { return true }
 
 // CrumbLabel contributes the screen's breadcrumb segment (title, or the short crumb
@@ -712,17 +568,14 @@ func (s *Screen) CrumbLabel(short bool) string {
 
 const editorSearchBarH = 3 // one input row plus the rounded box's top and bottom borders
 
-// searchEdit builds the floating line edit ctrl+f pushes over the editor's reserved
-// bottom bar. The component owns text capture and its bordered overlay look; the
-// editor owns only the live query. A static cursor avoids a blinking box over the
-// document.
+// searchEdit builds the ctrl+f line edit over the reserved bottom bar; the editor keeps
+// only the live query.
 func (s *Screen) searchEdit(sh *core.Shared) *components.LineEditScreen {
 	return s.buildSearchEdit(sh, true)
 }
 
-// buildSearchEdit creates the focused overlay. ctrl+f asks it to seed from a
-// single-line selection; clicking the retained bar does not, because that gesture means
-// "continue editing this query" and must not silently replace it with selected text.
+// buildSearchEdit creates the search overlay. ctrl+f seeds it from a one-line selection;
+// clicking the retained bar continues the existing query instead.
 func (s *Screen) buildSearchEdit(sh *core.Shared, seedSelection bool) *components.LineEditScreen {
 	initial := s.searchQuery
 	if selected := s.selectedText(); seedSelection && selected != "" && !strings.ContainsRune(selected, '\n') {
@@ -788,9 +641,8 @@ func (s *Screen) parseHighlight() {
 	s.acceptHighlight(s.hl, s.editSeq)
 }
 
-// Update handles the async load/save results, mouse presses, and keystrokes — in the
-// exit prompt's mode only its y/n/esc/c answers are live. An edit made here schedules a
-// repaint at the end of the highlighter's quiet window without replacing another cmd.
+// Update handles load/save results, mouse and keys (only y/n/esc/c while the exit prompt
+// is up). An edit schedules a repaint after the highlighter's quiet window.
 func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, action core.Action) {
 	seq := s.editSeq
 	epoch := s.hlEpoch
@@ -834,9 +686,7 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		s.savedRevision = m.revision
 		s.dirty = s.revision != s.savedRevision
 		s.confirmExit = false
-		// Where a save lands depends on which key started it: the exit prompt's save
-		// is the last step of leaving, ctrl+s is a checkpoint that keeps the buffer,
-		// its cursor and its scroll exactly where they were.
+		// An exit-prompt save ends the session; a ctrl+s save keeps the buffer, caret and scroll.
 		if s.saveExits {
 			return s, s.exit(sh)
 		}
@@ -868,11 +718,8 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 			s.insertText(m.text)
 		})
 		return s, core.SetStatus(fmt.Sprintf("pasted %d characters", utf8.RuneCountInString(m.text)))
-	// A bracketed terminal paste. v1 delivered it as a rune-bearing key with Paste
-	// set, so the whole key path had to keep guarding against reading a payload as
-	// typing; v2 gives it a message of its own, which lands here and shares the
-	// clipboard paste's insert — one undo step, selection replaced, no auto-pairing,
-	// and the structured Enter hook never sees it.
+	// A bracketed paste shares the clipboard paste's insert: one undo step, selection
+	// replaced, no auto-pairing, no structured Enter.
 	case tea.PasteMsg:
 		if s.confirmExit || m.Content == "" {
 			return s, core.Action{}
@@ -886,8 +733,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		return s, core.Action{}
 	case tea.KeyPressMsg:
 		return s.key(sh, m)
-	// v2 splits the old Action field into one message type per kind of event; the
-	// arms below are the same three cases in that shape.
 	case tea.MouseClickMsg:
 		if s.confirmExit {
 			return s, core.Action{}
@@ -927,18 +772,15 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		if s.focused {
 			mm := m.Mouse()
 			s.wheel(mm)
-			// Mid-drag the wheel is part of the gesture: the view rolled under a held
-			// pointer, so the selection has to grow over what it revealed, exactly as an
-			// auto-scroll frame does. The wheel reports where the pointer is, so the drag's
-			// notion of it is refreshed from the notch itself.
+			// Mid-drag, a wheel notch grows the selection over what the view revealed, as an
+			// auto-scroll frame does.
 			if s.dragging {
 				return s, core.Async(s.trackDrag(sh, mm.X, mm.Y))
 			}
 		}
 		return s, core.Action{}
-	// A drag is the only state motion and release can act on now that the left button
-	// is the only one that starts a gesture. Neither ever arrives while the context
-	// menu is up: the menu is the top screen, and it consumes every message.
+	// Motion and release only matter during a left drag. The context menu, when up, is the
+	// top screen and consumes them.
 	case tea.MouseMotionMsg:
 		if m.Button != tea.MouseLeft {
 			s.resetMouseGesture() // the release was lost; the button is no longer held
@@ -966,11 +808,8 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 	return s, core.Action{}
 }
 
-// editorTypedRune reports the single printable rune a key press typed, and false for
-// anything else. v2 populates Key.Text only for keys that stand for printable
-// characters — never for special keys or modifier combos — so it replaces v1's
-// len(Runes) == 1 && !Alt idiom outright. A bracketed paste can no longer reach here
-// carrying a whole payload either: v2 delivers it as tea.PasteMsg.
+// editorTypedRune reports the single printable rune a key typed. Key.Text is set only for
+// printable keys, never for special keys, modifier chords or pastes.
 func editorTypedRune(m tea.KeyPressMsg) (rune, bool) {
 	r := []rune(m.Text)
 	if len(r) != 1 {
@@ -979,154 +818,154 @@ func editorTypedRune(m tea.KeyPressMsg) (rune, bool) {
 	return r[0], true
 }
 
-// editorExtendClick reports whether a left press EXTENDS the selection rather than
-// starting a fresh one. It is a predicate of its own, on one line, on purpose: shift is
-// the modifier terminals reserve for bypassing mouse reporting to run their own text
-// selection (the same fact that put the wheel's sideways mode on alt — see wheel), so on
-// many terminals this press never reaches us at all. If that proves too many of them,
-// moving the gesture to alt is this line and nothing else.
+// editorExtendClick reports whether a left press extends the selection. Many terminals
+// keep shift+click for their own text selection, so it may never arrive; switching the
+// gesture to alt is a one-line change here.
 func editorExtendClick(m tea.Mouse) bool { return m.Mod.Contains(tea.ModShift) }
 
-// copySelectionCmd is the clipboard write the menu's Copy and Cut rows issue. The write
-// travels in the cmd lane because atotto shells out to pbcopy/xclip, which must never run
-// inside Update.
+// key routes one keystroke. Editor-local keys are matched as raw strings (arrows match
+// only the arrow keycodes so k/j/h/l stay typable); the word and line chords mirror
+// bubbles' textinput. shift+tab aliases tab only on a standalone editor: in a pane it is
+// the host's pane key.
 func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Action) {
 	k := m.String()
 	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
 	if s.confirmExit {
-		switch k {
-		case "y", "Y":
-			s.saveExits = true
-			return s, core.Push(s.saveAsEdit(sh))
-		case "n", "N":
-			s.confirmExit = false
-			return s, s.exit(sh)
-		case "esc", "c":
-			s.confirmExit = false
-		}
-		return s, core.Action{}
+		return s, s.exitPromptKey(sh, k)
 	}
-	if s.handleCompletionKey(k, m) {
-		return s, core.Action{}
-	}
-	if s.searchEnabled && k == "ctrl+f" {
-		return s, core.Push(s.searchEdit(sh))
-	}
-	if k == "ctrl+z" {
-		s.undo()
-		return s, core.Action{}
-	}
-	if k == "ctrl+y" {
-		s.redo()
-		return s, core.Action{}
-	}
-	// The clipboard chords are matched HERE, above the selection pre-switch below: they
-	// arrive as alt-modified runes, so that switch's default would take them for typing
-	// and delete the selection out from under the copy. They also record their own undo
-	// step (editAtomic, inside copyOrCut and the paste's Update case), which is why they
-	// sit above the editorEditKey gate rather than inside it. alt+c/x/v and not
-	// ctrl+c/x/v — ctrl+c is the router's hard quit and ctrl+x this screen's exit, both
-	// of which predate these and neither of which may move.
-	switch k {
-	case "alt+c":
-		return s, s.copyOrCut(false)
-	case "alt+x":
-		return s, s.copyOrCut(true)
-	case "alt+v":
-		return s, pasteClipboardCmd(s)
-	}
-	// The shifted motions are matched HERE, above the selection pre-pass below: that
-	// switch clears the selection for every UNSHIFTED move, so extending one has to be
-	// decided before the code that would throw it away. They are above the editorEditKey
-	// gate too — they touch no text, so they take no undo step — and above language Enter
-	// hook, because a selection gesture is not language-profile business.
-	//
-	// The early return skips the tail's wrapDirty (nothing moved in the buffer), which is
-	// why selectFrom does its own clampScroll.
-	if move := s.selectMove(k); move != nil {
-		s.extendSelection(move)
-		return s, core.Action{}
+	if act, ok := s.commandKey(sh, k, m); ok {
+		return s, act
 	}
 	if editorEditKey(k, m) {
 		entry := s.beginHistory()
 		defer s.finishHistory(entry)
 	}
-	// Wrapping the selection has to be decided before the pre-pass below, which deletes
-	// the selection for every rune-bearing key. The history transaction above is already
-	// open (a rune key is always an edit key), so both insertions land in one step.
-	if r, typed := editorTypedRune(m); typed && s.selectionActive() {
-		if closer, ok := s.surroundPairs[r]; ok {
-			s.surroundSelection(r, closer)
-			s.wrapDirty = true
-			s.clampScroll()
-			return s, core.Action{}
-		}
-	}
-	if s.selectionActive() {
-		switch k {
-		case "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
-			"alt+delete", "alt+d", "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h", "ctrl+k":
-			s.deleteSelection()
-			s.wrapDirty = true
-			s.clampScroll()
-			return s, core.Action{}
-		case "tab":
-			// The one gesture that reads a selection as lines rather than as text to
-			// replace. shift+tab is deliberately NOT here: it is core.Keys.PaneNext and
-			// never reaches an embedded editor at all, so hanging an edit on it would be
-			// a chord that works in one host and silently navigates in the other.
-			if first, last := s.indentSpan(); last > first {
-				s.shiftSelectionIndent(1)
-				s.wrapDirty = true
-				s.clampScroll()
-				return s, core.Action{}
-			}
-			s.deleteSelection()
-		case "shift+tab", "enter":
-			s.deleteSelection()
-		case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
-			"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
-			s.clearSelection()
-		default:
-			if m.Text != "" {
-				s.deleteSelection()
-			}
-		}
-	}
-	if k == "enter" && s.languageEnter() {
+	if s.selectionKey(k, m) || k == "enter" && s.languageEnter() {
 		s.wrapDirty = true
 		s.clampScroll()
 		return s, core.Action{}
 	}
+	act, settle := s.editKey(sh, k, m)
+	if settle {
+		s.wrapDirty = true
+		s.clampScroll()
+	}
+	return s, act
+}
+
+// exitPromptKey answers the "save before exit?" prompt.
+func (s *Screen) exitPromptKey(sh *core.Shared, k string) core.Action {
+	switch k {
+	case "y", "Y":
+		s.saveExits = true
+		return core.Push(s.saveAsEdit(sh))
+	case "n", "N":
+		s.confirmExit = false
+		return s.exit(sh)
+	case "esc", "c":
+		s.confirmExit = false
+	}
+	return core.Action{}
+}
+
+// commandKey handles keys that run before the selection pre-pass and outside the edit
+// history: completion, search, undo/redo, the clipboard chords (alt runes the pre-pass
+// would treat as typing) and the shifted selection motions.
+func (s *Screen) commandKey(sh *core.Shared, k string, m tea.KeyPressMsg) (core.Action, bool) {
+	if s.handleCompletionKey(k, m) {
+		return core.Action{}, true
+	}
+	switch {
+	case s.searchEnabled && k == "ctrl+f":
+		return core.Push(s.searchEdit(sh)), true
+	case k == "ctrl+z":
+		s.undo()
+		return core.Action{}, true
+	case k == "ctrl+y":
+		s.redo()
+		return core.Action{}, true
+	// alt+c/x/v, since ctrl+c is the router's quit and ctrl+x this screen's exit.
+	case k == "alt+c":
+		return s.copyOrCut(false), true
+	case k == "alt+x":
+		return s.copyOrCut(true), true
+	case k == "alt+v":
+		return pasteClipboardCmd(s), true
+	}
+	if move := s.selectMove(k); move != nil {
+		s.extendSelection(move) // selectFrom does its own clampScroll
+		return core.Action{}, true
+	}
+	return core.Action{}, false
+}
+
+// selectionKey applies a key to an active selection: a typed opener surrounds it,
+// deletions and a multi-line tab consume the key, motions clear it, and typing replaces
+// it. It reports whether the key was fully handled.
+func (s *Screen) selectionKey(k string, m tea.KeyPressMsg) bool {
+	if !s.selectionActive() {
+		return false
+	}
+	if r, typed := editorTypedRune(m); typed {
+		if closer, ok := s.surroundPairs[r]; ok {
+			s.surroundSelection(r, closer)
+			return true
+		}
+	}
+	switch k {
+	case "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
+		"alt+delete", "alt+d", "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h", "ctrl+k":
+		s.deleteSelection()
+		return true
+	case "tab":
+		// Tab indents a multi-line selection. Not shift+tab: that is core.Keys.PaneNext
+		// and never reaches an embedded editor.
+		if first, last := s.indentSpan(); last > first {
+			s.shiftSelectionIndent(1)
+			return true
+		}
+		s.deleteSelection()
+	case "shift+tab", "enter":
+		s.deleteSelection()
+	case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
+		"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
+		s.clearSelection()
+	default:
+		if m.Text != "" {
+			s.deleteSelection()
+		}
+	}
+	return false
+}
+
+// editKey is the editing and motion keymap. settle is false for keys that leave the
+// buffer untouched and return straight away.
+func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core.Action, settle bool) {
 	switch k {
 	case "ctrl+x":
 		if !s.dirty {
-			return s, s.exit(sh)
+			return s.exit(sh), false
 		}
 		s.confirmExit = true
 	case "ctrl+s":
-		// The same save-as box the exit prompt's "y" raises, minus the exit: enter on
-		// the prefilled path is a plain save, editing it is a save-as that the buffer
-		// then belongs to. Offered even on a clean buffer — that is what makes it the
-		// way to fork a doc to a new name.
+		// A plain save on the prefilled path, or a save-as when edited; offered on a clean
+		// buffer too, as the way to fork a doc to a new name.
 		s.saveExits = false
-		return s, core.Push(s.saveAsEdit(sh))
+		return core.Push(s.saveAsEdit(sh)), false
 	case "esc":
 		if s.onRelease != nil {
-			return s, s.onRelease(sh)
+			return s.onRelease(sh), false
 		}
 	case "alt+.":
 		s.shiftSelectionIndent(1)
 	case "alt+,":
 		s.shiftSelectionIndent(-1)
-	// ctrl+_ is what a terminal sends for ctrl+/ — the chord puts byte 0x1f on the wire and
-	// the key decoder names that ctrl+_. Reporting a literal "ctrl+/" needs the Kitty
-	// keyboard protocol, so alt+/ is bound beside it as the form that always arrives.
+	// ctrl+_ is what terminals send for ctrl+/; alt+/ is the form that always arrives.
 	case "ctrl+_", "alt+/":
 		s.toggleComment()
 	case "alt+i":
-		return s, core.SetStatus(s.cycleIndentMode())
+		return core.SetStatus(s.cycleIndentMode()), false
 	case "tab", "shift+tab":
 		s.insertRunes('\t')
 	case "enter":
@@ -1141,15 +980,11 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 		s.deleteWordBack()
 	case "alt+delete", "alt+d":
 		s.deleteWordForward()
-	// cmd+backspace's gesture: clear the line up to the caret. With nothing left of the
-	// caret there is only the newline to take, so it joins like backspace rather than
-	// doing readline's nothing — ctrl+u goes with it so every chord here is one action.
-	// ctrl+alt+h is what ctrl+alt+backspace decodes to on a terminal that sends BS for
-	// ctrl+backspace; ctrl+u is the one that also arrives in Terminal.app, which reports
-	// no modified backspace at all.
+	// Clear the line up to the caret (cmd+backspace); at column 0 it joins like backspace.
+	// ctrl+alt+h is ctrl+alt+backspace on terminals that send BS; ctrl+u works everywhere.
 	case "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h":
 		if s.curX == 0 {
-			s.backspace() // joins, and is already a no-op at the start of the buffer
+			s.backspace()
 		} else {
 			s.deleteRange(s.curY, 0, s.curY, s.curX)
 			s.curX, s.wantX = 0, 0
@@ -1175,9 +1010,8 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	case "end", "ctrl+e":
 		s.moveEnd()
 	default:
-		// A single typed opening delimiter brings its closer with it and leaves the caret
-		// between the two. The one-rune guard keeps a bracketed paste (one KeyMsg carrying
-		// the whole payload) on the insertText path below.
+		// A single typed opener brings its closer and leaves the caret between them; a
+		// bracketed paste (many runes in one key) goes through insertText instead.
 		if r, typed := editorTypedRune(m); typed {
 			if closer, ok := s.autoPairs[r]; ok {
 				s.insertRunes(r, closer)
@@ -1186,18 +1020,13 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 				break
 			}
 		}
-		// Every unmodified rune-bearing key, typed or pasted: a bracketed paste is one
-		// KeyMsg whose Runes carry newlines, so this must go through insertText, not
-		// insertRunes. Unknown Alt runes are control chords, never text — besides avoiding
-		// accidental chord insertion, that is the editor-side guard against a truncated
-		// terminal escape sequence reaching a screen outside bubblestack.Run's filter.
+		// Unmodified text only: alt runes are chords, never text, which also stops a
+		// truncated escape sequence from being typed.
 		if m.Text != "" {
 			s.insertText(m.Text)
 		}
 	}
-	s.wrapDirty = true
-	s.clampScroll()
-	return s, core.Action{}
+	return core.Action{}, true
 }
 
 // HelpView shows the editing hints, swapped for the prompt's y/n/c answers while the
@@ -1214,9 +1043,7 @@ func (s *Screen) HelpView(sh *core.Shared) string {
 	return sh.BindingHelp(hints)
 }
 
-// HelpBindings is the editor's non-prompt shortcut set (save, exit, leave pane,
-// and the editing chords) — what HelpView renders, exported so a host's help
-// overlay can list the same chords without duplicating their strings.
+// HelpBindings is the editor's shortcut set, exported so a host's help can list it.
 func (s *Screen) HelpBindings() []key.Binding {
 	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
@@ -1241,15 +1068,11 @@ func (s *Screen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("shift+left", "shift+right", "shift+up", "shift+down",
 			"shift+home", "shift+end", "ctrl+shift+left", "ctrl+shift+right"),
 			key.WithHelp("shift+←→", "select")),
-		// Written "alt+", not "⌥": the keycodes are alt+ and every other modifier in
-		// these bars spells itself out (ctrl+s, shift+tab), so the option glyph was the
-		// one entry a reader had to translate. A host listing these alongside its own
-		// alt chords (gote's ? overlay) then reads in one notation throughout.
+		// "alt+" rather than "⌥", matching how every other modifier is spelled.
 		key.NewBinding(key.WithKeys("alt+left", "alt+right", "alt+b", "alt+f"), key.WithHelp("alt+←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("alt+backspace", "del word")),
-		// Helped as the chord pressed, like ctrl+/ above: ctrl+alt+h is only the name the
-		// bytes decode to on a terminal without the Kitty protocol, and ctrl+u is the
-		// readline spelling that also arrives where no modified backspace does.
+		// Labelled as pressed: ctrl+alt+h is how the chord decodes on terminals without the
+		// Kitty protocol, and ctrl+u also arrives where no modified backspace does.
 		key.NewBinding(key.WithKeys("ctrl+alt+backspace", "ctrl+alt+h", "ctrl+u"),
 			key.WithHelp("ctrl+alt+backspace", "clear to line start")),
 		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("alt+c", "copy")),
@@ -1262,13 +1085,8 @@ func (s *Screen) HelpBindings() []key.Binding {
 // exported so a host (a quit gate) can ask before discarding the buffer.
 func (s *Screen) Dirty() bool { return s.dirty }
 
-// ToggleWrap flips soft line wrapping, carrying the viewport across the switch: scrY
-// counts wrapped display rows one side of it and buffer lines the other, so the top
-// row is translated rather than reinterpreted — reinterpreted, an unwrap from deep in
-// a long document lands past the last line and shows nothing at all.
-//
-// The keys belong to whoever hosts the editor: the state lives here, the binding is the
-// app's to choose (ctrl+w is already delete-word-back in this screen).
+// ToggleWrap flips soft wrapping, translating the top row across the switch (scrY counts
+// display rows wrapped and lines unwrapped). The host chooses the key.
 func (s *Screen) ToggleWrap() {
 	top := s.TopLine() // in the mode we are leaving
 	s.wrap = !s.wrap
@@ -1279,11 +1097,8 @@ func (s *Screen) ToggleWrap() {
 // TopLine is the buffer line showing at the top of the viewport, in either mode.
 func (s *Screen) TopLine() int { return s.lineAtRow(s.scrY) }
 
-// SetTopLine scrolls the viewport so line shows at its top — the inverse of TopLine, and
-// translated the same way: wrapped, a buffer line starts at a display row that has to be
-// looked up; unwrapped, rows and lines are the same thing. The offset is clamped, so a
-// line past the end of a buffer that shrank since lands at the bottom rather than on
-// empty space.
+// SetTopLine scrolls so line is at the top of the viewport (the inverse of TopLine),
+// clamped to the buffer.
 func (s *Screen) SetTopLine(line int) {
 	if s.wrap {
 		s.scrY = s.firstRowOfLine(line)
@@ -1293,26 +1108,19 @@ func (s *Screen) SetTopLine(line int) {
 	s.clampScrollBounds()
 }
 
-// CenterLine is the buffer line showing at the MIDDLE of the viewport — the anchor a
-// synced view (gote's preview pane) centers itself on. Aligning the middles keeps the
-// correspondence readable across the whole of the other pane rather than only at its
-// first row, and leaves room at both ends for the two views to disagree about how many
-// rows the same text takes.
+// CenterLine is the buffer line at the middle of the viewport, the anchor a synced view
+// (gote's preview) centers on.
 func (s *Screen) CenterLine() int { return s.lineAtRow(s.scrY + s.h/2) }
 
-// ScrollSpan reports the view's vertical position in display ROWS: the current offset,
-// the largest offset the buffer allows, and the viewport's height. Rows, not lines —
-// wrapped, one line is several — which is what makes it the honest measure of "how far
-// down are we" for a host syncing its own scroll to this one.
+// ScrollSpan reports the vertical position in display rows: offset, maximum offset and
+// viewport height. Rows, not lines, so a host can sync its own scroll to it.
 func (s *Screen) ScrollSpan() (offset, maxOffset, height int) {
 	return s.scrY, max(s.rowCount()-s.h, 0), s.h
 }
 
 // lineAtRow is the buffer line showing at a display row, in either mode.
 func (s *Screen) lineAtRow(row int) int {
-	if row < 0 {
-		row = 0
-	}
+	row = max(row, 0)
 	if !s.wrap {
 		return min(row, max(len(s.lines)-1, 0))
 	}
@@ -1334,9 +1142,8 @@ func (s *Screen) firstRowOfLine(line int) int {
 	return 0
 }
 
-// ToggleLineNums flips the sticky line-number preference. It is what decides the gutter
-// while wrap is OFF; wrapped, the gutter is on either way (see gutterOn), so a flip
-// made there only shows once wrap goes back off.
+// ToggleLineNums flips the line-number preference. Wrapped, the gutter shows regardless
+// (see gutterOn), so the flip only shows once wrap is off.
 func (s *Screen) ToggleLineNums() {
 	s.lineNums = !s.lineNums
 	s.wrapDirty = true // the gutter's width is part of the wrap geometry
@@ -1348,24 +1155,13 @@ func (s *Screen) ToggleLineNums() {
 func (s *Screen) WrapMode() bool    { return s.wrap }
 func (s *Screen) LineNumMode() bool { return s.lineNums }
 
-// SetSize records the viewport dims — the args net of whatever chrome this editor
-// draws (see insetX/insetY, plus the frame's closing border on each axis) — and
-// re-clamps the scroll into the buffer's bounds. Bounds only, NOT to the caret: the
-// router re-lays out after every message, so caret-chasing here would undo every
-// wheel scroll the same tick it happened.
-// SetSize lays the viewport out inside width x bodyHeight. The router re-sizes the top
-// screen after every message, so the unchanged case has to be free: recomputing it would
-// otherwise set wrapDirty on every keystroke and every mouse-motion event, and a wrapped
-// rebuild walks — and expands — the whole document (see rebuildWrapRows).
-//
-// The guard covers every input the geometry below reads: the two dimensions, the search
-// bar's three rows, and (through sizeDirty) the embedded flag insetX derives from.
+// SetSize lays the viewport out inside width x bodyHeight and bounds the scroll (not to
+// the caret, which would undo wheel scrolls). The router calls it after every message, so
+// an unchanged geometry returns early: a wrapped rebuild walks the whole document.
 func (s *Screen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	searchBar := s.searchBarVisible()
 	if !s.sizeDirty && width == s.lastSizeW && bodyHeight == s.lastSizeH && searchBar == s.lastSearchBar {
-		// Still bound the offsets: the viewport has not moved, but the BUFFER may have
-		// shrunk under it since the last message (ten lines deleted at the end of a file),
-		// and that clamp is what this call used to be carrying.
+		// The buffer may have shrunk since the last message, so bound the offsets anyway.
 		s.clampScrollBounds()
 		return
 	}

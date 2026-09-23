@@ -1,14 +1,7 @@
-// Package sysopen hands a path, URL, or directory to the OS: the file manager
-// (Path), the default browser (URL), and a terminal emulator (Terminal, or
-// TerminalInline for a shell that borrows this process's own tty). It names no
-// application domain type and imports only core + stdlib, so any bubblestack consumer
-// (gdaddon, repoview, …) can reuse it instead of copying the launcher logic.
-//
-// The load-bearing detail on Linux is that every launched command gets cmd.Dir set to
-// the target directory: emulators disagree on the working-directory option and some
-// wrappers (x-terminal-emulator → gnome-terminal.wrapper) silently drop it, so relying
-// on the flag alone opens the terminal at the process's own cwd. Setting the cwd makes
-// the flag belt-and-suspenders rather than load-bearing.
+// Package sysopen hands paths, URLs and directories to the OS: file manager (Path),
+// browser (URL), terminal window (Terminal) or an inline shell on this tty
+// (TerminalInline). On Linux every launch sets cmd.Dir to the target, because some
+// emulators and wrappers drop their working-directory option.
 package sysopen
 
 import (
@@ -26,10 +19,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// start runs cmd detached and reports the failure on the status line rather than
-// swallowing it — a terminal emulator that rejects an option dies immediately, and
-// silence there is indistinguishable from a working launch. The returned message is a
-// framework control message; the router applies it when the async cmd's result lands.
+// start runs cmd detached and reports a failure on the status line: an emulator rejecting
+// an option exits immediately, and silence would look like success.
 func start(cmd *exec.Cmd, what string) tea.Msg {
 	if err := cmd.Start(); err != nil {
 		return core.SetStatusAndLog("could not open " + what + ": " + err.Error()).Msg
@@ -38,9 +29,8 @@ func start(cmd *exec.Cmd, what string) tea.Msg {
 	return nil
 }
 
-// Path opens path in the OS file manager. When reveal is set (used for a file like a
-// manifest), the file is highlighted within its containing folder; otherwise path is
-// opened directly as a directory.
+// Path opens path in the file manager, highlighting a file in its folder when reveal is
+// set.
 func Path(path string, reveal bool) core.Action {
 	if _, err := os.Stat(path); err != nil {
 		return core.SetStatusAndLog("path not found: " + path)
@@ -73,17 +63,9 @@ func URL(target string) core.Action {
 	)
 }
 
-// Terminal opens a terminal at dir. With a command it runs that command in the
-// terminal (still rooted at dir); without one it opens an interactive shell there.
-// Callers just pass their directory and, optionally, the argv to run.
-//
-// The chosen emulator: on darwin/windows the system terminal, on linux the first known
-// emulator on PATH (see linuxTerminals). Returns a "not found" status when linux has no
-// known emulator installed.
-//
-// NOTE(config): a future bubblestack-owned config (a settable config path supplying a
-// user terminal-override template + theme) will plug in here, ahead of auto-detection.
-// Until then this is auto-detect only.
+// Terminal opens a terminal at dir, running command in it when given. It uses the system
+// terminal on darwin and windows, and the first known emulator on PATH on Linux (a "not
+// found" status when there is none).
 func Terminal(dir string, command ...string) core.Action {
 	if _, err := os.Stat(dir); err != nil {
 		return core.SetStatusAndLog("path not found: " + dir)
@@ -100,22 +82,17 @@ func Terminal(dir string, command ...string) core.Action {
 	)
 }
 
-// TerminalInline hands this process's terminal to a shell at dir: bubbletea releases the
-// tty, the child owns it until it exits, and the TUI is restored. The in-process sibling
-// of Terminal — no window is created, so the user lands back on the screen they left
-// rather than accumulating detached windows for a two-command detour.
-//
-// Interactive shells show the app context above each prompt in zsh, bash and fish.
-// Other shells get an entry reminder. Use TerminalInlineFor to supply a stable app name.
-// With a command it runs that command directly instead, without shell integration.
+// TerminalInline hands this process's terminal to a shell at dir and restores the TUI
+// when it exits, so no window is left behind. Interactive zsh, bash and fish shells show
+// the app above each prompt; other shells get an entry reminder. With a command it runs
+// that directly, without shell integration.
 func TerminalInline(dir string, command ...string) core.Action {
 	name := strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
 	return TerminalInlineFor(name, dir, command...)
 }
 
-// TerminalInlineFor is TerminalInline with an explicit name for the app to return to.
-// App names accumulate in the child environment when apps open nested shells; exiting
-// a shell leaves the parent environment and its prompt untouched.
+// TerminalInlineFor is TerminalInline naming the app to return to. Names accumulate in
+// the child environment across nested shells.
 func TerminalInlineFor(appName, dir string, command ...string) core.Action {
 	if _, err := os.Stat(dir); err != nil {
 		return core.SetStatusAndLog("path not found: " + dir)
@@ -134,12 +111,9 @@ func TerminalInlineFor(appName, dir string, command ...string) core.Action {
 	return core.Async(tea.ExecProcess(cmd, report))
 }
 
-// inlineCmd builds the child for TerminalInline: the user's shell when command is empty,
-// otherwise command run directly (no shell, so nothing is re-parsed).
-//
-// The shell gets no -i or -l: ExecProcess hands it the real tty, so it decides for itself
-// that it is interactive, and the flags don't mean the same thing across sh/zsh/fish —
-// passing them is how a login-only rc file ends up sourced twice or not at all.
+// inlineCmd builds the TerminalInline child: the user's shell, or command run directly.
+// The shell gets no -i or -l: it has the real tty and detects that itself, and the flags
+// differ across shells.
 func inlineCmd(command []string) *exec.Cmd {
 	if len(command) > 0 {
 		cmd, err := executil.Command(command...)
@@ -155,9 +129,7 @@ func inlineCmd(command []string) *exec.Cmd {
 	return exec.Command(userShell())
 }
 
-// userShell is the interactive shell to hand the terminal to: the user's own, falling
-// back to the one every system has. On windows $SHELL is normally unset, so COMSPEC is
-// what actually answers there.
+// userShell is $SHELL, else COMSPEC on Windows, else /bin/sh.
 func userShell() string {
 	if runtime.GOOS == "windows" {
 		if sh := os.Getenv("COMSPEC"); sh != "" {
@@ -171,18 +143,15 @@ func userShell() string {
 	return "/bin/sh"
 }
 
-// terminalCmd builds the terminal launch command for dir (running command in it, if
-// non-empty), or nil when no suitable terminal could be found (linux with no known
-// emulator on PATH).
+// terminalCmd builds the terminal launch for dir, or nil when Linux has no known
+// emulator.
 func terminalCmd(dir string, command []string) *exec.Cmd {
 	cmd := buildTerminalCmd(dir, command)
 	if cmd == nil {
 		return nil
 	}
-	// The launched terminal also inherits this as its cwd, which is the load-bearing
-	// part on linux: emulators that don't understand the working-directory option (and
-	// wrappers like x-terminal-emulator, which silently drop it) then still open in the
-	// right place instead of wherever the process happens to be running from.
+	// The terminal inherits dir as its cwd, so emulators that ignore the directory option
+	// still open in the right place.
 	cmd.Dir = dir
 	return cmd
 }
@@ -199,23 +168,17 @@ func buildTerminalCmd(dir string, command []string) *exec.Cmd {
 	}
 }
 
-// linuxTerminal describes how to launch one emulator: the working-directory args (with
-// a {dir} placeholder; nil when the emulator has no such flag and we rely on cmd.Dir)
-// and the exec form that introduces a command to run — "--", "-e", "-x", or "" for the
-// emulators that take the command positionally.
+// linuxTerminal describes one emulator: its working-directory args ({dir} placeholder;
+// nil to rely on cmd.Dir) and the flag that introduces a command ("--", "-e", "-x", or ""
+// for positional).
 type linuxTerminal struct {
 	bin      string
 	dirArgs  []string
 	execForm string
 }
 
-// linuxTerminals is the probe order: the emulator each desktop actually ships first,
-// then the rest.
-//
-// x-terminal-emulator is deliberately last. It's the Debian alternatives symlink, and
-// its contract only guarantees the xterm options -T and -e; the gnome-terminal wrapper
-// behind it drops --working-directory on the floor, which is how a terminal opened at
-// the process's own cwd rather than the intended directory. Kept only as a last resort.
+// linuxTerminals is the probe order. x-terminal-emulator is last: its wrapper for
+// gnome-terminal drops --working-directory.
 var linuxTerminals = []linuxTerminal{
 	{"gnome-terminal", []string{"--working-directory={dir}"}, "--"},
 	{"ptyxis", []string{"--working-directory={dir}"}, "--"}, // GNOME's current default terminal
@@ -258,10 +221,8 @@ func probeTerminal(dir string, command []string) *exec.Cmd {
 	return nil
 }
 
-// darwinTerminal opens Terminal.app. Without a command, `open -a Terminal <dir>` opens a
-// shell there. With one, Terminal.app can't be handed argv on the command line, so we
-// drive it through osascript: `do script "cd <dir> && <cmd>"` runs the command in a new
-// window/tab.
+// darwinTerminal opens Terminal.app: `open -a Terminal <dir>` for a shell, or osascript
+// `do script "cd <dir> && <cmd>"` for a command, since Terminal.app takes no argv.
 func darwinTerminal(dir string, command []string) *exec.Cmd {
 	if len(command) == 0 {
 		return exec.Command("open", "-a", "Terminal", dir)
@@ -270,10 +231,8 @@ func darwinTerminal(dir string, command []string) *exec.Cmd {
 	return exec.Command("osascript", "-e", `tell application "Terminal" to do script `+appleScriptQuote(script))
 }
 
-// windowsTerminalArgs builds the command prompt invocation independently of the
-// CREATE_NEW_CONSOLE flag used on Windows, so its quoting stays unit-testable on every
-// host. cmd.Dir supplies the working directory; no path is interpolated into a shell
-// fragment.
+// windowsTerminalArgs builds the cmd.exe invocation apart from CREATE_NEW_CONSOLE so its
+// quoting is testable on any host. cmd.Dir supplies the directory.
 func windowsTerminalArgs(command []string) []string {
 	args := []string{"cmd.exe", "/d", "/v:off", "/k"}
 	if len(command) > 0 {
@@ -283,15 +242,7 @@ func windowsTerminalArgs(command []string) []string {
 	return args
 }
 
-// ShellQuote wraps s in single quotes for a POSIX shell as a single-quoted literal, so
-// nothing inside is expanded or word-split; embedded single quotes are closed, escaped, and
-// reopened. Used to build the darwin `cd <dir>` fragment, and shared with consumers that
-// cross a shell boundary (e.g. go-ssh's remote command lines).
-//
-// The implementation lives in goutil/shellquote: it is a pure strings function, and
-// keeping it here meant a CLI-only module (tmux_s) could not reach it without taking a
-// bubbletea dependency, so it grew a third copy instead. Kept as a re-export because
-// callers reach it through this package.
+// ShellQuote re-exports goutil/shellquote.Quote for existing callers.
 func ShellQuote(s string) string { return shellquote.Quote(s) }
 
 // ShellJoin quotes each argument (ShellQuote) and joins them with spaces into one shell

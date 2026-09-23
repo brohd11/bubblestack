@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/brohd11/bubblestack/tuitest"
 )
 
 // stubScreen is a minimal Screen for exercising the router's stack/chrome plumbing
@@ -165,22 +166,7 @@ func sized(tm tea.Model) tea.Model {
 	return tm
 }
 
-// pump delivers msg, then runs the returned command and feeds its (single,
-// non-batch) result back — enough to drive the navigation commands.
-func pump(tm tea.Model, msg tea.Msg) tea.Model {
-	tm, cmd := tm.Update(msg)
-	for i := 0; i < 8 && cmd != nil; i++ {
-		out := cmd()
-		if out == nil {
-			break
-		}
-		if _, isBatch := out.(tea.BatchMsg); isBatch {
-			break
-		}
-		tm, cmd = tm.Update(out)
-	}
-	return tm
-}
+var pump = tuitest.Pump
 
 // gateScreen is a stubScreen with a QuitGater: it records each consultation and,
 // when handled, swallows the quit (a real gate would push its confirm popup here —
@@ -676,55 +662,7 @@ func TestMouseKeyFiresWhileFiltering(t *testing.T) {
 	}
 }
 
-// keyMsg builds a tea.KeyPressMsg whose String() is the given keystroke, so tests can
-// drive screens from central-keymap key strings. It is KeyPressMsg and not the tea.KeyMsg
-// interface for the same reason every dispatch site is: that interface also covers key
-// releases. v2 ships no string→Key parser and the message is a Code/Text/Mod struct
-// rather than a named constant per key, so this is the one place a test's "ctrl+x"
-// becomes the shape Update sees.
-func keyMsg(s string) tea.KeyPressMsg {
-	var mod tea.KeyMod
-	for stripped := true; stripped; {
-		stripped = false
-		for _, p := range []struct {
-			prefix string
-			mod    tea.KeyMod
-		}{{"ctrl+", tea.ModCtrl}, {"alt+", tea.ModAlt}, {"shift+", tea.ModShift}} {
-			if rest, ok := strings.CutPrefix(s, p.prefix); ok {
-				mod, s, stripped = mod|p.mod, rest, true
-			}
-		}
-	}
-	if code, ok := namedKeyCodes[s]; ok {
-		k := tea.KeyPressMsg{Code: code, Mod: mod}
-		// Space is the one named key that also types a character, and the only Text a
-		// real terminal reports for it is the blank itself — which Key.String() then
-		// special-cases back to "space".
-		if code == tea.KeySpace && mod&^tea.ModShift == 0 {
-			k.Text = " "
-		}
-		return k
-	}
-	if s == "" {
-		// The empty keystroke: a key that types nothing, which is what an empty rune
-		// slice was in v1 and what callers use to drive "type an empty line".
-		return tea.KeyPressMsg{Mod: mod}
-	}
-	k := tea.KeyPressMsg{Code: []rune(s)[0], Mod: mod}
-	// Text is populated only for keys standing for printable characters; a ctrl/alt
-	// combo produces none. That is the distinction QueryUpdate and the editor read.
-	if mod&^tea.ModShift == 0 {
-		k.Text = s
-	}
-	return k
-}
-
-var namedKeyCodes = map[string]rune{
-	"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
-	"backspace": tea.KeyBackspace, "delete": tea.KeyDelete, "space": tea.KeySpace,
-	"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
-	"home": tea.KeyHome, "end": tea.KeyEnd, "pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
-}
+var keyMsg = tuitest.KeyMsg
 
 // TestUnwindKey pins the Unwind binding after it moved off the backtick: alt+u resets a
 // deep stack to the root, and the backtick — now bound nowhere — does not.

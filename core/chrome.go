@@ -7,50 +7,42 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Chrome is the optional UI furniture the router draws around the active screen's
-// body: a persistent header box, a transient status line, and a pluggable output
-// pane. Each element is independently optional — a nil Header/Output (or empty
-// Status) is simply not drawn — and independently toggleable at runtime
-// (sh.Chrome.Header.Hide(), sh.Chrome.Output.Toggle()). A screen can also suppress
-// any element while it is on top via ChromeMasker (see screen.go). Shared.Chrome is
-// nil for a fullscreen-by-default app, in which case the router renders only the
-// body + help bar.
-//
-// The framework names no domain type here: Header is a consumer closure and Output
-// is an interface (its default implementation, the scrollable log pane, lives in
-// components — core ← components, so core only names the interface).
+// Chrome is the optional furniture around the active screen's body: a header box, a
+// status line and an output pane. Each is optional (nil is not drawn) and toggleable at
+// runtime, and a screen can hide any while on top (ChromeMasker). A nil Shared.Chrome
+// renders just body and help bar. Header is a closure and Output an interface, so core
+// names no domain type.
 type Chrome struct {
 	Header     *HeaderPane     // nil ⇒ no header box
 	Breadcrumb *BreadcrumbPane // nil ⇒ breadcrumb still drawn (default, shown); set to toggle it
 	Output     Output          // nil ⇒ no output pane (default impl: components.LogPane)
 	Status     Status          // nil ⇒ no status line (default impl: components.StatusLine)
 
-	// outputFocused routes input to the output pane (scrolling) instead of the
-	// active screen. Owned by the router; the pane itself is focus-agnostic and only
-	// renders a focused affordance from the bool passed to View.
+	// outputFocused routes input to the output pane instead of the screen. The router owns
+	// it; the pane only renders the flag View is given.
 	outputFocused bool
 }
 
-// HeaderPane wraps a consumer's context-box renderer with a runtime hidden flag, so
-// the header can be toggled off without dropping the closure.
+// visibility is the runtime hidden flag shared by the toggleable chrome panes.
+type visibility struct{ hidden bool }
+
+func (v *visibility) Hide()        { v.hidden = true }
+func (v *visibility) Show()        { v.hidden = false }
+func (v *visibility) Toggle()      { v.hidden = !v.hidden }
+func (v *visibility) Hidden() bool { return v.hidden }
+
+// HeaderPane wraps a consumer's header renderer with a runtime hidden flag.
 type HeaderPane struct {
 	Render func(*Shared) string
-	// OnClick, when set, fires on a left click anywhere in the header box. x,y are
-	// terminal cell coordinates; the header is the topmost chrome, so y doubles as
-	// the header-local row — a closure that sub-divides its box (future hit
-	// detection) can use them directly. Nil ⇒ header clicks fall through.
+	// OnClick fires on a left click in the header box, in terminal cells (the header is
+	// topmost, so y is also the header-local row). Nil ⇒ clicks fall through.
 	OnClick func(sh *Shared, x, y int) Action
-	hidden  bool
+	visibility
 }
 
 // NewHeaderPane wraps a header renderer (the closure a consumer supplies). The
 // facade's Run builds this from Config.Header.
 func NewHeaderPane(render func(*Shared) string) *HeaderPane { return &HeaderPane{Render: render} }
-
-func (h *HeaderPane) Hide()        { h.hidden = true }
-func (h *HeaderPane) Show()        { h.hidden = false }
-func (h *HeaderPane) Toggle()      { h.hidden = !h.hidden }
-func (h *HeaderPane) Hidden() bool { return h.hidden }
 
 // view renders the header, or "" when the pane is nil, hidden, or has no renderer —
 // so the router measures/draws it uniformly. Nil-receiver safe.
@@ -61,26 +53,17 @@ func (h *HeaderPane) view(s *Shared) string {
 	return h.Render(s)
 }
 
-// BreadcrumbPane carries the runtime hidden flag for the router-drawn breadcrumb
-// bar (built from the live nav stack — see Router.breadcrumbView), so the breadcrumb
-// can be toggled off without the router tracking visibility itself. Parallel to
-// HeaderPane.
+// BreadcrumbPane carries the runtime hidden flag for the router-drawn breadcrumb bar.
 type BreadcrumbPane struct {
-	hidden bool
+	visibility
 }
 
 // NewBreadcrumbPane returns a shown breadcrumb pane. The facade's Run sets this on
 // Chrome so a consumer can sh.Chrome.Breadcrumb.Hide() it.
 func NewBreadcrumbPane() *BreadcrumbPane { return &BreadcrumbPane{} }
 
-func (b *BreadcrumbPane) Hide()        { b.hidden = true }
-func (b *BreadcrumbPane) Show()        { b.hidden = false }
-func (b *BreadcrumbPane) Toggle()      { b.hidden = !b.hidden }
-func (b *BreadcrumbPane) Hidden() bool { return b.hidden }
-
-// view renders the breadcrumb bar plus a full-width rule under it (mirroring the tab
-// strip), or "" when the pane is hidden or there are no crumbs. A nil pane renders
-// normally (shown), so the router can hand crumbs to it uniformly. Nil-receiver safe.
+// view renders the breadcrumb bar and a rule under it, or "" when hidden or empty. A nil
+// pane renders as shown.
 func (b *BreadcrumbPane) view(crumbs []Crumb, width int) string {
 	if b != nil && b.hidden {
 		return ""
@@ -110,11 +93,9 @@ func (c Crumb) pick(short bool) string {
 // crumbSep separates breadcrumb segments.
 const crumbSep = " › "
 
-// RenderBreadcrumb joins crumbs into the styled breadcrumb bar the router draws under
-// the tab strip: upstream segments + separators muted, the current (last) segment in
-// the accent. When the full trail is too wide for width it retries with the short form
-// of every segment but the last, then left-truncates the whole bar — keeping the
-// current segment visible. An empty slice renders nothing.
+// RenderBreadcrumb renders the bar: upstream segments muted, the current one accented.
+// When too wide it retries with short forms for all but the last, then left-truncates,
+// keeping the current segment visible.
 func RenderBreadcrumb(crumbs []Crumb, width int) string {
 	if len(crumbs) == 0 {
 		return ""
@@ -136,11 +117,8 @@ func RenderBreadcrumb(crumbs []Crumb, width int) string {
 	return breadcrumbBarStyle.Render(strings.Join(parts, crumbMutedStyle.Render(crumbSep)))
 }
 
-// crumbLabels picks the label each segment renders with — full forms, or the
-// short forms when the full trail overflows width — so the renderer and the
-// click hit-test (crumbSpans) can never disagree about what's on screen.
-// truncated reports the left-truncated fallback, where segments are cut and no
-// spans can be computed.
+// crumbLabels picks full or short labels to fit width, shared by the renderer and
+// crumbSpans. truncated reports the left-truncated fallback, where no spans exist.
 func crumbLabels(crumbs []Crumb, width int) (chosen []string, truncated bool) {
 	last := len(crumbs) - 1
 	labels := func(short bool) []string {
@@ -164,10 +142,8 @@ func crumbLabels(crumbs []Crumb, width int) (chosen []string, truncated bool) {
 // crumbSpan is one segment's clickable x range in terminal cells, [start, end).
 type crumbSpan struct{ start, end int }
 
-// crumbSpans maps each crumb to the cells it occupies in the rendered bar:
-// breadcrumbBarStyle's 1-cell left padding, then label widths joined by
-// crumbSep (the separators themselves are dead space). ok=false when the trail
-// renders truncated — segments are cut, so no span is trustworthy.
+// crumbSpans maps each crumb to its cells in the rendered bar; ok is false when the bar
+// is truncated.
 func crumbSpans(crumbs []Crumb, width int) (spans []crumbSpan, ok bool) {
 	chosen, truncated := crumbLabels(crumbs, width)
 	if truncated || len(chosen) == 0 {
@@ -183,12 +159,9 @@ func crumbSpans(crumbs []Crumb, width int) (spans []crumbSpan, ok bool) {
 	return spans, true
 }
 
-// Output is a pluggable below-body pane the router renders, sizes, and — while it
-// holds focus — feeds scroll keys. The default implementation is the scrollable log
-// in components (NewLogPane); a consumer may supply its own. The router treats it
-// opaquely: logging is a separate capability (Log(string)) discovered by Shared.Log
-// via type assertion, so an Output need not be a log. Wrapping (Keys.Wrap) is
-// likewise optional, discovered the same way — see Wrapper.
+// Output is the pluggable pane below the body, which the router renders, sizes and feeds
+// scroll keys while focused. The default is components.NewLogPane. Logging (Log) and
+// wrapping (Wrapper) are optional capabilities found by type assertion.
 type Output interface {
 	Shown() bool                       // occupies layout space when true
 	Toggle()                           // show/hide (the Output key, `o`)
@@ -203,23 +176,16 @@ type Output interface {
 	Log(line string, forceShow bool)
 }
 
-// Wrapper is the optional second render mode an Output may offer: wrapping long lines
-// rather than letting them truncate at the pane edge, which is otherwise the only fate
-// of a line wider than the box (the viewport clips it, and there is no way to scroll
-// to the tail). The router reaches it by type assertion on Keys.Wrap — the same
-// optional-capability pattern as Shared.Log — so an Output need not implement it.
+// Wrapper is an Output's optional wrap mode for lines wider than the box, reached by type
+// assertion on Keys.Wrap.
 type Wrapper interface {
 	ToggleWrap()
 	Wrapped() bool
 }
 
-// Status is the pluggable transient one-liner the router draws below the body
-// (parallel to Output). The default implementation is the themed line in components
-// (NewStatusLine); a consumer may supply its own. Core treats it opaquely: it Sets the
-// text (via Shared.WriteStatus/SetStatus), measures it (Shown/Height), renders it
-// (View), and clears it — explicitly (the Clear key) or via the auto-clear timer the
-// router schedules and keys on Gen, so a newer write's timer never lets a stale one
-// clear a fresh message.
+// Status is the pluggable one-line status below the body (default
+// components.NewStatusLine). The router clears it on the Clear key or an auto-clear timer
+// keyed on Gen, so an old timer never clears a newer message.
 type Status interface {
 	Set(line string) // replace the message and bump the generation
 	Clear()          // drop the message (does NOT bump the generation)

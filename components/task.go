@@ -10,24 +10,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// RunFunc executes a streaming background task: report() pipes progress lines into
-// the log, and the terminating core.TaskEvent (Done:true) is sent on done. ctx is
-// cancelled when the user aborts the task (esc), so a cancellable RunFunc should
-// thread it into its network/process work and return promptly once it fires.
+// RunFunc runs a streaming background task: report sends progress lines to the log, and
+// the terminating core.TaskEvent (Done: true) goes on done. ctx is cancelled on abort
+// (esc); cancellable work should honor it.
 type RunFunc func(ctx context.Context, sh *core.Shared, report func(string, ...any), done chan<- core.TaskEvent)
 
-// TaskScreen runs a streaming background task and shows its log. It is context-
-// agnostic: the calling tab supplies run (the work), onDone (what to do with the
-// terminating event), and — for tasks that stay on the log until dismissed — a
-// doneLabel + onDismiss. It names no domain type.
-//
-// While the task runs, esc requests an abort: the run's context is cancelled and the
-// screen waits for the run to unwind, then stays on the log showing "aborted" until
-// the user dismisses it (rather than running onDone's success navigation).
-//
-// A router-level stack reset (resetToRoot/showTab) can drop a running TaskScreen
-// without cancelling its context; the stream machinery (see startTask) is built so
-// that can never wedge the worker goroutine.
+// TaskScreen runs a streaming task and shows its log. The caller supplies run, onDone,
+// and, for tasks that stay on the log, a doneLabel and onDismiss. While running, esc
+// aborts: the context is cancelled and the screen stays on the log showing "aborted"
+// until dismissed. A stack reset can drop a running TaskScreen without cancelling it;
+// startTask is built so the worker can never block on that.
 type TaskScreen struct {
 	label, doneLabel string
 	Crumb            string
@@ -51,9 +43,8 @@ func (s *TaskScreen) CrumbLabel(short bool) string {
 	return CrumbSegment(short, s.CrumbShort, "Task", "Task")
 }
 
-// LocateDir reports the directory this task concerns (Dir), so the global Terminal key
-// opens a terminal there — the point where a failed git op tells the user to resolve it in a
-// terminal. Empty dir ⇒ no locator (the key falls through).
+// LocateDir reports Dir, so the terminal key opens where a failed git op says to resolve
+// things.
 func (s *TaskScreen) LocateDir() (string, bool) { return s.Dir, s.Dir != "" }
 
 // NewTask builds a task that navigates away as soon as it finishes (install,
@@ -87,16 +78,13 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 		}
 		s.done = true
 		if s.aborting {
-			// The run unwound after the abort. Stay on the log with an "aborted"
-			// notice until the user dismisses it, rather than running onDone's
-			// success navigation (which would land as if the work had completed).
+			// The run unwound after an abort: stay on the log instead of running onDone's success
+			// navigation.
 			return s, core.SetStatusAndLog("aborted")
 		}
 		act := s.onDone(sh, msg)
-		// A non-stay task navigates away via act (e.g. a ShowTab). A stay-task remains
-		// on its log until the user dismisses it (esc/enter), but act is still applied
-		// — it's expected to be non-navigational for a stay-task (e.g. a broadcast that
-		// reloads another tab), so returning s keeps the screen on top.
+		// A non-stay task navigates away via act. A stay-task stays until dismissed, but act (a
+		// non-navigational broadcast, say) is still applied.
 		return s, act
 
 	case tea.KeyPressMsg:
@@ -115,10 +103,8 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 		}
 
 	case tea.MouseClickMsg:
-		// A click dismisses a finished task, the same as esc/enter — a done task
-		// is a dead end whose only moves are exits. Clicks while it runs do
-		// nothing: aborting work is esc's job, and a click that cancelled would
-		// be a landmine.
+		// A click dismisses a finished task, like esc/enter. Clicks while running do nothing:
+		// aborting is esc's job.
 		if msg.Button == tea.MouseLeft &&
 			s.done && (s.aborting || s.stay) {
 			return s.dismiss(sh)
@@ -127,11 +113,8 @@ func (s *TaskScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 	return s, core.Action{}
 }
 
-// dismiss is the shared exit from a finished task (esc/enter key, or a click).
-// An aborted task (any kind) and a finished stay-task both linger on the log
-// until dismissed. Aborted tasks fall back to a plain Pop when the caller
-// supplied no onDismiss (non-stay tasks); anything else is a no-op — a done
-// non-stay task already navigated away.
+// dismiss exits a finished task. Aborted tasks and finished stay-tasks linger until
+// dismissed; an aborted task without onDismiss pops. Otherwise it is a no-op.
 func (s *TaskScreen) dismiss(sh *core.Shared) (core.Screen, core.Action) {
 	if s.aborting && s.onDismiss == nil {
 		return s, core.Pop()
@@ -162,10 +145,8 @@ func (s *TaskScreen) View(sh *core.Shared) string {
 }
 
 func (s *TaskScreen) HelpView(sh *core.Shared) string {
-	// A task with a directory is a DirLocator, so the terminal/open-dir keys still fire on it —
-	// what the "resolve it in a terminal (t)" failure message counts on. They are deliberately
-	// NOT on this bar: the bar stays sparse (see core.ShortHelp), and a task screen has no (?)
-	// help to put them in, so they go unadvertised here rather than crowding four entries in.
+	// A task with Dir fires the terminal keys (the failure message relies on it) but they stay
+	// off this sparse bar (see core.ShortHelp).
 	if s.done && (s.aborting || s.stay) {
 		return sh.BindingHelp([]key.Binding{core.Hint("back", core.Keys.Back)})
 	}
@@ -179,20 +160,14 @@ func (s *TaskScreen) SetSize(sh *core.Shared, width, bodyHeight int) {}
 
 // ---------- streaming task pump ----------
 
-// startTask spawns run in the background, piping report() lines into the output
-// log via the screen's own events channel, and returns the spinner tick + the wait
-// for the first event. The channel belongs to the TaskScreen (created in Init), not
-// to Shared: two tasks in flight at once must never retarget each other's stream.
-//
-// Every send the worker can make is wedge-proof: a router reset can drop the screen
-// without cancelling ctx (esc was never pressed), and from then on nothing drains
-// events — a blocking send would leak the worker goroutine mid-task.
+// startTask runs the task in the background, piping report lines through the screen's own
+// events channel (so concurrent tasks never mix streams), and returns the spinner tick
+// plus the first wait. Every worker send is non-blocking: a stack reset can drop the
+// screen without cancelling ctx, leaving nothing to drain the channel.
 func startTask(ctx context.Context, sh *core.Shared, events chan core.TaskEvent, run RunFunc) tea.Cmd {
 	go func() {
 		report := func(format string, args ...any) {
-			// Non-blocking: a live screen's pending wait takes the line; a full
-			// buffer (UI a tick behind, or screen gone) drops it — losing a
-			// progress line beats wedging the worker.
+			// Non-blocking: drop a progress line rather than block the worker on a full buffer.
 			select {
 			case events <- core.TaskEvent{Line: fmt.Sprintf(format, args...)}:
 			case <-ctx.Done():
@@ -203,17 +178,12 @@ func startTask(ctx context.Context, sh *core.Shared, events chan core.TaskEvent,
 		// blocks either; getting it onto events is this pump goroutine's job.
 		done := make(chan core.TaskEvent, 1)
 		run(ctx, sh, report, done)
-		// run has returned, so its terminating send — if it made one — is already
-		// buffered in done: a non-blocking receive is race-free (unlike selecting
-		// against ctx.Done(), which could win the coin flip during an abort and
-		// strand the screen waiting for the unwind that already happened).
+		// run has returned, so its final event (if any) is already buffered; a non-blocking
+		// receive cannot race the abort path.
 		select {
 		case ev := <-done:
-			// The terminating event must reach a live screen — it drives onDone
-			// and the aborted state — so it is never dropped. No report can race
-			// us for buffer space (run has returned): if the buffer is full
-			// (dropped screen, or UI a tick behind), sacrifice the oldest
-			// buffered progress line to make room instead of blocking.
+			// The final event must reach a live screen, so it is never dropped: if the buffer is
+			// full, evict the oldest progress line to make room.
 			select {
 			case events <- ev:
 			default:

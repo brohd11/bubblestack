@@ -13,15 +13,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Rendering for Screen: the body and its gutter, soft-wrap row mapping, per-line
-// styling with syntax-highlight spans, selection and search-match painting, and the help
-// view. Nothing here mutates the buffer.
+// Rendering for Screen: body, gutter, soft-wrap rows, syntax spans, selection and search
+// painting, and help. Nothing here mutates the buffer.
 
 // ---------- rendering ----------
 
-// titleH is the title bar's rendered height, subtracted from the body (and from mouse
-// rows) the same way ModularScreen accounts for its own title. The focused and muted
-// bars render at the same height, so focus never shifts the body.
+// titleH is the title bar's height. Focused and muted bars are the same height, so focus
+// never shifts the body.
 func (s *Screen) titleH() int {
 	if s.hideTitle {
 		return 0
@@ -29,13 +27,9 @@ func (s *Screen) titleH() int {
 	return lipgloss.Height(core.RenderTitleBar(s.titleText()))
 }
 
-// insetX and insetY are the body's offsets from the screen's own top-left: the chrome
-// this editor draws above and left of the first buffer cell. They are the single
-// definition SetSize (which subtracts them) and clickAt (which offsets by them) both
-// read, so the two can't drift apart.
-//
-// Left: the frame's border column when bordered, plus the embedded gutter — one blank
-// column keeping the text off a neighbouring pane's border.
+// insetX and insetY are the body's offsets from the screen's top-left, shared by SetSize
+// and clickAt so they cannot drift. Left: the frame border when bordered, plus one blank
+// column when embedded.
 func (s *Screen) insetX() int {
 	x := 0
 	if s.bordered {
@@ -69,16 +63,14 @@ func (s *Screen) titleText() string {
 	return s.baseTitleText()
 }
 
-// searchBarVisible reports whether the bottom rows belong to search: while the
-// modal editor is open (including its initially empty state), or afterward while a
-// retained query is still filtering the buffer.
+// searchBarVisible reports whether the bottom rows belong to search: while its overlay is
+// open, or while a retained query still highlights matches.
 func (s *Screen) searchBarVisible() bool {
 	return s.searchEnabled && (s.searchEditing || s.searchQuery != "")
 }
 
-// searchBar renders the unfocused version beneath the viewport. A left click replaces
-// it with the focused components.LineEditScreen, composited directly over the same rounded shell
-// and full pane width. Its text is cell-truncated on narrow panes.
+// searchBar renders the unfocused search bar; clicking it opens the LineEditScreen over
+// the same shell.
 func (s *Screen) searchBar() string {
 	w := s.paneW()
 	contentW := max(w-4, 1) // two border cells and one padding cell on each side
@@ -92,10 +84,8 @@ func retainedSearchBox() lipgloss.Style {
 	return components.LineEditBox().BorderForeground(core.BorderColor)
 }
 
-// View renders the buffer window under its title, both tracking focus: bordered, the
-// title (with its (*) modified marker) is the frame's top-border legend and the frame
-// carries the tint; unbordered, it is the title bar above the body, muted while a
-// sibling pane holds the keys.
+// View renders the buffer under its title: in the frame legend when bordered, otherwise a
+// title bar muted while unfocused.
 func (s *Screen) View(*core.Shared) string {
 	s.syncSearchBarHeight()
 	var editor string
@@ -110,12 +100,9 @@ func (s *Screen) View(*core.Shared) string {
 	return lipgloss.JoinVertical(lipgloss.Left, editor, s.searchBar())
 }
 
-// syncSearchBarHeight re-runs the layout when the retained search bar has appeared or
-// gone. The bar takes rows from the body, but the host sizes a pane only when the pane's
-// own geometry changes — and the query is edited in a PUSHED overlay whose closures write
-// straight to this screen, so neither this editor's Update nor a re-size need happen
-// between the change and the frame that has to account for it. Asserting it here, from
-// View, is the same shape ListPanel uses when its filter line appears (see sizeList).
+// syncSearchBarHeight re-lays-out when the retained search bar appears or goes. The query
+// is edited in a pushed overlay that writes straight to this screen, so no resize happens
+// in between; View is the reliable place to catch it (as ListPanel's filter line does).
 func (s *Screen) syncSearchBarHeight() {
 	if s.lastSizeW > 0 && s.searchBarVisible() != s.lastSearchBar {
 		s.sizeDirty = true
@@ -132,16 +119,10 @@ func (s *Screen) gutter() int {
 	return 0
 }
 
-// body is the viewport itself: s.h rows of the visible row window and — while the
-// exit prompt is up — the prompt as the last row, each indented by the gutter. When
-// the buffer overflows, the rightmost column is the scrollbar (rows padded up to it,
-// so the bar reads as one solid column). Always exactly s.h lines tall AND exactly
-// s.w cells wide, so the frame around it stays rectangular: a row one cell over
-// wraps in the terminal and shifts every frame after it.
-//
-// What a "row" is depends on the mode — a buffer line, or one wrapped chunk of one —
-// but only rowCount and renderRow know that, so the two modes cannot drift apart in
-// how they pad or where they put the bar.
+// body is the viewport: exactly s.h rows of exactly s.w cells (a wider row would wrap in
+// the terminal and shift every later frame), plus the exit prompt as the last row when
+// up. When the buffer overflows, the rightmost column is the scrollbar. Only rowCount and
+// renderRow know what a row is (a line, or a wrapped chunk).
 func (s *Screen) body() string {
 	rows := s.h
 	if s.confirmExit {
@@ -183,9 +164,7 @@ func (s *Screen) body() string {
 	return b.String()
 }
 
-// rowCount is how many rows the viewport scrolls through — what scrY indexes and what
-// the scrollbar measures itself against: wrapped display rows while wrap is on, buffer
-// lines while it is off.
+// rowCount is how many rows the viewport scrolls through: wrapped rows, or buffer lines.
 func (s *Screen) rowCount() int {
 	if s.wrap {
 		return s.wrapTotalRows()
@@ -201,19 +180,13 @@ func (s *Screen) renderRow(i int) string {
 	return s.renderLine(i)
 }
 
-// gutterOn reports whether the line-number column is drawn: the sticky ctrl+l
-// preference, or unconditionally while wrapped — in wrapped text the numbers are the
-// only thing separating a soft break from a real line, so wrap turns them on without
-// disturbing the preference the toggle goes back to.
+// gutterOn reports whether line numbers are drawn: the ctrl+l preference, or always when
+// wrapped, where they are the only way to tell a soft break from a real line.
 func (s *Screen) gutterOn() bool { return s.lineNums || s.wrap }
 
-// numGutterWidth returns the fixed width of the line-number prefix when it is drawn.
-// It is just wide enough for the highest line number in the buffer, so short docs do
-// not waste columns and tall docs stay aligned. A viewport too narrow to hold the
-// numbers and any text gets none: the text wins.
-//
-// It must not consult textW — that reads barVisible, which under wrap reads the row
-// cache, which is measured against this width.
+// numGutterWidth is the line-number column's width, just wide enough for the last line
+// number; zero when the viewport is too narrow for numbers and text. It must not consult
+// textW, which (through barVisible and the wrap cache) depends on it.
 func (s *Screen) numGutterWidth() int {
 	if !s.gutterOn() {
 		return 0
@@ -229,19 +202,11 @@ func (s *Screen) numGutterWidth() int {
 	return w
 }
 
-// leftGutterWidth is everything drawn left of the text: the host's sign columns
-// (signs.go) plus the line-number column. It is the width the body is measured
-// against, and every consumer of a "how far in does text start" answer must use THIS,
-// not numGutterWidth — contentW, the wrap rebuild and the click-to-cursor math all
-// derive from it, and a site left on the narrower one would misplace clicks by exactly
-// the sign column.
-//
-// It carries numGutterWidth's constraint unchanged: nothing here may consult textW,
-// which reads barVisible, which under wrap reads the row cache, which is measured
-// against this width. Neither part does.
-//
-// In a too-narrow viewport the numbers go first, followed by sign columns from the
-// outside in. The innermost annotation therefore survives nearest the text.
+// visibleGutter returns the sign columns and number width that fit, which together are
+// leftGutterWidth: everything left of the text. Every "where does text start" computation
+// (contentW, the wrap rebuild, click mapping) must use it, or clicks shift by a sign
+// column. Like numGutterWidth it must not consult textW. When narrow, numbers go first,
+// then sign columns from the outside in.
 func (s *Screen) visibleGutter() (signs []string, nums int) {
 	capacity := max(s.w-2, 0)
 	signs = s.shownSignColumns()
@@ -262,22 +227,14 @@ func (s *Screen) leftGutterWidth() int {
 	return len(signs) + nums
 }
 
-// gutterText is everything left of the text for one display row: the visible sign cells
-// then the line-number cell. All are blank on a line's wrapped continuations, and the
-// string this returns always measures exactly leftGutterWidth cells.
+// gutterText is the sign and number cells left of one display row, blank on
+// continuations, always exactly leftGutterWidth wide.
 func (s *Screen) gutterText(line int, first bool) string {
 	signs, nums := s.visibleGutter()
 	if len(signs)+nums == 0 {
 		return ""
 	}
 	return s.signText(signs, line, first) + s.lineNumTextWidth(nums, line, first)
-}
-
-// lineNumText is the number cell for one display row: the 1-based line number on a
-// line's first row, blanks on its wrapped continuations.
-func (s *Screen) lineNumText(line int, first bool) string {
-	_, w := s.visibleGutter()
-	return s.lineNumTextWidth(w, line, first)
 }
 
 func (s *Screen) lineNumTextWidth(w, line int, first bool) string {
@@ -290,16 +247,10 @@ func (s *Screen) lineNumTextWidth(w, line int, first bool) string {
 	return fmt.Sprintf("%*d ", w-1, line+1)
 }
 
-// rebuildWrapRows recomputes the display rows, and with them whether the scrollbar
-// column is needed. Nothing it calls may consult textW or barVisible: the text width
-// derives from the bar, the bar derives from the row count, and the row count is what
-// this builds — reading either here recurses until the stack gives out. So the width is
-// settled directly instead: measure at the full width, and if the document overflows,
-// measure again one column narrower to make room for the bar. Narrowing can only add
-// rows, never remove them, so an overflow at the full width is still an overflow at the
-// narrower one and the second pass is final.
-//
-// The cache is invalidated (wrapDirty) by every edit, resize and toggle.
+// rebuildWrapRows recomputes the display rows and whether the scrollbar is needed. It
+// cannot read textW or barVisible (they depend on what it builds), so it measures at full
+// width and, on overflow, once more one column narrower for the bar; narrowing only adds
+// rows, so the second pass is final. Edits, resizes and toggles set wrapDirty.
 func (s *Screen) rebuildWrapRows() {
 	if !s.wrapDirty {
 		return
@@ -313,14 +264,10 @@ func (s *Screen) rebuildWrapRows() {
 	}
 }
 
-// buildWrapRows fills the row cache, breaking each buffer line into chunks of at most w
-// display cells. A line whose width is an exact multiple of w (an empty line included)
-// gets a trailing empty row: without it the caret at end of line would have to sit one
-// column past the last chunk, which is off the frame.
+// buildWrapRows breaks each line into chunks of at most w cells. A line of an exact
+// multiple of w (or empty) gets a trailing empty row for the caret at end of line.
 func (s *Screen) buildWrapRows(w int) {
-	if w < 1 {
-		w = 1
-	}
+	w = max(w, 1)
 	s.wrapRows = s.wrapRows[:0]
 	for i, line := range s.lines {
 		n := len(expandLine(line))
@@ -339,9 +286,8 @@ func (s *Screen) wrapTotalRows() int {
 	return len(s.wrapRows)
 }
 
-// wrapRowForCursor is the display row holding the caret, FOUND in the same cache the
-// render reads rather than recomputed from the wrap width — the two agreeing is what
-// keeps the caret on the row it is drawn on.
+// wrapRowForCursor finds the caret's row in the same cache the render uses, so the caret
+// is always on the row it is drawn on.
 func (s *Screen) wrapRowForCursor() int {
 	s.rebuildWrapRows()
 	cell := cellOfCol(s.lines[s.curY], s.curX)
@@ -358,10 +304,9 @@ func (s *Screen) wrapRowForCursor() int {
 	return last
 }
 
-// renderWrappedRow renders display row idx: its line-number gutter (numbered on the
-// line's first row, blank on its continuations) and its chunk of the line, with the
-// caret when this is the row the caret is on. The chunk's start is the window origin
-// here, exactly as scrX is in the unwrapped render.
+// renderWrappedRow renders display row idx: gutter (numbered on the line's first row) and
+// its chunk, with the caret when present. The chunk start is the window origin, as scrX
+// is unwrapped.
 func (s *Screen) renderWrappedRow(idx int) string {
 	r := s.wrapRows[idx]
 	line := s.lines[r.line]
@@ -385,22 +330,10 @@ func (s *Screen) lastRowOfLine(idx int) bool {
 	return idx == len(s.wrapRows)-1 || s.wrapRows[idx+1].line != s.wrapRows[idx].line
 }
 
-// renderLine renders one buffer row's horizontal window in display cells (tabs
-// expanded via expandLine — the raw '\t' never reaches the frame), behind the line
-// number gutter when it is on and narrowed by it (contentW), with the cursor
-// cell (a reverse-video rune, or a blank at end of line) when the row holds the
-// cursor. A cursor sitting on a tab reverses the expansion's first cell.
-//
-// With a Highlighter set (and focused), the window renders through the spans
-// instead: contiguous same-style runs, tabs carrying their span's style through
-// the expansion, the cursor cell still reverse-video — the cursor wins over the
-// syntax style, exactly as it wins over plain text. Styles never change cell
-// widths, so the styled render measures the same as the plain one.
-//
-// Unfocused the whole window goes muted and the cursor is dropped: a caret in a pane
-// the keys don't reach reads as a lie about where typing lands, and one caret per
-// pane would leave nothing marking the live one. The muted style is built per call so
-// a theme switch repaints it, as styleHelp and StyleList do.
+// renderLine renders one buffer row's window in display cells behind the gutter, with the
+// caret as a reverse-video cell (a blank at end of line). With a highlighter the window
+// renders through its spans; the caret still wins. Styles never change widths.
+// Unfocused, the row is muted and the caret hidden, so only the live pane shows one.
 func (s *Screen) renderLine(row int) string {
 	disp := expandLine(s.lines[row])
 	w := s.contentW()
@@ -409,10 +342,8 @@ func (s *Screen) renderLine(row int) string {
 		start = len(disp)
 	}
 	end := s.scrX + w
-	// over: the line runs past the window, so the last column goes to the marker instead
-	// of to text. eol is then false — the line does not end in this window, and the tail
-	// blank renderLinePlain draws for a caret or a selected newline would land in the
-	// marker's cell. Below two columns there is nothing left to mark with.
+	// over: the line continues past the window, so the last column shows the marker, and eol
+	// is false so no end-of-line blank lands in that cell.
 	over := w >= 2 && len(disp) > end
 	if over {
 		end--
@@ -430,14 +361,13 @@ func (s *Screen) renderLine(row int) string {
 		body = s.renderLinePlain(row, start, end, !over)
 	}
 	if over {
-		body += lipgloss.NewStyle().Foreground(core.MutedColor).Render(string(editorOverflowMark))
+		body += core.MutedStyle().Render(string(editorOverflowMark))
 	}
 	return num + body
 }
 
-// renderLinePlain applies the muted/unfocused, selection, and caret layers to a
-// display-cell window. Selection is measured in rune columns but converted to cells,
-// so every cell of an expanded tab receives the same background.
+// renderLinePlain layers muted, selection and caret over a cell window. Selection is
+// converted to cells so a tab's whole expansion is highlighted.
 func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	line := s.lines[row]
 	disp := expandLine(line)
@@ -447,7 +377,7 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	if s.focused && row == s.curY {
 		c = cellOfCol(s.lines[row], s.curX) - start
 	}
-	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
+	muted := core.MutedStyle()
 	selected := lipgloss.NewStyle().Background(core.MutedColor).Foreground(core.OnFocusedColor)
 	selFrom, selTo, hasSel := s.selectedCells(row)
 	inSel := func(cell int) bool { return hasSel && cell >= selFrom && cell < selTo }
@@ -505,9 +435,8 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	return b.String()
 }
 
-// indentGuideCells marks complete leading indent levels in display-cell space. This
-// keeps guides aligned through literal tabs, mixed indentation, horizontal scrolling,
-// and wrapping without changing any of the buffer's rune/cell mappings.
+// indentGuideCells marks complete leading indent levels in display cells, so guides align
+// through tabs, mixed indent, scrolling and wrap.
 func (s *Screen) indentGuideCells(line []rune) []bool {
 	if !s.indentGuides {
 		return nil
@@ -533,13 +462,8 @@ func guideCell(guides []bool, cell int) bool {
 	return cell >= 0 && cell < len(guides) && guides[cell]
 }
 
-// selectedCells is the row's selected window in DISPLAY CELLS, and ok=false when the row
-// carries no selection.
-//
-// It exists to be called once per row rather than once per cell. cellOfCol walks the line
-// to answer, so testing each cell through it cost two walks per cell — quadratic in the
-// line's own length for every row inside a selection. On short source lines that is
-// invisible; on a highlighted paragraph it is the frame.
+// selectedCells is the row's selected window in display cells (ok=false for none),
+// computed once per row: per-cell cellOfCol calls made highlighted rows quadratic.
 func (s *Screen) selectedCells(row int) (from, to int, ok bool) {
 	if !s.selectionActive() || row < s.selStart.y || row > s.selEnd.y {
 		return 0, 0, false
@@ -555,23 +479,14 @@ func (s *Screen) selectedCells(row int) (from, to int, ok bool) {
 	return cellOfCol(line, fromCol), cellOfCol(line, toCol), true
 }
 
-// cellSelected is selectedCells for one cell, kept for callers outside the render loop.
-func (s *Screen) cellSelected(row, cell int) bool {
-	from, to, ok := s.selectedCells(row)
-	return ok && cell >= from && cell < to
-}
-
-// newlineSelected reports whether the half-open range crosses the newline following
-// row. Rendering one dim blank makes multiline selections and selected empty lines
-// visible without putting a newline rune into the terminal output.
+// newlineSelected reports whether the selection crosses the newline after row, which
+// renders as one dim blank.
 func (s *Screen) newlineSelected(row int) bool {
 	return s.selectionActive() && row >= s.selStart.y && row < s.selEnd.y
 }
 
-// rebuildSearchMatches refreshes the per-line match cache when either the query or
-// buffer changes. Search is literal, case-insensitive and line-local because the
-// input itself is single-line. Advancing by the query width makes results
-// non-overlapping, matching conventional find behavior.
+// rebuildSearchMatches refreshes the per-line match cache after a query or buffer change.
+// Search is literal, case-insensitive, line-local and non-overlapping.
 func (s *Screen) rebuildSearchMatches() {
 	if s.searchSeq == s.editSeq && s.searchCached == s.searchQuery {
 		return
@@ -598,9 +513,8 @@ func (s *Screen) rebuildSearchMatches() {
 	}
 }
 
-// cellMatched reports whether one display cell belongs to a search match. Cached
-// ranges are sorted, so the lookup narrows to the first range ending after cell
-// instead of scanning every match on a common-character search.
+// cellMatched reports whether a cell is in a search match, starting from the first sorted
+// range ending after it.
 func (s *Screen) cellMatched(row, cell int) bool {
 	if s.searchQuery == "" || row < 0 || row >= len(s.lines) {
 		return false
@@ -620,23 +534,20 @@ func (s *Screen) cellMatched(row, cell int) bool {
 }
 
 var (
-	// Search yellow is semantic but not thematic: it stays recognizable while themes
-	// and pane focus change. The darker light-terminal shade keeps the block visible
-	// against white, while dark terminals get the bright form.
+	// Search yellow ignores the theme and focus so matches stay recognizable; the light
+	// terminal shade is darker to show on white.
 	editorSearchYellow = core.Color{Light: 136, Dark: 226}
 	editorSearchText   = lipgloss.Color("232")
 )
 
-// editorSearchStyle is deliberately distinct from ordinary selection and independent
-// of both the active theme and pane focus. Selection and the caret still win in the
-// render layer ordering above it.
+// editorSearchStyle is distinct from selection and independent of theme and focus;
+// selection and caret still paint over it.
 func (s *Screen) editorSearchStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Background(core.Resolve(editorSearchYellow)).Foreground(editorSearchText)
 }
 
-// hlSpans answers the row from the provisional viewport parse first, then from the
-// structurally rebased exact snapshot. Direct highlighters without a factory retain the
-// original lazy synchronous behavior for compatibility.
+// hlSpans answers from the provisional viewport parse, then the rebased exact snapshot.
+// Direct highlighters without a factory keep the lazy synchronous path.
 func (s *Screen) hlSpans(row int) []Span {
 	if s.hlFactory == nil && s.hlSeq != s.editSeq && (s.hlSeq < 0 || s.highlightWait(time.Now()) == 0) {
 		s.parseHighlight()
@@ -659,14 +570,10 @@ func (s *Screen) hlSpans(row int) []Span {
 	return spans
 }
 
-// renderLineStyled renders the row's window [start, end) through the
-// highlighter's spans — start being the window's origin in display cells, scrX
-// unwrapped and the chunk's start wrapped, so the caret lands in the right window
-// either way. Per-rune span indexes ride through the tab expansion
-// (a tab's cells take its span's style), contiguous same-span runs render in
-// one style.Render, and the cursor cell splices in reverse-video — at end of
-// line, as the appended styled blank, which only a window the line actually ends
-// in (eol) may draw. ok=false falls back to the plain render.
+// renderLineStyled renders the window [start, end) through the highlighter's spans
+// (start is scrX unwrapped, the chunk start wrapped). Tabs take their span's style,
+// same-span runs render together, and the caret is spliced in reverse-video (at end of
+// line only when eol). ok=false falls back to the plain render.
 func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) {
 	spans := s.hlSpans(row)
 	if spans == nil {
@@ -674,9 +581,7 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 	}
 	line := s.lines[row]
 	guides := s.indentGuideCells(line)
-	// Cells sharing a span share its style, so the run grouping compares span
-	// indexes — never lipgloss.Style values (they carry a func field, so == does
-	// not even compile).
+	// Group runs by span index: lipgloss.Style is not comparable.
 	idx := make([]int, len(line))
 	pos := 0
 	for i, sp := range spans {
@@ -737,12 +642,8 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 		if guide {
 			text = strings.Repeat(string(editorIndentGuide), j-i)
 		}
-		// An unstyled run goes out as-is. Style.Render is 45% of a frame — it walks the
-		// whole box model (border, padding, margin, width, transform) whatever it was
-		// handed — and in source text the punctuation, whitespace and plain identifiers
-		// no lexer claims are a large share of every line. renderLinePlain has always
-		// taken this shortcut; the styled path could not until a span's style became a
-		// pointer that is cheap to test for absence.
+		// Unstyled runs skip Style.Render, which walks the whole box model and dominated frame
+		// time; a pointer style makes the absence cheap to test.
 		if styled {
 			b.WriteString(style.Render(text))
 		} else {

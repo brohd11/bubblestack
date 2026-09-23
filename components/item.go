@@ -6,14 +6,9 @@ import (
 	"charm.land/bubbles/v2/list"
 )
 
-// Item is a self-dispatching list row: instead of a domain-specific item type +
-// a kind enum + a switch in the owning screen, each row carries its own Pick
-// closure. A PickerScreen (or a tab root) runs Pick on enter, so a list of mixed
-// commands needs no bespoke Update logic — building the rows is the whole flow.
-//
-// It is context-agnostic (names no domain type), like the other components: the
-// caller supplies the closures. A nil Pick marks an inert row (e.g. an empty-list
-// placeholder); Keys is optional per-row key handling.
+// Item is a self-dispatching list row: it carries its own Pick closure, run on enter by
+// a PickerScreen or tab root, so building the rows is the whole flow. A nil Pick is an
+// inert row; Keys handles per-row keys.
 type Item struct {
 	Name, Desc, Filter string
 	Pick               func(*core.Shared) core.Action // sync control msg and/or async cmd
@@ -46,10 +41,7 @@ func (i Item) FilterValue() string {
 	return i.Name
 }
 
-// EnsurePlaceholder appends a single inert row (name + desc, no Pick) when items is
-// empty, so a list still renders a hint instead of nothing. It returns items
-// unchanged when non-empty. Operates on []list.Item since callers build the bubbles
-// list model directly (an Item satisfies list.Item).
+// EnsurePlaceholder appends one inert row when items is empty.
 func EnsurePlaceholder(items []list.Item, name, desc string) []list.Item {
 	if len(items) == 0 {
 		items = append(items, Item{Name: name, Desc: desc})

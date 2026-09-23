@@ -1,8 +1,7 @@
 //go:build windows
 
-// Package clipboard wraps the repository's clipboard backend and corrects its Windows
-// read path. The upstream v0.1.4 implementation treats GlobalUnlock's normal zero return
-// as failure even when GetLastError is NO_ERROR.
+// Package clipboard wraps the clipboard backend, fixing its Windows read, which treats
+// GlobalUnlock's normal zero return as failure.
 package clipboard
 
 import (

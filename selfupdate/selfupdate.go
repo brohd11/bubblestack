@@ -1,10 +1,4 @@
-// Package selfupdate bridges goutil's self-update library into the shared
-// self-update TUI flow in bubblestack/components. It is the one bubblestack
-// package allowed to import goutil: components stays app-agnostic by design
-// (apps inject their release check/install as components.SelfUpdateHooks), and
-// before this package existed every goutil-based app copy-pasted the same hook
-// adapter and struct conversion. Apps should import this package instead of
-// wiring goutil themselves.
+// Package selfupdate builds components.SelfUpdateHooks from goutil's self-update library.
 package selfupdate
 
 import (
@@ -15,12 +9,9 @@ import (
 	"github.com/brohd11/bubblestack/components"
 )
 
-// Hooks builds the shared self-update flow's hook set for an app: the app name,
-// the GitHub repo ("owner/name") to check, and the running version. Check calls
-// goutil's selfupdate.Check; Apply installs into the running binary's directory
-// via selfupdate.BinDir. The conversion between goutil's selfupdate.Info and the
-// flow's app-agnostic components.SelfUpdateInfo is a direct one — the structs
-// are field-identical by design, and the drift test in this package pins that.
+// Hooks builds an app's self-update hooks: Check calls goutil's selfupdate.Check and
+// Apply installs into the running binary's directory. The Info structs are
+// field-identical (pinned by a test here), so they convert directly.
 func Hooks(appName, repo, version string) components.SelfUpdateHooks {
 	return components.SelfUpdateHooks{
 		AppName: appName,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -15,35 +16,22 @@ import (
 
 // ---------- header ----------
 
-// borderCells is the horizontal cells a left+right border costs. lipgloss v2 counts
-// them inside Style.Width (v1 did not), so every box sized from a content width adds
-// them back rather than restating the arithmetic.
+// borderCells is the cells a left+right border costs; lipgloss v2 counts them inside
+// Style.Width.
 const borderCells = 2
 
 // HeaderInnerWidth is the content width inside the persistent context box for a
 // terminal of the given width, so a Header closure can size/truncate values to fit.
 func HeaderInnerWidth(width int) int {
-	inner := width - 4 // minus border (2) and padding (2)
-	if inner < 20 {
-		inner = 20
-	}
-	return inner
+	return max(width-4, 20) // minus border (2) and padding (2)
 }
 
-// headerPadding is headerStyle's horizontal padding (Padding(0, 1) — one column each
-// side). lipgloss counts a style's padding inside the width it is given, so HeaderBox
-// hands headerStyle HeaderInnerWidth and the body actually gets that minus this.
+// headerPadding is headerStyle's horizontal padding, which lipgloss counts inside the
+// width HeaderBox passes.
 const headerPadding = 2
 
-// HeaderValueWidth is how much room a Header body has for the value on a line that
-// begins with label, for a terminal of the given width. Pass the label itself rather
-// than its length: it is measured with lipgloss so wide runes and any styling count
-// correctly.
-//
-// It exists because three apps hand-computed this as a literal (9, 10, 10) with a
-// comment explaining the arithmetic, and one of the three had already drifted — gdaddon
-// subtracted its label but not the padding, giving its values two columns more than fit.
-// The number encodes headerStyle's padding, which is bubblestack's to know, not an app's.
+// HeaderValueWidth is the room a Header body has for the value on a line beginning with
+// label. Pass the label itself so wide runes and styling are measured correctly.
 func HeaderValueWidth(width int, label string) int {
 	v := HeaderInnerWidth(width) - headerPadding - lipgloss.Width(label)
 	if v < 4 {
@@ -52,13 +40,8 @@ func HeaderValueWidth(width int, label string) int {
 	return v
 }
 
-// HeaderBox renders body inside the persistent bordered context box, sized to the
-// terminal width. A consumer's Header closure builds body (e.g. with Label +
-// TruncLeft) and returns HeaderBox(sh.Width(), body).
-//
-// The +2 is the border: lipgloss v2's Style.Width is the whole rendered width, border
-// included, where v1's counted only padding and content. HeaderInnerWidth keeps its own
-// meaning — the cells a Header closure may fill — so the border is added back here.
+// HeaderBox renders body inside the bordered context box sized to the terminal. A Header
+// closure builds body (Label + TruncLeft) and returns HeaderBox(sh.Width(), body).
 func HeaderBox(width int, body string) string {
 	return headerStyle.Width(HeaderInnerWidth(width) + borderCells).Render(body)
 }
@@ -70,42 +53,32 @@ func Label(s string) string { return labelStyle.Render(s) }
 func Value(s string) string { return logStyle.Render(s) }
 
 // TruncLeft keeps the right (most informative) end of a path, prefixing "…".
-func TruncLeft(s string, max int) string {
-	if max < 4 {
-		max = 4
-	}
-	r := []rune(s)
-	if len(r) <= max {
+func TruncLeft(s string, n int) string {
+	n = max(n, 4)
+	w := ansi.StringWidth(s)
+	if w <= n {
 		return s
 	}
-	return "…" + string(r[len(r)-(max-1):])
+	return ansi.TruncateLeft(s, w-(n-1), "…")
 }
 
 // ---------- breadcrumb / title bars ----------
 
-// renderTitleBar renders text as a list-title-styled bar, so screens without
-// their own list title keep a consistent header. It is TWO rows: bubbles' default
-// TitleBar carries a bottom padding of 1 (listStyles is DefaultStyles with only
-// Title recolored), and that blank row under the bar is what a real list's title
-// section has too, so a bar rendered here lines up with one. Anything mapping rows
-// to items must measure it rather than assume — see components.listHeaderHeight,
-// where assuming one row put every titled list's clicks a row out.
+// RenderTitleBar renders text as a list-style title bar. It is two rows (bubbles'
+// TitleBar has a bottom padding of 1), like a real list's title section, so anything
+// mapping rows to items must measure it (see components.listHeaderHeight).
 func RenderTitleBar(text string) string {
 	return listStyles.TitleBar.Render(listStyles.Title.Render(text))
 }
 
-// renderTitleBarMuted is RenderTitleBar for an unfocused element: the accent fill
-// comes off and the text goes muted. Only the colors change — the bar keeps
-// listStyles.Title's padding, so its height and left pad match the focused bar
-// exactly and a focus flip can't shift the body under it.
+// renderTitleBarMuted is RenderTitleBar for an unfocused element. Only colors change, so
+// a focus flip cannot shift the body.
 func renderTitleBarMuted(text string) string {
 	muted := listStyles.Title.UnsetBackground().Foreground(MutedColor)
 	return listStyles.TitleBar.Render(muted.Render(text))
 }
 
-// WithTitle prepends a styled title bar to body, or returns body unchanged when
-// title is empty — so any screen can make its in-body title optional by passing the
-// raw (unrendered) title text straight through.
+// WithTitle prepends a title bar to body, or returns body unchanged for an empty title.
 func WithTitle(title, body string) string {
 	if title == "" {
 		return body
@@ -113,11 +86,8 @@ func WithTitle(title, body string) string {
 	return lipgloss.JoinVertical(lipgloss.Left, RenderTitleBar(title), body)
 }
 
-// WithTitleFocused is WithTitle with a focus-tinted bar: the accent bar when
-// focused, a muted one when a sibling pane holds focus. Screens that can be nested
-// in a ModularScreen render through it for the same reason they use BoxFocused —
-// so the whole element, title included, reads as inactive. Standalone screens
-// (always focused) keep using WithTitle.
+// WithTitleFocused is WithTitle with a muted bar when unfocused, for screens nested in a
+// ModularScreen.
 func WithTitleFocused(title, body string, focused bool) string {
 	if title == "" {
 		return body
@@ -133,10 +103,7 @@ func WithTitleFocused(title, body string, focused bool) string {
 // confirmWidth is the inner width of the boxed confirm/input screens, sized to
 // the terminal with a sane floor.
 func (s *Shared) ConfirmWidth() int {
-	inner := s.width - 10
-	if inner < 24 {
-		inner = 24
-	}
+	inner := max(s.width-10, 24)
 	return inner
 }
 
@@ -145,11 +112,8 @@ func (s *Shared) Box(body string) string {
 	return boxStyle.Width(s.ConfirmWidth() + borderCells).Render(body)
 }
 
-// BoxFocused is Box with a focus-tinted border: FocusedColor when focused,
-// BorderColor when not. Screens that can be nested in a ModularScreen (a form
-// beside a detail pane) render through it so the box border carries the panel
-// focus the way a ScrollContainer's legend border does. Standalone screens keep
-// using Box.
+// BoxFocused is Box with the border in FocusedColor when focused, for screens nested in a
+// ModularScreen.
 func (s *Shared) BoxFocused(body string, focused bool) string {
 	color := BorderColor
 	if focused {
@@ -158,20 +122,14 @@ func (s *Shared) BoxFocused(body string, focused bool) string {
 	return boxStyle.BorderForeground(color).Width(s.ConfirmWidth() + borderCells).Render(body)
 }
 
-// BoxInnerWidth is the widest a line of body text can be before Box word-wraps it:
-// ConfirmWidth minus the padding lipgloss reserves out of it. Derived from boxStyle
-// rather than written as a literal, so a padding change can't silently desync a caller
-// that sizes its content to fit (a re-wrap by the box restarts the line at column 0,
-// which is where a form field's continuation collides with its label column).
+// BoxInnerWidth is the widest body line before Box wraps it, derived from boxStyle so a
+// caller sizing content to fit stays in step with the padding.
 func (s *Shared) BoxInnerWidth() int {
 	return s.ConfirmWidth() - boxStyle.GetHorizontalPadding()
 }
 
-// BoxOrigin is the cell offset of a Box's first content line from the box block's own
-// top-left — what a caller anchoring an overlay to a row *inside* a box has to add to
-// reach that row's real screen cell (FormScreen.FieldAnchor is the first such caller).
-// Derived from boxStyle for the same reason BoxInnerWidth is: a change to the margin,
-// border or padding has to move this, not silently mis-place every anchored popup.
+// BoxOrigin is the offset of a Box's first content cell from the box's top-left, for
+// anchoring an overlay to a row inside a box. Derived from boxStyle.
 func BoxOrigin() (x, y int) {
 	return boxStyle.GetMarginLeft() + boxStyle.GetBorderLeftSize() + boxStyle.GetPaddingLeft(),
 		boxStyle.GetMarginTop() + boxStyle.GetBorderTopSize() + boxStyle.GetPaddingTop()
@@ -185,38 +143,24 @@ func HelpView(l list.Model) string {
 	return l.Styles.HelpStyle.Render(l.Help.View(l))
 }
 
-// newSelectList builds a list styled like the others (no status bar, help drawn
-// separately, esc/enter hints) for the versions and submenu screens. It's sized
-// to zero; the owning screen's SetSize gives it real dimensions.
+// NewSelectList builds a list styled like the others (no status bar, help drawn
+// separately). It is zero-sized until the owner's SetSize.
 func NewSelectList(items []list.Item, title string, extra ...key.Binding) list.Model {
 	return newSelectList(items, title, NewDelegate(), extra...)
 }
 
-// SuffixItem is the row contract for a compact list. Title is the primary value;
-// SuffixText is optional context rendered after it in the theme's muted color.
-//
-// Implementing it is OPTIONAL: a row that satisfies only bubbles' list.DefaultItem — the
-// Title/Description pair the three-row delegate already requires — renders compactly too,
-// with its description as the suffix (see compactText). That fallback is what lets ONE
-// list flip between the two densities at runtime without its rows knowing: every row that
-// renders under the default delegate renders under this one. Implement SuffixItem when the
-// compact suffix should differ from the description, or when the row has no description at
-// all.
+// SuffixItem is the row contract for a compact list: Title, then SuffixText in the muted
+// color. It is optional: a list.DefaultItem row renders compactly with its description as
+// the suffix, which lets one list flip density at runtime.
 type SuffixItem interface {
 	list.Item
 	Title() string
 	SuffixText() string
 }
 
-// compactText resolves the two strings a compact row prints from whichever contract the
-// item satisfies: SuffixItem first, then list.DefaultItem with its description standing in
-// for the suffix. ok is false only for a row that also could not render under the default
-// delegate (list.DefaultDelegate.Render early-returns on the same assertion), so the two
-// densities agree exactly about which rows are renderable.
-//
-// It resolves TEXT only. The optional contracts a row may carry alongside — PrefixItem,
-// MarkItem, ColorItem, KeepColorItem — are read off the original item by their own call
-// sites, never through anything this returns.
+// compactText resolves a compact row's title and suffix from SuffixItem or, failing that,
+// list.DefaultItem. ok is false exactly when the default delegate could not render it
+// either.
 func compactText(item list.Item) (title, suffix string, ok bool) {
 	switch i := item.(type) {
 	case SuffixItem:
@@ -227,49 +171,27 @@ func compactText(item list.Item) (title, suffix string, ok bool) {
 	return "", "", false
 }
 
-// MarkItem is an optional second contract a compact row may also satisfy: Mark is a short
-// status flag (gote's "(*)" for a buffer with unsaved changes) pinned past the title and
-// suffix, at the right of everything the row prints. Unlike SuffixText, its cells are
-// reserved BEFORE the title is truncated, so it survives on a row too narrow for the name
-// — a flag that disappears exactly when the column is tight is a flag the reader cannot
-// trust — and it holds still while a selected row marquees underneath it. Keep it to a
-// couple of cells; every row in the list pays that width. A row that does not implement
-// this renders exactly as it did before.
+// MarkItem is an optional compact-row flag (gote's "(*)" for unsaved changes) pinned at
+// the right. Its cells are reserved before the title is truncated, so it survives narrow
+// columns and stays put during a marquee. Keep it short: every row pays its width.
 type MarkItem interface{ Mark() string }
 
-// PrefixItem is an optional compact-row contract for structural text that stays pinned
-// to the row's left edge. TreePanel uses it for indentation and disclosure markers: the
-// prefix is rendered with the title style, but is not part of filtering and does not
-// slide away when a long selected row marquees.
+// PrefixItem is optional compact-row text pinned at the left edge (TreePanel's indent and
+// disclosure markers). It is not filtered on and does not marquee.
 type PrefixItem interface{ PrefixText() string }
 
-// ColorItem is an optional contract a row may satisfy alongside list.Item: it names the
-// row's OWN foreground, for a list whose rows carry a type the eye should sort by without
-// reading the name — a file listing's directories against its files. A row that does not
-// implement it, or answers nil, renders exactly as it did before.
-//
-// The selection accent OUTRANKS it by default: the cursor row, and the dimmed rows of an
-// open-but-empty filter, keep the delegate's own styles, so a type color can never make the
-// cursor ambiguous. A row can opt out of the first half of that through KeepColorItem.
-// itemColor is where the whole precedence lives and both delegates read it, so the two
-// densities cannot disagree about which rows are colored.
+// ColorItem is an optional row contract naming the row's own foreground (e.g. directories
+// vs files). The selection accent outranks it unless the row is a KeepColorItem; itemColor
+// holds the precedence for both delegates.
 type ColorItem interface{ TitleColor() color.Color }
 
-// KeepColorItem is an optional contract a row may satisfy alongside ColorItem: it opts the
-// row OUT of the selection accent, for a list whose colors carry information the reader most
-// wants on the row they are pointing at — gote's git state, where the cursor landing on a
-// file is exactly when "is this modified?" is being asked. The accent BORDER still marks the
-// selection, which is what makes dropping the foreground safe.
-//
-// A row that opts out and has no color of its own falls back to the NORMAL title foreground
-// rather than the accent, so an opted-out list reads uniformly: every row is its own color,
-// selected or not, and only the border moves. Dimming is not affected — an open-but-empty
-// filter still greys everything.
+// KeepColorItem opts a colored row out of the selection accent, for colors the reader
+// wants under the cursor (gote's git state). The accent border still marks the selection.
+// An opted-out row without a color uses the normal title color. Dimming still applies.
 type KeepColorItem interface{ KeepColor() bool }
 
-// itemColor is the foreground a delegate should apply to one row, and false when it should
-// leave the style it already picked alone. normal is the foreground an UNSELECTED row would
-// have had, used only for the opted-out-but-uncolored case above.
+// itemColor is the foreground a delegate should apply to a row, and false to leave its
+// style alone. normal is an unselected row's foreground.
 func itemColor(item list.Item, isSelected, dimmed bool, normal color.Color) (color.Color, bool) {
 	if dimmed {
 		return nil, false
@@ -292,17 +214,14 @@ func itemColor(item list.Item, isSelected, dimmed bool, normal color.Color) (col
 	return nil, false
 }
 
-// NewCompactList builds the single-line counterpart of NewSelectList. It keeps
-// the same title, filtering, keymap, help, and pagination behavior; only the row
-// delegate changes to a one-cell-high title plus optional muted suffix.
+// NewCompactList is NewSelectList with a one-row delegate: title plus optional muted
+// suffix.
 func NewCompactList(items []list.Item, title string, extra ...key.Binding) list.Model {
 	return newSelectList(items, title, CompactDelegate{}, extra...)
 }
 
-// RenderFilter is the shared filter heading for lists that keep an applied filter
-// visible. While editing it is bubbles' input verbatim (cursor included); once applied
-// it keeps the same adaptive prompt style and leaves the value unstyled, so it inherits
-// the terminal's foreground with no background.
+// RenderFilter is the filter heading for lists that keep an applied filter visible: the
+// live input while editing, then the prompt style with the value unstyled.
 func RenderFilter(l *list.Model) string {
 	switch l.FilterState() {
 	case list.Filtering:
@@ -317,12 +236,9 @@ func RenderFilter(l *list.Model) string {
 	}
 }
 
-// RenderList renders a full-screen list while keeping an applied filter visible in
-// its title bar. bubbles already replaces the title with FilterInput while the query
-// is being edited, but restores l.Title as soon as the filter is accepted; rendering
-// a copy preserves the real title for breadcrumbs and sort-mode updates. Clearing the
-// copy's Title style is what avoids applying the normal title foreground/background
-// over RenderFilter's prompt-only styling.
+// RenderList renders a full-screen list keeping an applied filter in its title bar.
+// bubbles restores l.Title once a filter is accepted, so a copy is rendered instead, with
+// its Title style cleared so it does not paint over RenderFilter.
 func RenderList(l list.Model) string {
 	if l.ShowTitle() && l.FilterState() == list.FilterApplied {
 		l.Title = RenderFilter(&l)
@@ -345,24 +261,17 @@ func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, 
 			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		}, extra...)
 	}
-	// Both, but only the full one has an effect on a screen whose HelpView calls ShortHelp —
-	// its short branch builds its own fixed entry list and never consults the short keys. The
-	// short assignment matters solely to raw HelpView(l) screens, which render bubbles' own
-	// help. Extras passed here are, in practice, (?) menu entries; see ShortHelp's convention.
+	// Only the full help matters to screens using ShortHelp, which builds its own short
+	// entries; the short keys serve screens that render bubbles' help directly.
 	l.AdditionalShortHelpKeys = keys
 	l.AdditionalFullHelpKeys = keys
 	return l
 }
 
-// CompactDelegate renders one item per terminal row with no inter-item spacing.
-// The title is given width priority; any suffix is fitted into the cells left over.
-//
-// Offset opts the SELECTED row into a marquee: when it is non-nil and that row's
-// title-plus-suffix is wider than the row, the two are treated as one string and
-// windowed by *Offset, so a name AND the path after it both become readable in a
-// column too narrow for either. The owner of the pointer owns the clock — nothing
-// here advances it (Render must stay a pure function of state), and a nil Offset
-// leaves every row statically truncated. ListPanel is the in-tree owner.
+// CompactDelegate renders one item per row with no spacing; the title gets width priority
+// over the suffix. A non-nil Offset marquees the selected row when it overflows, windowing
+// title and suffix as one string. The owner (ListPanel) advances the offset; Render stays
+// pure.
 type CompactDelegate struct{ Offset *int }
 
 func (CompactDelegate) Height() int                         { return 1 }
@@ -373,27 +282,24 @@ func (CompactDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 // left and right edges; Title and Tail are the portion that slides under a marquee.
 type CompactRow struct{ Prefix, Title, Tail, Mark string }
 
-// Width is the row's full untruncated cell width, the mark's reserved cells included.
-// Subtracting the text width from it gives the marquee's last offset — the point at which
-// the tail sits flush against the mark at the right edge.
+// Width is the row's full untruncated width including the mark; minus the text width it
+// is the marquee's last offset.
 func (r CompactRow) Width() int {
 	return lipgloss.Width(r.Prefix) + lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) + lipgloss.Width(r.Mark)
 }
 
 func (r CompactRow) movingWidth() int { return lipgloss.Width(r.Title) + lipgloss.Width(r.Tail) }
 
-// MarqueeLimit is the last useful offset after the pinned prefix and mark take their
-// cells. It is shared by CompactDelegate and ListPanel so the clock never advances into
-// repeated, clamped frames at very narrow widths.
+// MarqueeLimit is the last useful offset once prefix and mark take their cells, shared by
+// CompactDelegate and ListPanel so the clock never runs into clamped frames.
 func (r CompactRow) MarqueeLimit(textWidth int) int {
 	prefixWidth := min(lipgloss.Width(r.Prefix), max(textWidth-lipgloss.Width(r.Mark)-1, 0))
 	available := max(textWidth-prefixWidth-lipgloss.Width(r.Mark), 1)
 	return max(r.movingWidth()-available, 0)
 }
 
-// CompactTextWidth is the cells a compact row's text actually gets out of a list of the
-// given width — the delegate's padding taken off. Exported so the panel that drives a
-// marquee measures the row against the same number Render fits it into.
+// CompactTextWidth is the text width of a compact row in a list of listWidth, exported so
+// the marquee driver measures against the same number Render uses.
 func CompactTextWidth(listWidth int) int {
 	s := list.NewDefaultItemStyles(isDark).NormalTitle
 	if w := listWidth - s.GetPaddingLeft() - s.GetPaddingRight(); w > 1 {
@@ -402,12 +308,9 @@ func CompactTextWidth(listWidth int) int {
 	return 1
 }
 
-// CompactMarquee reports a row's raw pieces and whether they overflow textWidth. It is the
-// single place "does this row need to scroll?" is answered, so the panel that owns the
-// offset and the delegate that consumes it cannot disagree about which rows are moving.
-// It takes a list.Item rather than a SuffixItem so a density-flipping list can measure a
-// row that only implements list.DefaultItem; compactText settles which contract applies.
-// ok is false for a row neither delegate can render.
+// CompactMarquee returns a row's pieces and whether they overflow textWidth: the one place
+// that decides whether a row scrolls, shared by the offset owner and the delegate. ok is
+// false for a row neither delegate can render.
 func CompactMarquee(item list.Item, textWidth int) (CompactRow, bool) {
 	title, suffix, ok := compactText(item)
 	if !ok {
@@ -420,9 +323,8 @@ func CompactMarquee(item list.Item, textWidth int) (CompactRow, bool) {
 	if suffix != "" {
 		r.Tail = "  " + suffix
 	}
-	// Reading the mark here rather than in Render is what keeps the panel driving the
-	// marquee clock and the delegate fitting the row from disagreeing about the width a
-	// marked row has left to scroll in.
+	// The mark is read here, not in Render, so the marquee driver and the delegate agree on
+	// the width left to scroll.
 	if m, ok := item.(MarkItem); ok {
 		r.Mark = m.Mark()
 	}
@@ -439,10 +341,7 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	styles.NormalDesc = styles.NormalDesc.Foreground(MutedColor)
 	styles.DimmedDesc = styles.DimmedDesc.Foreground(MutedColor)
 
-	textWidth := m.Width() - styles.NormalTitle.GetPaddingLeft() - styles.NormalTitle.GetPaddingRight()
-	if textWidth < 1 {
-		textWidth = 1
-	}
+	textWidth := max(m.Width()-styles.NormalTitle.GetPaddingLeft()-styles.NormalTitle.GetPaddingRight(), 1)
 
 	// Structural prefixes and marks keep their edges while the title and suffix share the
 	// cells between them.
@@ -455,12 +354,8 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
 
 	title, suffix := "", ""
-	// The marquee owns the fit when the selected row overflows: the two pieces slide as one
-	// string, so the tail of a long name and the path behind it both come into view. Never
-	// while a filter is live — the match highlighting below styles the title by rune index,
-	// and those indices stop addressing the string once it has been windowed. The last
-	// offset is measured against the moving title/tail portion; the prefix and mark never
-	// enter its coordinate space.
+	// Marquee the overflowing selected row, but never while filtering: match highlighting
+	// addresses the title by rune index, which windowing would break.
 	if over && d.Offset != nil && isSelected && !isFiltered {
 		off := min(max(*d.Offset, 0), raw.MarqueeLimit(textWidth))
 		title = marqueeSeg(raw.Title, 0, off, fitWidth)
@@ -480,11 +375,8 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	} else if isSelected {
 		titleStyle = styles.SelectedTitle
 	}
-	// Before the highlight pass, never after: the match style below INHERITS titleStyle, so
-	// recoloring here is what keeps a filtered row's matched runes underlined in the row's
-	// own color rather than reverting to the delegate's default. It is a Foreground on the
-	// STYLE, applied to already-truncated text — no ANSI enters the raw string, so every
-	// width computation above (CompactMarquee, fitWidth, marqueeSeg) is untouched.
+	// Recolor before the highlight pass so matched runes inherit the row's color. It is a
+	// style foreground on already-truncated text, so no width computation changes.
 	if c, ok := itemColor(item, isSelected, emptyFilter, styles.NormalTitle.GetForeground()); ok {
 		titleStyle = titleStyle.Foreground(c)
 	}
@@ -493,14 +385,12 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		title = lipgloss.StyleRunes(title, m.MatchesForItem(index), matched, titleStyle.Inline(true))
 	}
 
-	muted := lipgloss.NewStyle().Foreground(MutedColor)
+	muted := MutedStyle()
 	if emptyFilter {
 		muted = styles.DimmedDesc.Inline(true)
 	}
-	// The mark is appended after the highlight pass, never through it: StyleRunes above
-	// addresses the title by rune index, and a flag is not part of the name being matched.
-	// Inline, because titleStyle carries the row's left border and padding — rendering the
-	// mark through it a second time would print a second border two cells wide.
+	// The mark is appended after the highlight pass (it is not part of the matched name) and
+	// inline, because titleStyle would draw a second border.
 	mark := ""
 	if raw.Mark != "" {
 		mark = titleStyle.Inline(true).Render(raw.Mark)
@@ -508,31 +398,18 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	fmt.Fprint(w, titleStyle.Render(prefix+title)+muted.Render(suffix)+mark) //nolint:errcheck
 }
 
-// newDelegate is the shared list delegate with brightened description text and the
-// selected row recolored to the theme accent (bubbles' default selected styles are
-// a hardcoded pink). The left-border layout from the default delegate is kept; only
-// the colors change.
-// ColorDelegate is the three-row delegate with per-row foregrounds: a row implementing
-// ColorItem is drawn in its own color, every other row exactly as bubbles draws it. A row
-// that is also a KeepColorItem keeps that color on the cursor row; its DESCRIPTION line
-// still takes the accent, so the second row and the border together keep the selection
-// legible at this density.
-//
-// A wrapper rather than a copy of list.DefaultDelegate.Render, because that method takes
-// its receiver BY VALUE — recoloring this copy's styles is therefore local to the single
-// row being rendered, and the sixty-odd lines of truncation, filter highlighting and
-// description layout stay upstream's. Height, Spacing and Update are the embedded
-// delegate's, so the row geometry every caller measures (components.listItemRows) is
-// unchanged.
+// ColorDelegate is the three-row delegate with per-row colors (ColorItem). A
+// KeepColorItem keeps its color under the cursor; the description line still takes the
+// accent. It wraps DefaultDelegate.Render, whose value receiver makes the style changes
+// local to one row, so row geometry and layout stay upstream's.
 type ColorDelegate struct{ list.DefaultDelegate }
 
 func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	isSelected := index == m.Index() && m.FilterState() != list.Filtering
 	dimmed := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	if c, ok := itemColor(item, isSelected, dimmed, d.Styles.NormalTitle.GetForeground()); ok {
-		// The selected row's style is a different field, and recoloring it is what lets a
-		// KeepColorItem shed the accent here too. Its BorderForeground is left alone: the
-		// tinted left rule is the cursor mark the foreground is being given up for.
+		// Recolor the selected row too, so KeepColorItem can shed the accent; the tinted border
+		// still marks the cursor.
 		if isSelected {
 			d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(c)
 		} else {
@@ -542,6 +419,8 @@ func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 	d.DefaultDelegate.Render(w, m, index, item)
 }
 
+// NewDelegate is the shared three-row delegate: muted descriptions and the selected row
+// in the theme accent instead of bubbles' hardcoded pink.
 func NewDelegate() ColorDelegate {
 	d := list.NewDefaultDelegate()
 	d.Styles.NormalDesc = d.Styles.NormalDesc.Foreground(MutedColor)
@@ -559,12 +438,9 @@ func StyleList(l *list.Model) {
 	// Theme the list's own title bar to match the breadcrumb (RenderTitleBar)
 	// instead of bubbles' default purple.
 	l.Styles.Title = listStyles.Title
-	// Unlike the title bar, the filter prompt intentionally keeps bubbles' adaptive
-	// yellow. Re-apply it (and its cursor, which v2 folds into the same struct) from
-	// the live shared styles so a theme broadcast refreshes every style cached inside
-	// FilterInput too.
+	// The filter prompt keeps bubbles' adaptive yellow. Re-apply it from the live styles so a
+	// theme change reaches FilterInput too.
 	l.FilterInput.SetStyles(listStyles.Filter)
-	// l.Styles.TitleBar = l.Styles.TitleBar.Margin(0) // how to set themes
 	// Drive list scrolling from the central keymap so an added scheme (e.g. wasd)
 	// reaches lists too; FullHint keeps the list's own full (?) help reading well.
 	l.KeyMap.CursorUp = FullHint("up", Keys.Up)
@@ -591,28 +467,13 @@ const (
 	HelpTabbed
 )
 
-// ShortHelp renders a tab root's decluttered short help for the given preset. The full
-// (?) help is laid out here as four purpose-built columns — nav · actions · filter ·
-// chrome — rather than bubbles' default, which crams the list-level filter keys and every
-// AdditionalFullHelpKey into a single column that grows unreadably tall as a tab adds keys.
-// The chrome column (output/refresh/mouse/quit — all router-owned, so absent from the list's
-// own FullHelp) is built centrally and shown uniformly on every list/picker; a tab's own key
-// list needn't enumerate it, and any entry that duplicates a chrome key is dropped from the
-// actions column (excludeKeys) so it appears once. Tab roots use this instead of helpView so
-// secondary keys stay out of the short bar.
+// ShortHelp renders a tab root's short help for the given preset. The full (?) help is
+// laid out in four columns (nav, actions, filter, chrome); the router-owned chrome column
+// is added centrally, and actions that duplicate it are dropped (excludeKeys).
 //
-// Convention — the bar is intentionally sparse, and stays that way. Its entries are the
-// hardcoded literal below ("↑/↓ move", "enter select", "esc back" or "[ ] tabs", and
-// "? more") and nothing else; a screen's own keys never reach it, which is why the short
-// branch ignores the list's AdditionalShortHelpKeys entirely. A NEW COMMAND ALWAYS GOES
-// IN THE (?) MENU, NEVER ON THE BAR: pass it to NewSelectList (it lands in
-// AdditionalFullHelpKeys, rendered by the actions column above), and on a static-bar
-// screen with no full help leave it off the bar and write it in that app's docs page
-// instead. The bar's job is to say a menu exists, not to be one — once it lists commands
-// it grows with every feature and stops being readable at a glance. The cap reaches past
-// this function: a focused panel's PanelHelp is merged into a ModularScreen's bar
-// (components.ModularScreen.HelpView), so it is held to the same rule — panel-local
-// navigation, not the panel's command set.
+// The short bar is deliberately fixed: move, select, back or tabs, and "? more". New
+// commands go in the (?) menu (via NewSelectList's extra keys), never on the bar. The same
+// rule applies to panel help merged into a ModularScreen's bar.
 func ShortHelp(l list.Model, mode HelpMode) string {
 	if l.Help.ShowAll {
 		nav := []key.Binding{
@@ -642,10 +503,7 @@ func ShortHelp(l list.Model, mode HelpMode) string {
 		return l.Styles.HelpStyle.Render(l.Help.FullHelpView(cols))
 	}
 	short := []key.Binding{
-		// One entry for the arrows, the form every viewport already uses (Hint("scroll",
-		// Up, Down)): moving the cursor is one idea, and splitting it in two spent a slot
-		// on a description that could only restate the key it sat next to. "move" on a
-		// list, "scroll" on a viewport — the description says what the arrows do there.
+		// One entry for the arrows: "move" on a list, "scroll" on a viewport.
 		Hint("move", Keys.Up, Keys.Down),
 		Hint("select", Keys.Select),
 	}
@@ -659,9 +517,7 @@ func ShortHelp(l list.Model, mode HelpMode) string {
 	return l.Styles.HelpStyle.Render(l.Help.ShortHelpView(short))
 }
 
-// excludeKeys returns binds with any entry dropped whose keycodes overlap one of exclude's —
-// used by the full-help layout so a tab that still lists a chrome key (e.g. "clear log") in
-// its AdditionalFullHelpKeys doesn't render it twice once the chrome column adds it centrally.
+// excludeKeys drops the binds whose keycodes overlap any in exclude.
 func excludeKeys(binds, exclude []key.Binding) []key.Binding {
 	skip := map[string]bool{}
 	for _, b := range exclude {
@@ -669,26 +525,13 @@ func excludeKeys(binds, exclude []key.Binding) []key.Binding {
 			skip[k] = true
 		}
 	}
-	out := make([]key.Binding, 0, len(binds))
-	for _, b := range binds {
-		drop := false
-		for _, k := range b.Keys() {
-			if skip[k] {
-				drop = true
-				break
-			}
-		}
-		if !drop {
-			out = append(out, b)
-		}
-	}
-	return out
+	return slices.DeleteFunc(slices.Clone(binds), func(b key.Binding) bool {
+		return slices.ContainsFunc(b.Keys(), func(k string) bool { return skip[k] })
+	})
 }
 
-// styleHelp re-styles the static help model from the live MutedColor so static help
-// bars track the active theme after a SetTheme switch. Built per call (not baked in
-// at NewShared) for the same reason StyleList / fieldLabel restyle per call rather
-// than caching a color that goes stale on the next theme change.
+// styleHelp restyles the static help model from the live MutedColor, per call, so it
+// tracks theme changes.
 func (s *Shared) styleHelp() {
 	s.help.Styles.ShortKey = s.help.Styles.ShortKey.Foreground(MutedColor)
 	s.help.Styles.ShortDesc = s.help.Styles.ShortDesc.Foreground(MutedColor)
@@ -710,15 +553,9 @@ func (s *Shared) NoteHelp(text string) string {
 
 // ---------- text helpers ----------
 
-// marqueeSeg returns the part of seg that falls inside the window [offset, offset+width),
-// where seg begins at cell `start` of a longer logical row. That extra `start` is the whole
-// point: a compact row is two differently styled pieces (title, then muted suffix) that must
-// slide as ONE string, and windowing each piece separately against a shared offset is what
-// lets them keep their own styles while staying tiled to the cell. A segment entirely
-// outside the window yields "".
-//
-// Both cuts use an empty tail — no ellipsis on a sliding row. The motion is what says there
-// is more text, and a "…" pinned to a moving edge reads as part of the path.
+// marqueeSeg returns the part of seg inside the window [offset, offset+width), where seg
+// starts at cell start of the whole row. Windowing each styled piece against one offset
+// lets title and suffix slide as one string. No ellipsis: the motion shows there is more.
 func marqueeSeg(seg string, start, offset, width int) string {
 	lo, hi := offset, offset+width
 	if start > lo {
@@ -733,21 +570,9 @@ func marqueeSeg(seg string, start, offset, width int) string {
 	return ansi.Truncate(ansi.TruncateLeft(seg, lo-start, ""), hi-lo, "")
 }
 
-// hardWrap breaks s into chunks of at most width runes (URLs have no spaces to
-// word-wrap on, so we break unconditionally).
+// HardWrap breaks s every width cells (minimum 8), for text with no spaces to wrap on.
 func HardWrap(s string, width int) string {
-	if width < 8 {
-		width = 8
-	}
-	r := []rune(s)
-	var b strings.Builder
-	for len(r) > width {
-		b.WriteString(string(r[:width]))
-		b.WriteByte('\n')
-		r = r[width:]
-	}
-	b.WriteString(string(r))
-	return b.String()
+	return ansi.Hardwrap(s, max(width, 8), false)
 }
 
 // blanks returns an n-line block of empty lines (height n) for use as a flexible

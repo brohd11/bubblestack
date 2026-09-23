@@ -11,24 +11,18 @@ import (
 // before the router's auto-clear timer hides it.
 const statusClearDelay = 5 * time.Second
 
-// tabEntry is one top-level tab: a title for the strip and a constructor for its
-// root screen. The router builds the root lazily (NewRouter) and caches it, so the
-// theme is already applied before the root bakes its styles; the same constructor
-// is re-invoked to rebuild every root on a theme change. Roots reflect on-disk /
-// manifest data, so reconstruction loses no per-tab state.
+// TabEntry is one top-level tab: a strip title and a root constructor. Roots are built
+// lazily and rebuilt on theme changes, which loses no state since they reflect on-disk
+// data.
 type TabEntry struct {
 	Title string
 	New   func(*Shared) Screen
 }
 
-// router is the top-level tea.Model. It owns the shared chrome state, the set of
-// top-level tabs, and the active tab's navigation stack; it renders the tab strip
-// + header + help bar (and the output pane) around the active screen, and
-// translates navigation messages into stack operations. The active tab's root is
-// the permanent bottom of the stack: a pop with a single screen left is ignored.
-//
-// Tabs are switched with [ / ] only at depth 1, so the live stack always belongs
-// to the active tab; there is never a deeper stack to stash when switching.
+// Router is the top-level tea.Model: it owns the chrome, the tabs and the active tab's
+// navigation stack, draws the chrome around the active screen and applies navigation
+// messages. The root is the permanent bottom of the stack. Tabs switch only at depth 1,
+// so the stack always belongs to the active tab.
 type Router struct {
 	sh     *Shared
 	tabs   []TabEntry
@@ -36,65 +30,44 @@ type Router struct {
 	active int      // index into tabs of the visible tab
 	stack  []Screen // live nav stack for the active tab; stack[0] == roots[active]
 
-	// statusGen is the status generation the router has already scheduled an
-	// auto-clear timer for; when the element's Gen advances past it (a fresh write),
-	// scheduleStatusClear arms a new timer keyed on the new generation.
+	// statusGen is the status generation an auto-clear timer is armed for; a newer write arms
+	// a new one.
 	statusGen int
 
-	// refreshAction supplies the Action for the global Refresh key (Keys.Refresh).
-	// Consumer-set via SetRefreshAction so core names no domain type; nil ⇒ the key
-	// is left to the active screen.
+	// refreshAction backs the global Refresh key; nil leaves the key to the screen.
 	refreshAction func(*Shared) Action
 
-	// terminalAction supplies the Action for the global Terminal key (Keys.Terminal),
-	// given the directory resolved from the top screen's DirLocator. Consumer-set via
-	// SetTerminalAction so core names no launcher; nil ⇒ the key is left to the active
-	// screen (which is what preserves any row-level "t" a screen handles itself).
+	// terminalAction backs the global Terminal key with the top screen's DirLocator
+	// directory; nil leaves the key to the screen (keeping any row-level "t").
 	terminalAction func(dir string) Action
 
-	// terminalWindowAction supplies the Action for the global TerminalWindow key
-	// (Keys.TerminalWindow) — the detached-window sibling of terminalAction, resolved from
-	// the same DirLocator. Consumer-set via SetTerminalWindowAction; nil ⇒ the key is left
-	// to the active screen.
+	// terminalWindowAction backs the TerminalWindow key the same way.
 	terminalWindowAction func(dir string) Action
 
-	// openDirAction supplies the Action for the global OpenDir key (Keys.OpenDir), given the
-	// directory resolved from the top screen's DirLocator — the file-manager sibling of
-	// terminalAction. Consumer-set via SetOpenDirAction; nil ⇒ the key is left to the active
-	// screen.
+	// openDirAction backs the OpenDir key the same way.
 	openDirAction func(dir string) Action
 
 	// appInit is an app-level startup command, batched with the initial screen's Init
 	// in Init(). Consumer-set via SetInit; nil ⇒ no app-level startup command.
 	appInit func(*Shared) tea.Cmd
 
-	// mouseOn tracks whether the terminal is currently reporting mouse events, so the
-	// Mouse key knows which way to toggle. The program starts with cell-motion tracking
-	// enabled (see the Run facade), which costs the terminal's own drag-select; turning
-	// it off hands selection back for a copy-paste, at the cost of the wheel.
+	// mouseOn is whether the terminal reports mouse events. It starts on, which costs the
+	// terminal's own drag-select; the Mouse key hands selection back at the cost of the wheel.
 	mouseOn bool
 }
 
-// SetRefreshAction wires the consumer's "refresh everything" action to the global
-// Refresh key. globalKey invokes it from any screen/depth except while text is being
-// captured. Called by the Run facade after NewRouter.
+// SetRefreshAction wires the global Refresh key; it fires from any depth unless text is
+// being captured.
 func (r *Router) SetRefreshAction(f func(*Shared) Action) { r.refreshAction = f }
 
-// SetTerminalAction wires the consumer's "open a terminal at dir" action to the global
-// Terminal key. globalKey invokes it with the directory resolved from the top screen's
-// DirLocator, from any depth except while text is captured. Called by the Run facade after
-// NewRouter; nil leaves the key to the active screen.
+// SetTerminalAction wires the global Terminal key, called with the top screen's
+// DirLocator directory. nil leaves the key to the screen.
 func (r *Router) SetTerminalAction(f func(dir string) Action) { r.terminalAction = f }
 
-// SetTerminalWindowAction wires the consumer's "open a detached terminal window at dir"
-// action to the global TerminalWindow key, resolved from the same DirLocator as
-// SetTerminalAction. Two hooks rather than one because the choice between borrowing this
-// tty and spawning a window is the user's, made per keystroke.
+// SetTerminalWindowAction wires the detached-window variant of the Terminal key.
 func (r *Router) SetTerminalWindowAction(f func(dir string) Action) { r.terminalWindowAction = f }
 
-// SetOpenDirAction wires the consumer's "open dir in the file manager" action to the global
-// OpenDir key, resolved from the top screen's DirLocator the same way as SetTerminalAction.
-// Called by the Run facade after NewRouter; nil leaves the key to the active screen.
+// SetOpenDirAction wires the file-manager key, resolved like SetTerminalAction.
 func (r *Router) SetOpenDirAction(f func(dir string) Action) { r.openDirAction = f }
 
 // SetInit wires the consumer's app-level startup command, batched with the initial
@@ -120,54 +93,34 @@ func (r Router) Init() tea.Cmd {
 }
 
 func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	// Global keys are handled once, here, for whatever screen is on top: quit,
-	// the output-pane focus/scroll mode, and O/c (gated by the active screen's
-	// filter so they don't steal filter keystrokes). globalKey returns an Action whose
-	// control message is resolved inline and whose async cmd (e.g. tea.Quit) is queued.
-	// KeyPressMsg, not the tea.KeyMsg interface: in v2 that interface also covers key
-	// RELEASES, which a terminal negotiating keyboard enhancements will send. Matching
-	// it would fire every binding twice.
+	// Global keys first, for whatever screen is on top. KeyPressMsg, not tea.KeyMsg: that
+	// interface also covers key releases, which would fire every binding twice.
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		if act, handled := r.globalKey(key); handled {
-			r.apply(act, &cmds)
-			r.resize()
-			return r, tea.Batch(cmds...)
+			cmd := r.settle(act)
+			return r, cmd
 		}
 	}
 
-	// A wheel over the output pane is claimed here, for the same reason as a global
-	// key: the pane is router-owned chrome that no screen can see. Anything else —
-	// notably a wheel over the body — is left unhandled and falls through to the
-	// active screen below, which is how a DocScreen's viewport gets it.
+	// A wheel over the output pane (router-owned chrome) is claimed here; everything else
+	// falls through to the active screen.
 	if m, ok := msg.(tea.MouseMsg); ok {
 		if act, handled := r.mouse(m); handled {
-			r.apply(act, &cmds)
-			r.resize()
-			return r, tea.Batch(cmds...)
+			cmd := r.settle(act)
+			return r, cmd
 		}
 	}
 
+	var cmds []tea.Cmd
 	switch msg := msg.(type) {
-	case tea.BlurMsg:
-		// A release outside the terminal may never arrive. Notify retained screens
-		// too, since the gesture's owner may now be underneath a modal overlay.
-		r.apply(PropagateAll(msg), &cmds)
-	case tea.FocusMsg:
-		// Broadcast for the same reason blur is: a screen that wants to catch up on
-		// what changed while the terminal was away (re-reading state some other process
-		// may have moved) is usually not the one on top of the stack when focus returns.
-		// Neither case returns — the top screen still sees the message through Update.
+	case tea.BlurMsg, tea.FocusMsg:
+		// Broadcast, then fall through so the top screen still sees it in Update. A drag's
+		// owner or a screen that re-reads state on focus may be below the top.
 		r.apply(PropagateAll(msg), &cmds)
 	case tea.BackgroundColorMsg:
-		// The terminal answering the OSC 11 query is what tells the adaptive palette
-		// which half of each Color pair to use. v1 asked synchronously through a
-		// process-global cache in lipgloss; v2 delivers it here, so the palette is
-		// re-resolved and every derived style rebuilt against the real answer.
+		// The terminal's OSC 11 answer picks each adaptive color's half; cached tab roots
+		// baked their styles from the old guess, so they are rebuilt.
 		if SetBackgroundIsDark(msg.IsDark()) {
-			// Same repaint a theme switch takes: the cached tab roots have already
-			// baked delegate/list styles from the old resolution.
 			r.apply(RefreshRoots(), &cmds)
 		}
 		return r, tea.Batch(cmds...)
@@ -183,33 +136,32 @@ func (r Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, cmd
 	}
 
-	// An Action that arrives via the queue (an async cmd returning a nav command, e.g.
-	// finishInstallCmd → PropagateAll) is applied to the stack synchronously — the same
-	// path as an Action a screen returns from Update.
+	// An Action or bare control message arriving via the queue is applied to the stack the
+	// same way as one a screen returns.
 	if act, ok := msg.(Action); ok {
-		r.apply(act, &cmds)
-		r.resize()
-		return r, tea.Batch(cmds...)
+		cmd := r.settle(act)
+		return r, cmd
 	}
-	// A bare control message arriving via the queue (a screen's Init, a batch, the
-	// auto-clear tick) is resolved the same way.
 	if _, ok := msg.(ctrlMsg); ok {
 		r.resolveCtrl(msg, &cmds)
 		r.resize()
 		return r, tea.Batch(cmds...)
 	}
 
-	// Otherwise it's a screen message: dispatch to the active screen, then apply the
-	// Action it returns — its control message inline (same tick) and its async cmd to
-	// bubbletea.
 	s, act := r.Top().Update(r.sh, msg)
 	r.stack[len(r.stack)-1] = s
 	r.apply(act, &cmds)
-
-	// Re-lay-out after every message: cheap, and avoids chasing every spot that
-	// changes content height (help expansion, log growth, screen switches).
+	// Re-lay-out after every message rather than tracking what changed content height.
 	r.resize()
 	return r, tea.Batch(cmds...)
+}
+
+// settle applies act, re-lays-out, and returns the batched async cmds.
+func (r *Router) settle(act Action) tea.Cmd {
+	var cmds []tea.Cmd
+	r.apply(act, &cmds)
+	r.resize()
+	return tea.Batch(cmds...)
 }
 
 // apply unpacks an Action: it resolves the control-message lane against the stack
@@ -221,10 +173,8 @@ func (r *Router) apply(act Action, cmds *[]tea.Cmd) {
 	}
 }
 
-// resolveCtrl applies a control message (and any control messages it cascades into,
-// e.g. a propagate whose Receivers each request a ShowTab) to the navigation stack in
-// one tick, draining a worklist. Async cmds produced along the way (a pushed screen's
-// Init) are collected into cmds for bubbletea. A nil message is a no-op.
+// resolveCtrl applies a control message and any it cascades into (a broadcast whose
+// Receivers request ShowTab) in one tick, collecting async cmds. nil is a no-op.
 func (r *Router) resolveCtrl(m tea.Msg, cmds *[]tea.Cmd) {
 	queue := []tea.Msg{m}
 	for len(queue) > 0 {
@@ -237,9 +187,8 @@ func (r *Router) resolveCtrl(m tea.Msg, cmds *[]tea.Cmd) {
 	}
 }
 
-// applyCtrl mutates the stack for one control message, returning any follow-up control
-// messages (resolved next by resolveCtrl) and appending async cmds (a pushed/replaced
-// screen's Init, or a Receiver's cmd lane) to cmds. A non-control message is ignored.
+// applyCtrl applies one control message to the stack, returning follow-up control
+// messages and appending async cmds.
 func (r *Router) applyCtrl(m tea.Msg, cmds *[]tea.Cmd) (follows []tea.Msg) {
 	push := func(cmd tea.Cmd) {
 		if cmd != nil {
@@ -295,12 +244,9 @@ func (r *Router) applyCtrl(m tea.Msg, cmds *[]tea.Cmd) (follows []tea.Msg) {
 		}
 
 	case propagateMsg:
-		// Broadcast the opaque payload to every tab root, the active tab's deeper
-		// screens, and the consumer's App — each Receiver claims what it recognizes.
-		// The router never interprets the payload (no per-notification case). A Receiver
-		// may return an Action (e.g. ShowTab to grab focus, or RefreshRoots after a theme
-		// change), resolved in this same tick. The App is notified last so a follow-up it
-		// returns lands after every live screen has seen the payload.
+		// Broadcast the payload to every tab root, the active stack and the App, each handling
+		// what it recognizes; returned Actions resolve this tick. The App goes last, so its
+		// follow-up lands after every screen has seen the payload.
 		notify := func(v any) {
 			if rc, ok := v.(Receiver); ok {
 				act := rc.Receive(r.sh, m.payload)
@@ -319,11 +265,8 @@ func (r *Router) applyCtrl(m tea.Msg, cmds *[]tea.Cmd) (follows []tea.Msg) {
 		notify(r.sh.App)
 
 	case refreshRootsMsg:
-		// Rebuild every cached tab root from its constructor so each re-bakes its
-		// delegate/list styles from the current palette (the consumer's reaction to a
-		// theme change, via App.Receive → RefreshRoots). Deeper live screens are
-		// transient (rebuilt on reopen) and the router-drawn chrome already repaints
-		// from the refreshed style vars.
+		// Rebuild every tab root so it re-bakes its styles from the new palette (App.Receive →
+		// RefreshRoots). Deeper screens are rebuilt when reopened.
 		for i := range r.roots {
 			r.roots[i] = r.tabs[i].New(r.sh)
 		}
@@ -338,9 +281,8 @@ func (r *Router) applyCtrl(m tea.Msg, cmds *[]tea.Cmd) (follows []tea.Msg) {
 			}
 		}
 	case statusClearMsg:
-		// The auto-clear timer fired: clear the status only if its generation hasn't
-		// advanced since this tick was armed. A newer write bumped Gen past m.gen, so
-		// a stale tick is a no-op (the fresh message keeps its own later timer).
+		// Clear the status only if no newer write has advanced its generation since this timer
+		// was armed.
 		ch := r.sh.Chrome
 		if ch != nil && ch.Status != nil && ch.Status.Gen() == m.gen {
 			ch.Status.Clear()
@@ -349,7 +291,7 @@ func (r *Router) applyCtrl(m tea.Msg, cmds *[]tea.Cmd) (follows []tea.Msg) {
 	return follows
 }
 
-// Returns a timer command to reset the status line, called via setStatusMsg
+// getStatusClear returns the timer that clears the status line after a statusSetMsg.
 func (r *Router) getStatusClear() tea.Cmd {
 	ch := r.sh.Chrome
 	if ch == nil || ch.Status == nil {

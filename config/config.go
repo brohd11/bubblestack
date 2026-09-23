@@ -1,13 +1,6 @@
-// Package config is bubblestack's own user config: framework-level settings shared by
-// every tool built on the framework, kept in ~/.bubblestack/config.yml. Theme and list
-// density choices follow the user across tools on subsequent launches. Density applies
-// to apps opting into ListDensityProvider; an explicit startup theme overrides the store.
-//
-// It is a directory, not a bare file, to leave room for expansion (a keybinds file is the
-// next planned addition). The file is read per call — there is no process-wide cache, so
-// callers always see the current on-disk state (and tests that swap $HOME keep working). A
-// missing file is not an error: it yields the zero value, so a fresh install simply starts
-// on the framework default until the user picks a theme.
+// Package config is bubblestack's shared user config, ~/.bubblestack/config.yml: theme
+// and list density that follow the user across apps. It is read per call (no cache); a
+// missing file yields the defaults.
 package config
 
 import (
@@ -26,9 +19,7 @@ type Config struct {
 	ListDensity string `yaml:"list_density,omitempty"` // compact or expanded; absent leaves the app default
 }
 
-// Dir is ~/.bubblestack, the home for config.yml (and future config files). The
-// ~/.<app> convention itself lives in goutil/configdir, so the framework follows the
-// same rule it hands the apps rather than restating it.
+// Dir is ~/.bubblestack.
 func Dir() (string, error) { return configdir.Dir("bubblestack") }
 
 // Path is ~/.bubblestack/config.yml.
@@ -61,9 +52,8 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// Theme returns the persisted theme name, or "" when none is saved (which leaves the
-// framework default). Any read/parse error degrades to "" rather than failing startup —
-// the theme is a preference, never a reason not to launch.
+// Theme returns the saved theme name, or "" when unset or unreadable: a preference must
+// never stop startup.
 func Theme() string {
 	cfg, err := Load()
 	if err != nil {
@@ -72,10 +62,7 @@ func Theme() string {
 	return cfg.Theme
 }
 
-// SaveTheme persists name as the theme in ~/.bubblestack/config.yml, creating the dir
-// lazily on first save. It is a surgical edit — only the theme key is set (or appended),
-// so the user's other keys and comments survive untouched, which matters once the file
-// holds more than one setting.
+// SaveTheme saves the theme, editing only that key so other keys and comments survive.
 func SaveTheme(name string) error { return saveKey("theme", name) }
 
 // ListDensity returns the saved standard-list density. Missing, invalid or
@@ -104,12 +91,8 @@ func SaveListDensity(compact bool) error {
 	return saveKey("list_density", value)
 }
 
-// saveKey sets key=value on the top-level mapping of ~/.bubblestack/config.yml
-// surgically, preserving every other key and any comments. A missing file is created
-// (with its parent dir) as a fresh single-key document.
-//
-// The node-tree surgery itself is goutil/configdir.SaveKey -- gdaddon had grown a
-// verbatim copy of it, differing only in seeding a missing file from its defaults.
+// saveKey sets one top-level key in the config file, preserving the rest
+// (configdir.SaveKey).
 func saveKey(key, value string) error {
 	path, err := Path()
 	if err != nil {

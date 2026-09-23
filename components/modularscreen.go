@@ -8,31 +8,14 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// ModularScreen is the content-agnostic multi-pane screen: Panel cells arranged
-// as columns of weighted rows (NewModularScreen) or composable horizontal and
-// vertical splits (NewModularLayout), with one Focusable panel holding focus
-// at a time. It is a pure layout shell — panels draw their own borders and own
-// their keys; the screen only routes input (child first, itself as fallback),
-// moves focus on the reserved pane keys, pops on esc, and composes the help bar.
-// Like every component it names no domain type: the consumer fills the slots and
-// answers the hooks.
+// ModularScreen is a content-agnostic multi-pane screen: panels in columns of weighted
+// rows (NewModularScreen) or nested splits (NewModularLayout), one Focusable panel
+// focused at a time. Panels draw their own borders and own their keys; the screen routes
+// input, moves focus on the reserved pane keys, pops on esc and composes the help bar.
 //
-// Focus moves two ways, both permanent and neither a fallback for the other:
-//
-//   - a CYCLE (shift+tab) walks the focusable slots in declaration order,
-//     wrapping — the right gesture on the two- or three-pane screens that make up
-//     most layouts, where "the next pane" is unambiguous. It is forward-only: no
-//     terminal sends a "backtab" the other way, and PanePrev carries no keys, so
-//     the wrap is what reaches every pane;
-//   - DIRECTIONAL moves aim at a pane by its place in the grid: one column over
-//     keeping the current row, or one row up inside the column (see neighbor).
-//     That reads off the layout the user is looking at, and is what a grid big
-//     enough to make "next" meaningless actually needs. Implemented, but its keys
-//     are not chosen yet — see core.Keys.PaneLeft.
-//
-// Either way the cost to the panels is only the reserved keys themselves, which
-// is what lets a pane that types everything else (an embedded editor.Screen) still
-// be left from the keyboard.
+// Focus moves by a forward-only cycle (shift+tab, in declaration order, wrapping) or by
+// direction within the grid (see neighbor; no keys bound yet). Reserving those keys is
+// what lets a pane that types everything else, like an embedded editor, still be left.
 type ModularScreen struct {
 	layout       *layoutBranch
 	layoutLeaves []*layoutBranch
@@ -56,21 +39,15 @@ type ModularScreen struct {
 	resizing    bool
 	lastW       int
 	lastH       int
-	// layoutDirty forces the next SetSize to re-lay-out even at an unchanged size.
-	// The router re-sizes the top screen after EVERY message, so without a guard a
-	// keystroke re-ran the whole grid — reallocating rects and calling every panel's
-	// SetSize, which for an editor pane invalidates its wrap cache. Anything that
-	// changes the layout without changing the terminal size (a divider drag, a restored
-	// resize state) marks this instead; see invalidateLayout for the full list.
+	// layoutDirty forces the next SetSize to re-lay-out at an unchanged size. The router
+	// re-sizes after every message, so an unchanged layout is skipped; anything that changes
+	// it without a resize (a divider drag, a restored state) sets this (see invalidateLayout).
 	layoutDirty bool
 	focus       int // index into flat; -1 when no slot is focusable
 	mouseSlot   int // slot owning the current left/right gesture; -1 when none is active
-	// mouseDown is whether the button that opened that gesture is still held. A release
-	// does not always come back: a press that PUSHES a screen (the editor's right-click
-	// context menu) sends the release to the pushed screen instead, and the router
-	// delivers only to the top of the stack — so mouseSlot alone could stay pinned to a
-	// pane the pointer left long ago, and the wheel claim below would then send every
-	// notch on screen to it until the next click landed somewhere.
+	// mouseDown is whether the gesture's button is still held. A release can go missing (a
+	// press that pushes a screen sends the release there), so mouseSlot alone could stay
+	// pinned and capture every later wheel notch.
 	mouseDown   bool
 	hostFocused bool // the screen itself holds focus (router drives it on output-pane focus)
 	title       string
@@ -100,12 +77,10 @@ var _ core.Receiver = (*ModularScreen)(nil)
 var _ core.DirLocator = (*ModularScreen)(nil)
 var _ core.FocusableScreen = (*ModularScreen)(nil)
 
-// ModularOpts configures a ModularScreen. ColWidths sizes columns in cells, one
-// entry per column; 0 (or a missing entry) makes the column flex — flex columns
-// share whatever width the fixed columns leave. Refresh, when set, makes the
-// screen a Receiver (same semantics as PickerOpts.Refresh); Dir advertises a
-// directory to the router's global terminal/open-dir keys (DirLocator). Resize
-// opts into adjustable pane boundaries; nil preserves the fixed layout.
+// ModularOpts configures a ModularScreen. ColWidths sizes columns in cells (0 or missing
+// flexes, sharing what fixed columns leave). Refresh makes it a Receiver, as in
+// PickerOpts. Dir advertises a directory to the terminal/open-dir keys. Resize opts into
+// adjustable pane boundaries.
 type ModularOpts struct {
 	Title      string      // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
 	Crumb      string      // breadcrumb segment; defaults to Title
@@ -117,19 +92,16 @@ type ModularOpts struct {
 	Refresh    func(sh *core.Shared, payload any) bool
 	PopStop    bool   // mark this screen as a PopTo boundary (a command hub)
 	Dir        string // directory this screen concerns; enables the global Terminal key (DirLocator)
-	// Init, when set, runs from the screen's Init and its cmd is batched with the
-	// panel initializers — the hook a consumer uses to kick off an async load on
-	// open (a network read, say), whose result then arrives as a broadcast msg.
+	// Init, when set, runs from the screen's Init alongside the panel initializers (to start
+	// an async load on open, say).
 	Init func(*core.Shared) tea.Cmd
 }
 
 // NewModularScreen builds the screen, flattens the slots in declaration order,
 // and focuses the first Focusable panel.
 func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
-	// opts.Dir makes this a DirLocator, so the global terminal/open-dir keys fire on it —
-	// but they are NOT added to the help here. Unlike PickerScreen, whose extras land in the
-	// (?) full help, a ModularScreen's help is the bar itself, and the bar stays sparse
-	// (see core.ShortHelp). The keys work unadvertised; opts.Help is the caller's alone.
+	// opts.Dir enables the terminal/open-dir keys, but they stay off the help bar, which is
+	// kept sparse (see core.ShortHelp).
 	help := opts.Help
 	s := &ModularScreen{
 		cols:        columns,
@@ -167,13 +139,8 @@ func NewModularScreen(columns [][]Slot, opts ModularOpts) *ModularScreen {
 	return s
 }
 
-// Init runs any panel initializers (ScreenPanel starts its child screen), then
-// the consumer's ModularOpts.Init hook, and batches all their cmds.
-//
-// It also drains the FocusNotifier of the slot focused at CONSTRUCTION. That focus
-// is granted by NewModularScreen, which has no cmd lane at all, so a panel would
-// otherwise never learn about the only focus event it does not receive as a
-// transition — the state it was born into. Same reasoning as ScreenPanel.syncChild.
+// Init runs the panel initializers and ModularOpts.Init. It also fires the FocusNotifier
+// of the slot focused at construction, since NewModularScreen has no cmd lane to do it.
 func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, slot := range s.flat {
@@ -196,42 +163,20 @@ func (s *ModularScreen) Init(sh *core.Shared) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// Update routes input screen-first for the reserved pane keys, then child-first
-// for everything else:
-//  1. a pane-navigation key (core.Keys.PaneNext et al.) moves focus and is
-//     consumed here, ABOVE the capture gate below. That ordering is the point: a
-//     panel that captures every keystroke would otherwise have no keyboard exit,
-//     and reserving a handful of keys buys one that works on every panel without
-//     any of them cooperating;
-//  2. a capturing FOCUSED panel (Capturing) claims every remaining keystroke — a
-//     filter input losing characters would read as a bug, and the focus gate is
-//     what stops a clicked-away textarea from keeping the keys;
-//  3. other key msgs go to the focused panel's PanelUpdater — a handled result
-//     is applied and done;
-//  4. an unhandled Back pops the screen;
-//  5. anything else is dropped — the focused panel already had its chance.
+// Update routes keys in this order:
+//  1. pane-navigation keys move focus, ahead of any capture, so every pane can be left;
+//  2. a capturing focused panel gets every other key;
+//  3. keys go to the focused panel's PanelUpdater;
+//  4. an unhandled Back pops the screen; anything else is dropped.
 //
-// Non-key msgs (ticks, broadcast results) are instead fanned out to every
-// slot's PanelUpdater and their cmds batched, so a panel keeps live data without
-// holding focus; a nav Msg is rare on this path, but the first non-nil one is
-// honored.
-//
-// Mouse gestures are the exception to the broadcast: presses are hit-tested against
-// the slot rects SetSize recorded (coordinates translated via Shared.BodyY — the
-// same problem the router solves for the output pane with inOutput), and a press
-// inside a Focusable slot moves focus there and goes to that panel alone, with
-// the coordinates made slot-relative first so a panel maps clicks against its
-// own layout. That's what makes a pane scrollable when keyboard focus can't
-// reach it — a sibling form may be capturing every key, but the wheel still
-// works over its neighbor. A left press also owns its following motion/release,
-// even beyond the pane. Presses that miss every slot (or hit a non-focusable one)
-// fall through to the broadcast.
+// Non-key messages fan out to every panel. Mouse presses are hit-tested against the slot
+// rects and go, slot-relative, to the pane under the pointer (focusing it), so a pane can
+// scroll even while a sibling captures keys. A left press owns its motion and release,
+// even outside the pane. Misses fall through to the broadcast.
 func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	if km, ok := msg.(tea.KeyPressMsg); ok {
 		k := km.String()
-		// Typing ends any mouse gesture, as it does inside the panes themselves (the
-		// editor's own resetMouseGesture is on every key). It is also the recovery path
-		// if a release never arrived.
+		// Typing ends any mouse gesture, which also recovers from a lost release.
 		s.releaseMouse()
 		if s.resize != nil {
 			if s.resizing {
@@ -257,9 +202,8 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 			}
 		}
 		if cmd, moved := s.moveFocus(k); moved {
-			// The pane key itself is consumed here and never reaches a panel, so
-			// this Action is the newly focused panel's only chance to start work
-			// off the focus change (FocusNotifier).
+			// The pane key never reaches a panel, so this is the newly focused panel's only chance to
+			// start work on focus (FocusNotifier).
 			return s, core.Async(cmd)
 		}
 		if ci := s.capturingSlot(); ci >= 0 {
@@ -279,8 +223,8 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 		return s, core.Action{}
 	}
 	if mm, ok := msg.(tea.MouseMsg); ok {
-		// v1 reported the wheel as a press, so "aims at a pane" means a click or a
-		// wheel notch; motion and release continue whatever gesture a click started.
+		// A click or wheel notch aims at a pane; motion and release continue the gesture a
+		// click started.
 		_, isClick := mm.(tea.MouseClickMsg)
 		_, isWheel := mm.(tea.MouseWheelMsg)
 		_, isRelease := mm.(tea.MouseReleaseMsg)
@@ -320,11 +264,8 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 				}
 			}
 		}
-		// A wheel notch arriving mid-gesture belongs to the slot HOLDING the gesture, not
-		// to whatever the pointer happens to be over. Falling into the branch below would
-		// clear mouseSlot — and never restore it, since a wheel button is neither left nor
-		// right — so one notch during an editor drag-select would orphan every motion event
-		// that followed it.
+		// A wheel notch mid-gesture belongs to the slot holding the gesture; the branch below
+		// would clear mouseSlot and orphan the rest of a drag.
 		if isWheel && s.mouseSlot >= 0 && s.mouseDown {
 			return s, s.updateMouseSlot(sh, s.mouseSlot, mm)
 		}
@@ -376,17 +317,13 @@ func (s *ModularScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.
 	return s, core.Action{Msg: nav, Cmd: tea.Batch(cmds...)}
 }
 
-// releaseMouse ends the gesture a click opened. It is the one place mouseSlot is
-// surrendered, so every reason to surrender it reads the same: a release, a key press, the
-// next click, or a press whose Action pushed a screen that will swallow the release.
+// releaseMouse ends the current gesture: on release, a key, the next click, or a press
+// that pushed a screen.
 func (s *ModularScreen) releaseMouse() { s.mouseSlot, s.mouseDown = -1, false }
 
-// updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates.
-// Keeping this translation for a full left- or right-button gesture lets a drag leave
-// its pane without changing owners or exposing absolute terminal coordinates to the
-// panel that began it. A panel that needs absolute cells anyway — one anchoring an
-// overlay at the pointer, as editor.Screen's context menu does — adds back the origin
-// this subtracts, which it receives through PaneOriginer.
+// updateMouseSlot forwards a mouse event to one pane in pane-relative coordinates, for
+// the whole gesture even outside the pane. A panel needing absolute cells adds back its
+// origin (PaneOriginer).
 func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg) core.Action {
 	r := s.slotRect(i)
 	if u, ok := s.flat[i].Panel.(PanelUpdater); ok {
@@ -396,10 +333,7 @@ func (s *ModularScreen) updateMouseSlot(sh *core.Shared, i int, mm tea.MouseMsg)
 	return core.Action{}
 }
 
-// translateMouse shifts a mouse message's position by (dx, dy), preserving its concrete
-// type so the receiving panel still reads a click as a click and a release as a release.
-// v2 keeps the coordinates on the concrete message rather than a shared struct behind an
-// Action field, so the shift is a rebuild per kind rather than two assignments.
+// translateMouse shifts a mouse message by (dx, dy), keeping its concrete type.
 func translateMouse(mm tea.MouseMsg, dx, dy int) tea.Msg {
 	m := mm.Mouse()
 	m.X -= dx
@@ -417,19 +351,14 @@ func translateMouse(mm tea.MouseMsg, dx, dy int) tea.Msg {
 	return mm
 }
 
-// Filtering keeps the router's global single-key shortcuts (O, q, [ ]) from
-// stealing keystrokes while the focused panel is capturing text (see
-// capturingSlot).
+// Filtering keeps the router's single-key shortcuts away while the focused panel
+// captures text.
 func (s *ModularScreen) Filtering() bool { return s.capturingSlot() >= 0 }
 
 func (s *ModularScreen) PopStop() bool { return s.popStop }
 
-// SetFocused implements core.FocusableScreen: the router blurs the screen when
-// the output pane takes the keys and refocuses it on return. The focus INDEX is
-// untouched — hostFocused gates the focused render arg View passes (a panel
-// that renders from the arg, like ScrollContainer, dims), and the Blur/Focus
-// forwarding carries it to panels that render from their own state (a
-// ScreenPanel's child form) — so the active pane dims and relights in place.
+// SetFocused implements core.FocusableScreen: the router blurs the screen when the output
+// pane takes the keys. The focus index is kept; panels dim and relight in place.
 func (s *ModularScreen) SetFocused(focused bool) {
 	s.hostFocused = focused
 	if !focused {
@@ -448,14 +377,11 @@ func (s *ModularScreen) SetFocused(focused bool) {
 	}
 }
 
-// LocateDir reports the directory this screen concerns (ModularOpts.Dir), so the
-// global Terminal key opens a terminal there. Empty dir ⇒ no locator (the key
-// falls through).
+// LocateDir reports ModularOpts.Dir for the global terminal keys.
 func (s *ModularScreen) LocateDir() (string, bool) { return s.dir, s.dir != "" }
 
-// Receive relays a PropagateAll broadcast to receiving panels and to the optional
-// Refresh closure. The recursive relay lets an async result reach a ScreenPanel child
-// even while another screen is on top of this root.
+// Receive relays a PropagateAll broadcast to receiving panels and to Refresh, so async
+// results reach a ScreenPanel child even while another screen is on top.
 func (s *ModularScreen) Receive(sh *core.Shared, payload any) core.Action {
 	if _, ok := payload.(tea.BlurMsg); ok {
 		s.releaseMouse()
@@ -489,22 +415,9 @@ func (s *ModularScreen) CrumbLabel(short bool) string {
 	return CrumbSegment(short, s.crumbShort, s.crumb, s.title)
 }
 
-// View stacks each column's panels vertically and joins the columns side by
-// side. Panels draw their own borders; the screen adds only the optional title
-// bar.
-//
-// Before joining, each column gets a measure-then-grow pass for its ExpandV
-// slots: panels are rendered at their Weight allocation, and a panel whose
-// content renders shorter (a form's box) would leave the slack pooling at the
-// bottom of the terminal. The slack is split equally among the column's ExpandV
-// slots (remainder to the last), which are re-sized and re-rendered — so an
-// ExpandV slot fills whatever its siblings didn't use. Growth only, never a
-// shrink; columns without ExpandV slots render exactly as allocated.
-//
-// ExpandH slots are then padded out to their allocated width. That pass is
-// separate and comes last because it acts on the rendered STRING rather than on
-// the layout: no width is being redistributed (SetSize already assigned it), the
-// padding just squares off a panel that drew narrower than it was given.
+// View stacks each column's panels and joins the columns. ExpandV slots then split the
+// slack a short-rendering sibling left (growth only), and ExpandH slots are padded out to
+// their allocated width.
 func (s *ModularScreen) View(sh *core.Shared) string {
 	if s.layout != nil {
 		return s.viewLayout(sh)
@@ -514,10 +427,7 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 	if s.title != "" {
 		y0 = lipgloss.Height(core.RenderTitleBar(s.title))
 	}
-	// The mouse hit-test targets what was RENDERED, not the Weight allocation:
-	// a short-rendering panel (a form's box) leaves its allocation half-used and
-	// the ExpandV pass shifts everything below it up, so hit rects come from the
-	// final row heights here, each frame.
+	// Hit rects come from what was rendered, not the Weight allocation: ExpandV shifts rows.
 	track := len(s.rects) == len(s.flat)
 	var hit []panelRect
 	if track {
@@ -559,9 +469,7 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 			y := y0
 			for i := range col {
 				idx := s.starts[c] + i
-				// Square off an ExpandH slot against its allocation. PlaceHorizontal
-				// is a no-op when the block is already at least that wide, so this
-				// pads but can never truncate.
+				// Pad an ExpandH slot to its allocation (PlaceHorizontal never truncates).
 				if col[i].ExpandH {
 					rows[i] = lipgloss.PlaceHorizontal(s.rects[idx].w, lipgloss.Left, rows[i])
 				}
@@ -572,9 +480,7 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 		cols[c] = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 	s.hitRects = hit
-	// Publish each slot's rendered origin (absolute cells, like the mouse path's
-	// BodyY translation) to panels that lay out overlays of their own — an editor
-	// anchoring its save-as box at its own bottom edge.
+	// Publish each slot's absolute origin to panels that place their own overlays.
 	if track {
 		for i, slot := range s.flat {
 			if po, ok := slot.Panel.(PaneOriginer); ok {
@@ -585,9 +491,8 @@ func (s *ModularScreen) View(sh *core.Shared) string {
 	return core.WithTitle(s.title, lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 }
 
-// HelpView composes the bar from the screen's own hints (pane navigation, back),
-// the focused panel's PanelHelp bindings, and the caller's Help extras, rendered
-// through the shared static-help style.
+// HelpView composes the bar from pane navigation and back, the focused panel's
+// PanelHelp, and the caller's Help.
 func (s *ModularScreen) HelpView(sh *core.Shared) string {
 	if s.resizing {
 		return sh.NoteHelp("resize: ←→ width · ↑↓ height · = reset · esc done")
@@ -624,13 +529,9 @@ func (s *ModularScreen) HelpView(sh *core.Shared) string {
 	return sh.BindingHelp(hints)
 }
 
-// SetSize splits the terminal width between the columns (fixed widths from
-// ColWidths, flex columns sharing the rest, the division remainder going to the
-// last flex column) and then each column's height between its slots by Weight —
-// the last slot taking the remainder, so rounding can't drift the layout off the
-// bottom. Panels receive outer cell dims; each subtracts its own borders. The
-// same arithmetic also records each slot's body-relative rect, so Update can
-// hit-test mouse presses (see slotAt).
+// SetSize splits the width between columns (fixed ColWidths, flex columns sharing the
+// rest) and each column's height between slots by Weight, the last slot taking the
+// remainder. Panels get outer dims. The slot rects are recorded for hit-testing.
 func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 	if !s.layoutDirty && width == s.lastW && bodyHeight == s.lastH && len(s.rects) == len(s.flat) {
 		return // same geometry, same answer: see layoutDirty
@@ -666,10 +567,7 @@ func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 		}
 	}
 	if flex > 0 {
-		share := (width - fixed) / flex
-		if share < 1 {
-			share = 1
-		}
+		share := max((width-fixed)/flex, 1)
 		for c := range s.cols {
 			if widths[c] == 0 {
 				widths[c] = share
@@ -693,9 +591,7 @@ func (s *ModularScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 			if i < len(col)-1 {
 				h = bodyHeight * weightOf(slot) / total
 			}
-			if h < 1 {
-				h = 1
-			}
+			h = max(h, 1)
 			s.rects = append(s.rects, panelRect{x: x, y: y0 + used, w: widths[c], h: h})
 			used += h
 			slot.Panel.SetSize(widths[c], h)
@@ -712,15 +608,9 @@ func weightOf(s Slot) int {
 	return 1
 }
 
-// capturingSlot is the flat index of the panel to route every keystroke to
-// while it captures text input (a filtering list, a typing form child), or -1.
-// Capture is gated on FOCUS: the keyboard can't move focus mid-capture (capture
-// claims tab), so focused-only capture loses nothing there — but the mouse
-// moves focus without the capturing panel knowing, and a click on a sibling
-// must not leave keystrokes flowing to a textarea the user has left. Clicking
-// the panel back restores capture with the focus. Only a panel that is also a
-// PanelUpdater counts — capturing without input routing is meaningless, and
-// only one panel can sensibly capture at a time.
+// capturingSlot is the focused panel capturing text input (and a PanelUpdater), or -1.
+// Capture requires focus: a click moves focus without the capturing panel knowing, and
+// keys must not keep flowing to a pane the user left.
 func (s *ModularScreen) capturingSlot() int {
 	if s.focus < 0 {
 		return -1
@@ -758,17 +648,8 @@ func (s *ModularScreen) focusableCount() int {
 
 func (s *ModularScreen) focusedPanel() Panel { return s.flat[s.focus].Panel }
 
-// moveFocus applies a pane-navigation key. It reports whether k was one of them —
-// consumed either way, so a move that runs off the edge is a no-op rather than
-// falling through to the focused panel. That is the whole contract of the
-// reservation: these keys mean "move panes" everywhere, on every screen, or they
-// mean nothing; a key that sometimes reaches the panel underneath would be worse
-// than one that never does.
-//
-// The cycle cases and the directional ones are peers, not a primary and a
-// fallback — see the type doc. The directional bindings carry no keycodes today,
-// so their cases simply never match (MatchKey against an empty binding is false)
-// and cost a comparison each.
+// moveFocus applies a pane-navigation key, reporting whether k was one. It is consumed
+// even when the move runs off the edge: these keys never reach a panel.
 func (s *ModularScreen) moveFocus(k string) (tea.Cmd, bool) {
 	var dc, dr int
 	switch {
@@ -795,10 +676,7 @@ func (s *ModularScreen) moveFocus(k string) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// cycleFocus steps focus by delta through the Focusable slots in flat order
-// (column 0 top→bottom, then column 1, …), wrapping at both ends. With fewer than
-// two focusable slots it lands back where it started, which focusSlot treats as
-// the no-op it is.
+// cycleFocus steps focus by delta through the Focusable slots in flat order, wrapping.
 func (s *ModularScreen) cycleFocus(delta int) tea.Cmd {
 	if s.focus < 0 {
 		return nil
@@ -813,27 +691,11 @@ func (s *ModularScreen) cycleFocus(delta int) tea.Cmd {
 	return nil
 }
 
-// neighbor is the flat index of the Focusable slot one step in direction
-// (dc, dr) from flat slot `from`, or -1 when there is none.
-//
-// This is live code with no keys on it yet: core.Keys.PaneLeft and friends carry
-// no keycodes (Apple Terminal strips the modifier from shift+↑/↓, so the obvious
-// binding would silently fail), and filling those lists in is all it takes to
-// reach this. Its behavior is pinned by TestPaneNavOverUnevenGrid, which calls it
-// directly for exactly that reason.
-//
-// A horizontal step walks column by column, aiming at the current ROW: a
-// PaneRight from row 1 lands on row 1 of the next column, or its nearest focusable row
-// when it is shorter or that row is informational. A vertical step walks row by
-// row inside the current column. Either way a column or row with nothing
-// focusable is skipped and the scan continues in the same direction.
-//
-// Movement CLAMPS at the grid's edge rather than wrapping, so a direction key
-// always means the same thing — a PaneLeft that sometimes jumped to the far right
-// would make the grid unreadable. One consequence worth knowing: across columns
-// of unequal length the round trip isn't symmetric (row 1 → a one-row column →
-// back to row 0), because the row index is clamped on the way over and there is
-// nothing to restore it from on the way back.
+// neighbor is the Focusable slot one step in direction (dc, dr) from slot from, or -1.
+// Horizontal steps aim at the current row in the next column (nearest focusable row);
+// vertical steps move within the column; columns or rows with nothing focusable are
+// skipped. Movement clamps at the edges. No keys are bound yet (core.Keys.PaneLeft);
+// TestPaneNavOverUnevenGrid pins the behavior.
 func (s *ModularScreen) neighbor(from, dc, dr int) int {
 	if s.layout != nil {
 		return s.layoutNeighbor(from, dc, dr)
@@ -855,10 +717,8 @@ func (s *ModularScreen) neighbor(from, dc, dr int) int {
 	return -1
 }
 
-// focusableNear is the flat index of column c's Focusable slot whose row is
-// closest to `row` (ties going to the upper one), or -1 when the column holds
-// none. `row` is clamped into the column first, so aiming past a short column's
-// end lands on its last row rather than missing.
+// focusableNear is column c's Focusable slot closest to row (ties go up), or -1. row is
+// clamped into the column first.
 func (s *ModularScreen) focusableNear(c, row int) int {
 	n := len(s.cols[c])
 	if row >= n {
@@ -879,10 +739,8 @@ func (s *ModularScreen) focusableNear(c, row int) int {
 	return -1
 }
 
-// focusSlot moves focus to flat slot i, blurring the old panel and focusing the
-// new, and returns the new panel's FocusNotifier cmd (nil when it has none). A
-// no-op — and a nil cmd — when i already holds focus or isn't Focusable: landing
-// on the pane you are already in is not a focus event.
+// focusSlot moves focus to slot i and returns its FocusNotifier cmd. A no-op when i is
+// already focused or not Focusable.
 func (s *ModularScreen) focusSlot(i int) tea.Cmd {
 	if i == s.focus || !isFocusable(s.flat[i].Panel) {
 		return nil
@@ -906,17 +764,10 @@ func panelFocusCmd(p Panel) tea.Cmd {
 	return nil
 }
 
-// FocusSlot moves keyboard focus to flat slot i (the declaration order: column 0
-// top→bottom, then column 1, …) — the programmatic counterpart of the pane keys and
-// the mouse click, for a consumer that needs focus to follow an event (a sidebar
-// selection focusing the detail pane, say). Out-of-range and non-Focusable targets
-// are a no-op.
-//
-// It returns the newly focused panel's FocusNotifier cmd, which the caller is
-// responsible for emitting (core.Async, or batched into the Action it was already
-// returning) — the same "returns the cmd, the caller emits it" shape as
-// ScreenPanel.SetChild. Discarding it is safe and simply skips the panel's on-focus
-// work until its next message.
+// FocusSlot moves focus to flat slot i (column 0 top to bottom, then column 1, ...), for a
+// consumer whose focus follows an event. Out-of-range and non-Focusable targets are
+// ignored. The caller emits the returned FocusNotifier cmd, or drops it to skip the
+// panel's on-focus work.
 func (s *ModularScreen) FocusSlot(i int) tea.Cmd {
 	if i < 0 || i >= len(s.flat) {
 		return nil
@@ -924,10 +775,8 @@ func (s *ModularScreen) FocusSlot(i int) tea.Cmd {
 	return s.focusSlot(i)
 }
 
-// slotRect is the rect input hit-testing and coordinate translation use: the
-// rendered layout once View has run (it differs from the Weight allocation
-// whenever a panel renders short and ExpandV shifts things up), the allocation
-// before then.
+// slotRect is the rect used for hit-testing: the rendered layout once View has run, the
+// allocation before.
 func (s *ModularScreen) slotRect(i int) panelRect {
 	if len(s.hitRects) == len(s.flat) {
 		return s.hitRects[i]
@@ -935,9 +784,7 @@ func (s *ModularScreen) slotRect(i int) panelRect {
 	return s.rects[i]
 }
 
-// slotAt is the flat index of the slot whose rect contains absolute terminal
-// coordinates (x, y), or -1. Rects are body-relative; Shared.BodyY carries the
-// chrome rows above the body.
+// slotAt is the slot containing absolute terminal cell (x, y), or -1.
 func (s *ModularScreen) slotAt(sh *core.Shared, x, y int) int {
 	if len(s.rects) != len(s.flat) {
 		return -1 // not laid out yet

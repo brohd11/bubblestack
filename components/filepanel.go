@@ -16,21 +16,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// FilePanel is a directory listing packaged as a ModularScreen panel: the folders and
-// files of ONE directory, where enter (or a click) on a folder walks into it and enter on
-// a file is the host's business. It is a navigator, not a tree — nothing expands in place,
-// so a row is always one line's worth of one directory.
-//
-// It composes a ListPanel rather than reimplementing one, which is what keeps the wheel,
-// click hit-testing, /-filtering, wrap-at-ends, pagination, the border frame and the
-// compact marquee identical to every other sidebar in the framework. The two densities are
-// ListPanel's own (NewListPanel's 3-row delegate, NewCompactListPanel's 1-row), and
-// SetCompact swaps between them in place.
-//
-// Like editor.Screen, every difference between "the whole app is this" and "this is one
-// pane" is either a hook the host sets or a bool the instancer chooses: Border is the
-// composing caller's, Root bounds navigation, Include decides what is listed at all, and a
-// nil hook is the sensible standalone default.
+// FilePanel lists one directory as a ModularScreen panel: enter or a click on a folder
+// walks into it, and enter on a file is the host's business. It is a navigator, not a
+// tree. It composes a ListPanel, so wheel, clicks, filtering, pagination, frame and
+// marquee match every other sidebar; SetCompact swaps between its two densities.
+// Standalone defaults come from nil hooks; Border, Root and Include are the instancer's.
 type FilePanel struct {
 	opts  FilePanelOpts
 	panel *ListPanel // whichever density is live; rebuilt by SetCompact
@@ -52,17 +42,13 @@ var _ PanelHelper = (*FilePanel)(nil)
 var _ panelInitializer = (*FilePanel)(nil)
 var _ FocusNotifier = (*FilePanel)(nil)
 
-// FileEntry is one listed file, as handed to the panel's hooks. Dir is the directory the
-// row was listed FROM, which is what a host needs to resolve a sibling ("create a file
-// here") without asking the panel where it currently is.
+// FileEntry is one listed file as handed to hooks. Dir is the directory it was listed
+// from, so a host can resolve siblings.
 type FileEntry struct {
 	Name string // base name as listed
 	Path string // absolute path
 	Dir  string // the directory it was listed from
-	// IsDir is "can this row be walked into": a directory, or a symlink to one. It follows
-	// the link because that is the question every host branching on it is really asking,
-	// and os.ReadDir's own answer (the link is not a directory) makes a linked folder
-	// unreachable — see read.
+	// IsDir is "can this row be walked into": a directory, or a symlink to one.
 	IsDir bool
 	Up    bool // the ".." row; Path is the parent directory
 }
@@ -79,43 +65,35 @@ type FilePanelOpts struct {
 	// TitleColor optionally overrides a row's foreground. nil falls back to Colors.
 	// Called during rendering: use cached state, never filesystem or subprocess work.
 	TitleColor func(FileEntry) color.Color
-	// KeepColor opts every row out of the selection accent (core.KeepColorItem): a row keeps
-	// its own color under the cursor and the frame's tinted left rule alone says which row
-	// that is. For a listing whose colors carry state the reader most wants on the row they
-	// are pointing at — a git status — rather than a type the accent can safely mask.
+	// KeepColor opts every row out of the selection accent (core.KeepColorItem), for colors
+	// that carry state the reader wants under the cursor, like git status.
 	KeepColor bool
 
-	// Compact picks the starting row density; DensityKey flips it live. An unbound
-	// DensityKey (the zero value) leaves the chord to the host, which calls ToggleDensity
-	// from wherever it already handles keys.
+	// Compact picks the starting density; DensityKey flips it live. An unbound DensityKey
+	// leaves the chord to the host (ToggleDensity).
 	Compact    bool
 	DensityKey key.Binding
 
-	// UpKey walks to the parent directory. The zero value means backspace, which is also
-	// one of core.Keys.Back's keys — deliberately: the panel claims it ONLY while there is
-	// a parent to go to, so at Root it falls through and still means "back" to the host.
-	// esc and c always do. Left/right are not used: core.StyleList binds them to the
-	// list's own pagination.
+	// UpKey walks to the parent directory; the zero value means backspace. It is claimed only
+	// while there is a parent, so at Root backspace still means "back" to the host.
+	// Left/right are left to the list's pagination.
 	UpKey key.Binding
 
-	// Include decides what is listed, directories included. nil lists everything, dot
-	// files and all. It receives the full path as well as the entry so a host can sniff
-	// content (gote's DocFilter.Match) and not just the name.
+	// Include decides what is listed, directories included; nil lists everything. It gets
+	// the full path so a host can sniff content.
 	Include func(path string, d fs.DirEntry) bool
 
 	// Less orders the rows. nil sorts directories first, then by name, case-insensitively.
 	Less func(a, b FileEntry) bool
 
-	// Rows contributes host rows pinned above "..", rebuilt on every directory change (an
-	// action row like "+ new file" belongs to the folder you are looking at). Give them a
-	// FilterValue of "" to keep them out of a /-query. OnRow runs when one is picked; a
-	// components.Item or CompactItem dispatches itself and needs no hook.
+	// Rows adds host rows above "..", rebuilt on every directory change. Give them an empty
+	// FilterValue to keep them out of searches. OnRow runs when one is picked; Item and
+	// CompactItem rows dispatch themselves.
 	Rows  func(dir string) []list.Item
 	OnRow func(*core.Shared, list.Item) core.Action
 
-	// OnSelect runs on a FILE row. OnOpenDir intercepts a DIRECTORY row before the panel
-	// navigates — return handled=false to let the walk happen anyway, which is how a host
-	// can raise a menu for some folders and not others.
+	// OnSelect runs on a file row. OnOpenDir can intercept a directory row before the walk;
+	// handled=false lets the walk happen.
 	OnSelect  func(*core.Shared, FileEntry) core.Action
 	OnOpenDir func(*core.Shared, FileEntry) (core.Action, bool)
 
@@ -135,11 +113,8 @@ type FilePanelOpts struct {
 // safe to share with core.Keys.Back.
 var defaultUpKey = key.NewBinding(key.WithKeys("backspace"), key.WithHelp("backspace", "up"))
 
-// NewFilePanel builds the panel and reads its first directory immediately, rather than
-// waiting for Init. A panel swapped into a layout by a rebuild never sees Init — gote's
-// rebuildModular deliberately does not re-Init the screen it builds — so a constructor
-// that only recorded the path would render an empty column until some unrelated message
-// happened along. Init is left to arm the inner list's marquee.
+// NewFilePanel reads the first directory immediately rather than in Init: a panel
+// swapped in by a layout rebuild never sees Init.
 func NewFilePanel(opts FilePanelOpts) *FilePanel {
 	p := &FilePanel{opts: opts, compact: opts.Compact, upKey: opts.UpKey}
 	if len(p.upKey.Keys()) == 0 {
@@ -156,9 +131,8 @@ func NewFilePanel(opts FilePanelOpts) *FilePanel {
 	return p
 }
 
-// absDir resolves a configured directory to an absolute, clean path. An empty one is the
-// working directory; an unresolvable one is left as given rather than failing the
-// constructor — the read that follows reports it as an empty listing.
+// absDir makes dir absolute and clean ("" is the working directory). An unresolvable dir
+// is kept as given; the read then reports it empty.
 func absDir(dir string) string {
 	if dir == "" {
 		wd, err := os.Getwd()
@@ -174,10 +148,8 @@ func absDir(dir string) string {
 	return abs
 }
 
-// build makes the inner ListPanel at the current density. The compact constructor returns
-// a wrapper whose whole behavior lives on the embedded *ListPanel (own filter line,
-// inline pagination, marquee), so taking that field is how one struct field covers both
-// densities without a second code path.
+// build makes the inner ListPanel at the current density. The compact constructor wraps a
+// *ListPanel, so taking that field covers both densities.
 func (p *FilePanel) build() *ListPanel {
 	opts := ListPanelOpts{
 		OnSelect:  p.pick,
@@ -192,9 +164,7 @@ func (p *FilePanel) build() *ListPanel {
 	return NewListPanel(p.rows(), p.title(), opts)
 }
 
-// title is the border legend (or, unbordered, the list's own title bar): the configured
-// one when there is one, else the current directory's base name, so the column says where
-// it is without spending a row on it.
+// title is the configured legend, or the current directory's base name.
 func (p *FilePanel) title() string {
 	if p.opts.Title != "" {
 		return p.opts.Title
@@ -205,9 +175,8 @@ func (p *FilePanel) title() string {
 	return p.dir
 }
 
-// setTitle re-points the legend after a directory change. ListPanel keeps the legend and
-// the list's own title in two places (a bordered panel drops the title bar and moves the
-// text to the frame), so both are written here.
+// setTitle updates both the frame legend and the list's own title after a directory
+// change.
 func (p *FilePanel) setTitle() {
 	t := p.title()
 	p.panel.title = t
@@ -218,13 +187,8 @@ func (p *FilePanel) setTitle() {
 
 // ---------- listing ----------
 
-// linkStat is what a symlink row points AT — the following stat os.ReadDir deliberately
-// does not do. Only symlinks pay for it, so this is one extra stat on a rare kind of row
-// rather than a second stat on every row (entryDesc has the budget).
-//
-// nil for anything that is not a symlink, and for a link that cannot be resolved: a dangling
-// one, or a cycle, which os.Stat reports as ELOOP rather than spinning. Both then list as
-// the plain file they look like from here, which is what every link did before this existed.
+// linkStat follows a symlink row (os.ReadDir does not), costing one stat only for links.
+// nil for non-links and for dangling or cyclic links, which then list as plain files.
 func linkStat(path string, d fs.DirEntry) fs.FileInfo {
 	if d.Type()&fs.ModeSymlink == 0 {
 		return nil
@@ -257,15 +221,8 @@ func (p *FilePanel) read(dir string) ([]fileItem, error) {
 		if p.opts.Include != nil && !p.opts.Include(path, d) {
 			continue
 		}
-		// One stat per row, shared: the size line and the row's type color both want it,
-		// and asking twice would double the cost entryDesc's comment says this component
-		// can only just afford. A plain directory needs neither, so it is not stat'd at all.
-		//
-		// A symlink is the exception and is FOLLOWED. os.ReadDir does not, so a link to a
-		// directory arrives with IsDir false: it would sort among the files, print no
-		// trailing slash, describe itself by the link's own byte length, and — the part
-		// that matters — refuse to be walked into, because pick sends anything that is not
-		// a directory to OnSelect. Resolving here makes all four answer for the target.
+		// One stat per row, shared by the size line and the type color; plain directories skip
+		// it. Symlinks are followed, so a link to a folder sorts, reads and walks as a folder.
 		isDir := d.IsDir()
 		var info fs.FileInfo
 		if target := linkStat(path, d); target != nil {
@@ -343,9 +300,7 @@ func (p *FilePanel) canUp() bool {
 	return p.root == "" || p.dir != p.root
 }
 
-// clamp keeps a target inside Root. A path outside it lands on Root itself rather than
-// being refused: the panel is a listing, and the honest answer to "somewhere you may not
-// go" is the floor, not an error popup.
+// clamp keeps a target inside Root; anything outside lands on Root rather than erroring.
 func (p *FilePanel) clamp(dir string) string {
 	dir = filepath.Clean(dir)
 	if p.root == "" || dir == p.root {
@@ -359,9 +314,8 @@ func (p *FilePanel) clamp(dir string) string {
 
 // ---------- rows ----------
 
-// fileItem is one row. It satisfies core.SuffixItem for the compact delegate and carries a
-// Description for the standard one; the suffix stays empty because a listing is one
-// directory deep and there is no path context to add to a name.
+// fileItem is one row, for both delegates. The suffix is empty: a one-directory listing
+// has no path context to add.
 type fileItem struct {
 	entry      FileEntry
 	desc       string
@@ -388,11 +342,8 @@ func (i fileItem) Title() string {
 func (i fileItem) Description() string { return i.desc }
 func (i fileItem) SuffixText() string  { return "" }
 
-// TitleColor implements core.ColorItem: the row's own foreground, so a directory reads as
-// one without the eye having to find the trailing slash. Classified once at read time
-// rather than per frame — a delegate's Render must stay cheap, and the entry it would have
-// to re-examine is gone by then. nil (an ordinary file) leaves the row unstyled, and the
-// selection accent outranks this on the cursor row unless KeepColor was set.
+// TitleColor implements core.ColorItem. Classified once at read time to keep Render cheap;
+// nil leaves the row plain.
 func (i fileItem) TitleColor() color.Color {
 	if i.titleColor != nil {
 		if c := i.titleColor(i.entry); c != nil {
@@ -402,15 +353,10 @@ func (i fileItem) TitleColor() color.Color {
 	return i.color
 }
 
-// KeepColor implements core.KeepColorItem. One flag covers both color sources, because
-// TitleColor above has already merged them: whatever the row ended up being drawn in is what
-// survives the cursor.
+// KeepColor implements core.KeepColorItem for whichever color TitleColor settled on.
 func (i fileItem) KeepColor() bool { return i.keepColor }
 
-// FilterValue keeps ".." out of every search: a filter is a question about which entries
-// you want, and the way out of the folder is not one of the answers (the same rule an
-// inert action row follows). Nothing matches an empty target, so the row leaves as soon as
-// the query has a character and comes back when it is emptied.
+// FilterValue keeps ".." out of every search: it reappears when the query is cleared.
 func (i fileItem) FilterValue() string {
 	if i.entry.Up {
 		return ""
@@ -418,14 +364,8 @@ func (i fileItem) FilterValue() string {
 	return i.entry.Name
 }
 
-// entryDesc is the standard delegate's second line: what a directory is, or how big a file
-// is. Info() costs one stat per row, which a single directory can afford and a recursive
-// walk could not — one more reason this component lists one folder at a time. It takes that
-// stat rather than making it, so the one read also feeds the row's type color; a nil info
-// is a stat that failed, and the row keeps its name and loses its size.
-//
-// isDir is read's RESOLVED answer, not d.IsDir(): a symlink to a folder has to say "dir"
-// here rather than report the byte length of the link itself.
+// entryDesc is the standard delegate's second line: "dir", or the file's size. It takes
+// read's stat (nil when it failed) and read's resolved isDir, so a linked folder says dir.
 func entryDesc(isDir bool, info fs.FileInfo) string {
 	if isDir {
 		return "dir"
@@ -452,12 +392,9 @@ func formatSize(n int64) string {
 
 // ---------- dispatch ----------
 
-// pick routes enter and a RIGHT click — the two "act on this row" gestures. A directory
-// walks (unless OnOpenDir claims it), a file goes to OnSelect, and a host row goes to OnRow
-// — or dispatches itself, if it is one of the framework's self-dispatching Items.
-//
-// A left click on a directory does not come here: see pointer, which walks instead so the
-// host's menu is not in the way of the commonest gesture there is.
+// pick handles enter and a right click: a directory walks (unless OnOpenDir claims it), a
+// file goes to OnSelect, and a host row to OnRow or its own dispatch. A left click on a
+// directory walks instead (see pointer).
 func (p *FilePanel) pick(sh *core.Shared, it list.Item) core.Action {
 	fi, ok := it.(fileItem)
 	if !ok {
@@ -483,21 +420,10 @@ func (p *FilePanel) pick(sh *core.Shared, it list.Item) core.Action {
 	return core.Action{}
 }
 
-// pointer splits the two mouse buttons, which enter cannot: LEFT is "open this row" — and a
-// folder opens by being walked into, never by raising the host's menu — while RIGHT is
-// exactly what enter does, so a host with an OnOpenDir menu gets it on the button that means
-// "menu" everywhere else. That is the whole difference between the mouse and the keyboard
-// here, and it mirrors the keys: d walks, enter acts.
-//
-// A file answers handled=false either way and falls back to OnSelect. It has nowhere to walk
-// to, so opening it IS whatever the host does with it, and a click on a document keeps doing
-// what it always did.
-//
-// The menu stays the HOST's to build, which is not incidental: by the time a press reaches a
-// panel ModularScreen has made the coordinates pane-local, and a panel does not know its own
-// origin — only the host does, which is why an anchor like gofer's rowAnchor lives there.
-// Routing the right button back through pick means the click path and the enter path raise
-// the same menu in the same place.
+// pointer splits the mouse buttons: left opens a row (walking into a folder, never
+// raising the host's menu), right does what enter does, so an OnOpenDir menu is on the
+// button that means "menu". Files fall back to OnSelect either way. The host builds the
+// menu because only it knows the panel's origin for the anchor.
 func (p *FilePanel) pointer(sh *core.Shared, it list.Item, right bool) (core.Action, bool) {
 	if right {
 		return p.pick(sh, it), true
@@ -509,9 +435,8 @@ func (p *FilePanel) pointer(sh *core.Shared, it list.Item, right bool) (core.Act
 	return p.SetDir(sh, fi.entry.Path), true
 }
 
-// key is the inner panel's OnKey: the host's row keys, typed to the entry. The ".." row
-// has no file to act on, so it reports unhandled and the key falls back to the list —
-// the same thing an inert action row does.
+// key is the inner panel's OnKey: host row keys typed to the entry. ".." has no file, so
+// it reports unhandled.
 func (p *FilePanel) key(sh *core.Shared, k string, it list.Item) (core.Action, bool) {
 	fi, ok := it.(fileItem)
 	if !ok {
@@ -526,9 +451,8 @@ func (p *FilePanel) key(sh *core.Shared, k string, it list.Item) (core.Action, b
 	return p.opts.OnKey(sh, k, fi.entry)
 }
 
-// UpdatePanel claims the panel's own two chords before handing everything else to the
-// list. Both are gated on Capturing: a live /-filter owns every keystroke, and a component
-// that stole one back would eat a character out of the query.
+// UpdatePanel claims the panel's own chords before the list, except while a filter is
+// capturing keys.
 func (p *FilePanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	if km, ok := msg.(tea.KeyPressMsg); ok && !p.panel.Capturing() {
 		k := km.String()
@@ -549,13 +473,8 @@ func (p *FilePanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 // Dir is the directory currently listed.
 func (p *FilePanel) Dir() string { return p.dir }
 
-// SetDir lists dir, clamped to Root. A directory that cannot be read leaves the panel
-// exactly where it was and goes to OnError, so a permission-denied folder cannot strand
-// the column on nothing.
-//
-// Walking UP selects the folder just left. Coming out of a deep tree onto a list of forty
-// siblings with the cursor reset to the top loses your place for no reason; the row you
-// came from is the one you were last looking at.
+// SetDir lists dir, clamped to Root. An unreadable directory leaves the panel where it
+// was and goes to OnError. Walking up selects the folder just left.
 func (p *FilePanel) SetDir(sh *core.Shared, dir string) core.Action {
 	dir = p.clamp(dir)
 	items, err := p.read(dir)
@@ -580,9 +499,8 @@ func (p *FilePanel) SetDir(sh *core.Shared, dir string) core.Action {
 	return core.Action{}
 }
 
-// Refresh re-reads the current directory, keeping the cursor where it is. It is the
-// panel's answer to a host's reseed broadcast; a read failure leaves the last good listing
-// on screen rather than blanking the column.
+// Refresh re-reads the current directory, keeping the cursor; a failure keeps the last
+// good listing.
 func (p *FilePanel) Refresh() {
 	items, err := p.read(p.dir)
 	if err != nil {
@@ -616,9 +534,7 @@ func (p *FilePanel) selectIndex(idx int) {
 	if n := len(p.panel.List().VisibleItems()); idx >= n {
 		idx = n - 1
 	}
-	if idx < 0 {
-		idx = 0
-	}
+	idx = max(idx, 0)
 	p.panel.List().Select(idx)
 }
 
@@ -630,12 +546,9 @@ func (p *FilePanel) Compact() bool { return p.compact }
 // ToggleDensity flips between the one-row and three-row list.
 func (p *FilePanel) ToggleDensity() tea.Cmd { return p.SetCompact(!p.compact) }
 
-// SetCompact rebuilds the inner panel at the other density, carrying over the directory,
-// the cursor, the allocation and focus. The two densities are two ListPanel constructors
-// (their delegates, filter line, pagination style and marquee all differ), so this is a
-// rebuild rather than a setting — which is also why an APPLIED /-filter does not survive
-// it. Returns the focused panel's on-focus cmd, so a marquee starts without waiting for
-// the next keystroke.
+// SetCompact rebuilds the inner panel at the other density, carrying over directory,
+// cursor, size and focus (an applied filter is lost). Returns the on-focus cmd so a
+// marquee starts immediately.
 func (p *FilePanel) SetCompact(compact bool) tea.Cmd {
 	if compact == p.compact {
 		return nil
@@ -678,15 +591,8 @@ func (p *FilePanel) Capturing() bool              { return p.panel.Capturing() }
 func (p *FilePanel) PanelHelp() []key.Binding     { return p.panel.PanelHelp() }
 
 // RowAnchor is the MenuAnchor for a context menu over visible item idx, given the panel's
-// own top-left in absolute terminal cells (0, Shared.BodyY() for a panel filling the body;
-// its slot's origin inside a larger layout). It is the AnchorListRow family's member for
-// this component: the menu opens on the first row below the whole item and flips clear
-// above it, so the row it acts on stays visible.
-//
-// It lives here rather than in the caller because both numbers it needs change with
-// density — the item's row height, and the chrome above the list — and a consumer holding
-// a copy of either would put the box a row off the moment the density flipped. ok is false
-// when idx is scrolled off-page; the caller picks the fallback, as with RowY.
+// absolute origin: below the item, flipping above it. It lives here because both inputs
+// change with density. ok is false when idx is off-page.
 func (p *FilePanel) RowAnchor(idx, originX, originY int) (MenuAnchor, bool) {
 	row, ok := p.RowY(idx)
 	if !ok {
@@ -696,9 +602,7 @@ func (p *FilePanel) RowAnchor(idx, originX, originY int) (MenuAnchor, bool) {
 	return MenuAnchor{X: originX, Y: top + p.panel.itemRows, FlipX: originX + 1, FlipY: top}, true
 }
 
-// UpKey is the binding that walks to the parent directory — the configured one, or the
-// default. Exported so a host's help page states the key the panel actually answers to
-// rather than a copy of it.
+// UpKey is the binding that walks to the parent, exported for a host's help page.
 func (p *FilePanel) UpKey() key.Binding { return p.upKey }
 
 // List exposes the underlying list model, matching ListPanel.List — a host restyling its

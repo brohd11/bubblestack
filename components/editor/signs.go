@@ -1,25 +1,17 @@
 package editor
 
-import "charm.land/lipgloss/v2"
+import (
+	"slices"
 
-// The sign column: one decorated cell per buffer line, left of the line numbers.
-//
-// It is deliberately empty of meaning. The editor knows how wide the column is, which
-// line each sign belongs to and how to draw it beside the numbers without knocking the
-// text geometry out of alignment — and nothing else. What a sign SAYS is the host's:
-// git diff markers, lint severities, breakpoints, read marks. This is the same division
-// Opts.Highlighter already draws, and for the same reason: the component owns the
-// rendering, the app owns the domain.
-//
-// The alternative — teaching the editor about git — would put a VCS dependency inside a
-// general-purpose text component and still not serve the second consumer that wanted a
-// different marker.
+	"charm.land/lipgloss/v2"
+)
 
-// Sign is one line's decoration. Text must measure exactly one display cell: the column
-// is one cell wide and every width calculation downstream (contentW, the wrap rows, the
-// click-to-cursor math) is derived from that, so a two-cell glyph would shift the whole
-// body one column right of where clicks land. Style is applied per render, so a sign
-// built once still repaints when the theme changes.
+// The sign column: one decorated cell per line, left of the line numbers. The editor
+// draws signs; what they mean (git markers, lint, breakpoints) is the host's.
+
+// Sign is one line's decoration. Text must be exactly one cell wide: every width
+// calculation (contentW, wrap rows, click mapping) assumes it. Style is applied per
+// render, so it follows theme changes.
 type Sign struct {
 	Text  string
 	Style lipgloss.Style
@@ -30,14 +22,12 @@ type signColumn struct {
 	shown bool
 }
 
-// legacySignColumn is the reserved name behind the original one-column API. Keeping
-// that API as a real named column lets existing hosts coexist with newer consumers
-// instead of making SetSigns unexpectedly erase their columns.
+// legacySignColumn is the named column behind the one-column API, so old and new hosts
+// can coexist.
 const legacySignColumn = "\x00default"
 
-// ensureSignColumn returns id's column, registering a new one at the inner edge. Hosts
-// wanting a different deterministic order can call SetSignColumnOrder; registration
-// order remains a useful no-setup default.
+// ensureSignColumn returns id's column, registering it at the inner edge. Use
+// SetSignColumnOrder for a specific order.
 func (s *Screen) ensureSignColumn(id string) *signColumn {
 	if s.signColumns == nil {
 		s.signColumns = make(map[string]*signColumn)
@@ -95,9 +85,8 @@ func (s *Screen) SignsForColumn(id string) map[int]Sign {
 	return nil
 }
 
-// SetSignColumnOrder sets the outer-to-inner order for named columns. Existing columns
-// omitted from ids are appended in their prior order, so changing one host's preferred
-// columns cannot silently hide a column installed by another host.
+// SetSignColumnOrder sets the outer-to-inner column order. Columns missing from ids keep
+// their order after the listed ones, so no host hides another's.
 func (s *Screen) SetSignColumnOrder(ids ...string) {
 	seen := make(map[string]bool, len(ids)+len(s.signOrder))
 	order := make([]string, 0, len(ids)+len(s.signOrder))
@@ -124,11 +113,8 @@ func (s *Screen) RemoveSignColumn(id string) {
 		return
 	}
 	delete(s.signColumns, id)
-	for i, name := range s.signOrder {
-		if name == id {
-			s.signOrder = append(s.signOrder[:i], s.signOrder[i+1:]...)
-			break
-		}
+	if i := slices.Index(s.signOrder, id); i >= 0 {
+		s.signOrder = slices.Delete(s.signOrder, i, i+1)
 	}
 	if col.shown {
 		s.wrapDirty = true
@@ -136,19 +122,12 @@ func (s *Screen) RemoveSignColumn(id string) {
 	}
 }
 
-// SetSigns replaces the whole sign map, keyed by 0-based buffer line. A nil or empty map
-// clears it. Keys outside the buffer are harmless — nothing looks them up — which is what
-// lets a host set signs computed against a buffer that has since shrunk without having to
-// clamp them first.
-//
-// This does NOT dirty the wrap cache: the column's width depends on whether signs are
-// shown (ShowSigns), never on what is in them, so a recompute on every keystroke costs a
-// map swap and no re-measure.
+// SetSigns replaces the legacy column's signs, keyed by 0-based line (nil clears).
+// Out-of-range lines are harmless. It does not dirty the wrap cache: the column's width
+// depends only on whether it is shown.
 func (s *Screen) SetSigns(signs map[int]Sign) { s.SetSignColumn(legacySignColumn, signs) }
 
-// ShowSigns draws or hides the column. Unlike the line-number gutter it is independent of
-// wrap and of the ctrl+l preference — a host that wants change markers without line
-// numbers should get them — so it has its own flag rather than joining gutterOn.
+// ShowSigns draws or hides the column, independent of wrap and line numbers.
 func (s *Screen) ShowSigns(on bool) {
 	s.ShowSignColumn(legacySignColumn, on)
 }
@@ -160,9 +139,7 @@ func (s *Screen) ToggleSigns() { s.ToggleSignColumn(legacySignColumn) }
 // (as WrapMode and LineNumMode do).
 func (s *Screen) SignsMode() bool { return s.SignColumnMode(legacySignColumn) }
 
-// Signs reads back the map last set. It is the live map, not a copy — a host that hands
-// signs over has given them away and should build a fresh map rather than mutate this
-// one, exactly as it would with the slice behind SetItems.
+// Signs returns the live map last set; build a new map rather than mutating it.
 func (s *Screen) Signs() map[int]Sign {
 	if col := s.signColumns[legacySignColumn]; col != nil {
 		return col.signs
@@ -171,10 +148,7 @@ func (s *Screen) Signs() map[int]Sign {
 }
 
 // EditSeq is the buffer's change generation, bumped by every mutation. A host computing
-// something from the text — a diff, a lint pass — compares it to decide whether its
-// result is still current, which is what the internal search and highlight caches
-// already do with searchSeq and hlSeq. It is the honest debounce key: unlike a timer it
-// cannot be fooled by an edit that arrives while the work is in flight.
+// from the text compares it to tell whether a result is still current.
 func (s *Screen) EditSeq() int { return s.editSeq }
 
 // shownSignColumns returns the enabled columns in their outer-to-inner order. Like

@@ -6,12 +6,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// StatusLine is the default core.Status: a transient, themed one-liner the router draws
-// below the body and auto-clears ~5s after the last write (the router schedules the
-// timer). The generation counter — bumped on Set, read via Gen — lets a newer write
-// override a pending clear, so a stale timer never wipes a fresh message. Supply it via
-// bubblestack.Config.Status, or implement core.Status for a custom element. It is
-// context-agnostic — it names no domain type.
+// StatusLine is the default core.Status: a themed one-liner the router clears about 5s
+// after the last write. Gen lets a newer write outlive an older clear timer.
 type StatusLine struct {
 	msg string
 	gen int

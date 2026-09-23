@@ -7,26 +7,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Composite splices the foreground string fg onto the background bg at cell
-// position (x, y) — column x, row y, both zero-based — and returns the combined
-// frame. It is the primitive behind overlay/popup screens: the router renders the
-// below-screen frame as bg, then Composite-s the popup box (fg) centered over it so
-// the background stays visible around the box.
-//
-// Both strings are treated as grids of lines. For each fg line, the matching bg
-// line is rebuilt as [bg cells before x] + [fg line] + [bg cells from x+width(fg)],
-// so the box punches a hole exactly its own width — wider or narrower bg styling on
-// either side is preserved. All measurement and slicing is display-cell aware
-// (ansi.StringWidth / Truncate / TruncateLeft) so embedded ANSI styling in bg isn't
-// corrupted, and a reset (\x1b[0m) brackets the fg segment so neither side's color
-// bleeds across the seam. fg lines that fall outside bg's rows are dropped.
+// Composite splices fg onto bg at cell (x, y), line by line: each bg line keeps its cells
+// before x and after x+width(fg line), so the box punches a hole exactly its own width.
+// Measurement is cell-aware, resets bracket the fg segment so colors do not bleed, and fg
+// lines beyond bg are dropped.
 func Composite(bg, fg string, x, y int) string {
 	if fg == "" {
 		return bg
 	}
-	if x < 0 {
-		x = 0
-	}
+	x = max(x, 0)
 	bgLines := strings.Split(bg, "\n")
 	for i, fgLine := range strings.Split(fg, "\n") {
 		row := y + i
@@ -50,10 +39,8 @@ func Composite(bg, fg string, x, y int) string {
 	return strings.Join(bgLines, "\n")
 }
 
-// popupStyle is the bordered popup box: a rounded border in the theme accent so the
-// box reads as foreground over the (un-dimmed) screen behind it. rebuildStyles in
-// shared.go does not own it (it has no palette-dependent state beyond the color read
-// at render time), so it is built per call from the current FocusedColor.
+// popupBox is the bordered popup box, a rounded border in the theme accent. It is built
+// per call from the current FocusedColor rather than cached by rebuildStyles.
 func popupBox(width int) lipgloss.Style {
 	s := lipgloss.NewStyle().
 		Padding(1, 2).
@@ -65,10 +52,8 @@ func popupBox(width int) lipgloss.Style {
 	return s
 }
 
-// PopupBox renders body inside a themed, bordered popup box, with an optional accent
-// title line above it. width is the inner content width (0 ⇒ size to content). It is
-// the default renderer for an overlay components.DialogScreen, mirroring (*Shared).Box
-// for the layered case so popups follow the active theme.
+// PopupBox renders body in a themed bordered popup with an optional accent title. width
+// is the inner width (0 sizes to content). It is the overlay DialogScreen's renderer.
 func PopupBox(title, body string, width int) string {
 	content := body
 	if title != "" {

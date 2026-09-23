@@ -7,21 +7,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// LanguageResolver is the host-owned seam between a path and the editing
-// behavior that path should receive. The editor calls it when it is constructed and
-// whenever save-as or SetPath changes its identity. A nil resolver or nil result means
-// literal editing: no pairs, no structured Enter, and no profile-selected highlighting.
+// LanguageResolver maps a path to its editing behavior. The editor calls it on
+// construction and whenever the path changes; nil means literal editing.
 type LanguageResolver func(path string) *LanguageConfig
 
-// LanguageConfig describes language-aware behavior without teaching the editor
-// about any particular language or filename. Configs may be shared: the editor copies
-// their pair tables. NewHighlighter must return an independent instance; the editor
-// calls it for bounded viewport previews and background exact snapshots, and a preview
-// may be created while another instance is parsing off the UI goroutine.
-//
-// IndentSpaces is the profile's automatic block-indent unit. A positive value means
-// that many spaces; zero means one literal tab. Opts.Indent and IndentWidth remain
-// explicit user overrides of this default.
+// LanguageConfig describes language-aware behavior without the editor knowing any
+// language. Configs may be shared (pair tables are copied). NewHighlighter must return an
+// independent instance: previews and background parses may run concurrently.
+// IndentSpaces is the automatic block-indent unit (0 means a tab); Opts overrides it.
 type LanguageConfig struct {
 	NewHighlighter   func() Highlighter
 	AutoClosingPairs []Pair
@@ -29,31 +22,22 @@ type LanguageConfig struct {
 	IndentSpaces     int
 	OnEnter          EnterHandler
 
-	// LineComment is the delimiter that comments out the rest of a line — "//", "#", "--".
-	// It drives both the comment toggle and Enter's continuation of a comment run.
-	//
-	// BlockComment is a wrapping pair the toggle falls back to when LineComment is empty,
-	// because some languages (CSS) have no line form at all. Enter never continues a block
-	// comment: its delimiters are not repeated per line, so there is nothing to carry.
-	//
-	// Either may be unset. A type with neither — JSON, CSV, a diff — has no comment gesture
-	// at all, which is correct rather than a gap.
+	// LineComment ("//", "#", "--") drives the comment toggle and Enter's comment
+	// continuation. BlockComment is the toggle's fallback when there is no line form (CSS);
+	// Enter never continues it. Types with neither have no comment gesture.
 	LineComment  string
 	BlockComment [2]string
 }
 
-// Pair is an opening and closing delimiter. AutoClosingPairs are inserted at an
-// unselected caret; SurroundingPairs wrap an active selection. A language may put the same
-// pair in both lists or make it surrounding-only.
+// Pair is an opening and closing delimiter. AutoClosingPairs are inserted at a caret;
+// SurroundingPairs wrap a selection.
 type Pair struct {
 	Open  rune
 	Close rune
 }
 
-// EnterContext is the immutable buffer view a language's Enter handler receives.
-// Before and After are the current line split at the caret. LeadingIndent is the whole
-// line's raw space/tab prefix, and IndentUnit reflects the editor's live auto/tab/spaces
-// choice, including an alt+i override.
+// EnterContext is what a language's Enter handler sees: Before and After split the line
+// at the caret, LeadingIndent is its raw indent, and IndentUnit is the live indent choice.
 type EnterContext struct {
 	Before        string
 	After         string
@@ -61,25 +45,20 @@ type EnterContext struct {
 	IndentUnit    string
 }
 
-// EnterAction describes the edit Enter performs. Prefix alone is the ordinary
-// structured newline: the editor splits at the caret and heads the new line with it. The
-// two flags cover the shapes a prefix cannot reach. Whichever shape is used, the whole
-// gesture stays one undo step. A handler that returns false leaves Enter a plain split.
+// EnterAction describes what Enter does, as one undo step. Prefix alone heads the new
+// line after a split. A handler returning false leaves Enter a plain split.
 type EnterAction struct {
 	// Prefix heads the new line, ahead of the text the split carried past the caret.
 	Prefix string
 
-	// Block moves that carried text down one line further and leaves the caret on the
-	// empty line between, so Enter inside a bracket pair opens a block instead of pushing
-	// the closer along. Closer is that further line's own prefix — its indentation; the
-	// delimiter itself is text the split already carried, not something named here. An
-	// empty Closer is meaningful, which is why this takes a flag and not a non-empty test.
+	// Block moves the carried text down one more line and leaves the caret on the empty line
+	// between (Enter inside a bracket pair), with Closer as that line's indent. An empty
+	// Closer is valid, hence the flag.
 	Block  bool
 	Closer string
 
-	// Rewrite replaces the caret's whole line with Line and inserts no newline at all,
-	// the caret landing at Line's end. It is how a list handler ends a list on an empty
-	// item: leaving one is a deletion, not a split.
+	// Rewrite replaces the caret's line with Line and inserts no newline (ending a list on an
+	// empty item).
 	Rewrite bool
 	Line    string
 }
@@ -128,22 +107,9 @@ func (s *Screen) applyLanguage(path string) {
 	s.ClearHighlightOverlay()
 }
 
-// RefreshHighlight schedules a fresh parse of the current text without disturbing what is
-// on screen. It exists for a host whose highlighter depends on external state that changed
-// without a buffer edit; nothing in an edit-driven pipeline would otherwise revisit those
-// rows.
-//
-// What it deliberately does NOT do is discard the snapshot. applyLanguage clears hl and
-// hlRows because a language change makes the old parse meaningless; here the old parse is
-// still the best answer available and must keep rendering until the new one is ready.
-// Clearing them instead leaves hlRows nil and hlDirty at 0, which sends every visible row
-// through the fragment preview for a frame — a full-viewport flash on every refresh.
-//
-// The epoch bump discards a parse already in flight, which read the data this refresh
-// supersedes. That cannot wedge the pipeline: handleHighlightReady clears hlParsing before
-// it tests the epoch, and starts another parse on the mismatch path.
-//
-// Cheap and safe to call often: it schedules work rather than doing it.
+// RefreshHighlight schedules a fresh parse without clearing the current highlighting, for
+// highlighters that depend on external state. Keeping the old snapshot until the new one
+// lands avoids a full-viewport flash. The epoch bump discards any parse in flight.
 func (s *Screen) RefreshHighlight() tea.Cmd {
 	if s.hlExplicit || s.hlFactory == nil {
 		return nil
@@ -175,11 +141,8 @@ func leadingWhitespace(line []rune) []rune {
 	return line[:i]
 }
 
-// languageEnter asks the active profile what Enter should do here and applies it through
-// the editor's own mutation helpers. It is called inside the key event's existing history
-// boundary, so however many splices an action costs, they remain one undo operation — each
-// one appends to the same activeEdit. The mutations are ordered so that every later splice
-// sits past the last, which is what makes undo's reverse replay invert them correctly.
+// languageEnter applies the profile's Enter action through the editor's mutation helpers
+// inside the key's history step, ordered so undo replays them correctly.
 func (s *Screen) languageEnter() bool {
 	// A line comment is enough on its own: a profile may declare one and no Enter handler
 	// (TOML, vimscript), and continuing its comments is still right.
@@ -207,13 +170,8 @@ func (s *Screen) languageEnter() bool {
 	return s.applyEnterAction(action, line)
 }
 
-// commentEnter continues a line-comment run onto the next line. It runs BEFORE the profile's
-// own handler because a comment's structure outranks the language's: `// case 1:` is prose
-// that happens to contain a colon, and indenting after it would be reading code that isn't
-// there.
-//
-// An empty comment ends the run by clearing itself, the same exit an empty markdown list item
-// takes — which is what keeps this from ever being something you have to backspace out of.
+// commentEnter continues a line-comment run, ahead of the language handler (`// case 1:`
+// is prose). An empty comment ends the run by clearing itself.
 func (s *Screen) commentEnter(ctx EnterContext, row int) (EnterAction, bool) {
 	if s.lineComment == "" || !strings.HasPrefix(ctx.Before, ctx.LeadingIndent) {
 		return EnterAction{}, false

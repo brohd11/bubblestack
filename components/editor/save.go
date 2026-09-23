@@ -18,33 +18,18 @@ import (
 
 // ---------- save ----------
 
-// saveAsEdit builds the filename prompt both save keys push — the exit prompt's "y"
-// and ctrl+s — a floating line edit seeded with the buffer's full path (an unchanged
-// enter re-saves the same file), its input row covering the y/n/c prompt row — nano's
-// "File Name to Write". Enter saves under the typed name (a different name is a
-// save-as: the buffer takes the new path and title); a blank entry or esc pops back to
-// whatever raised it, so from the exit prompt that prompt is still up and from ctrl+s
-// nothing happened. A relative name resolves against Opts.BaseDir — see resolveSavePath.
-// saveExits, set by the caller before the push, is what decides where the write lands.
+// saveAsEdit builds the filename prompt both save keys push (the exit prompt's "y" and
+// ctrl+s): a floating line edit seeded with the full path, over the prompt row. Enter
+// saves under the typed name (a new name is a save-as); blank or esc pops back to
+// whatever raised it. saveExits, set by the caller, decides where the save leads.
 //
-// A name that DIFFERS from the buffer's own goes through saveAsConfirm first. The box is
-// seeded with the full path, so it is one stray keystroke away from silently moving the
-// document — the buffer, its title, its crumb and the host's idea of which file it is
-// all follow the new name. A first save (no path yet) is not that, and prompts for
-// nothing.
+// A name different from the buffer's goes through saveAsConfirm first, since the seeded
+// path is one keystroke from moving the document. A leading "~" is expanded here so the
+// buffer, title and OnSaved all get the real path; "~user" is refused. Relative names
+// resolve via resolveSavePath.
 //
-// A leading "~" is resolved here, the one place the user's typed text enters, so the
-// buffer takes the RESOLVED path: unexpanded it would reach os.WriteFile as a literal
-// directory named "~" under whatever resolveSavePath anchors to, and the title, the prefill of the next ctrl+s and
-// the path handed to OnSaved would all name a file that isn't where the user asked for
-// it. A "~user" form is refused rather than guessed (strutil.ExpandHome's rule) and the
-// write is abandoned — writing it literally is the very surprise this resolves.
-//
-// The anchor covers the bottom of just this editor: embedded, the host layout
-// pushes the pane's absolute origin and the box spans the pane's width (SetPaneOrigin);
-// standalone there is no pane, so the box spans the full terminal width at the
-// body's bottom — the same look nano's full-width prompt has. y is one row above
-// the prompt row either way (the LineEdit draws its input one row below the anchor).
+// It spans the pane's bottom when embedded (SetPaneOrigin), or the full terminal width
+// standalone, like nano's prompt.
 func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 	x, y, w, h := s.paneGeometry(sh)
 	edit := components.NewLineEdit("file name to write", x, y+max(h-2, 0), w,
@@ -73,16 +58,9 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 	return edit
 }
 
-// resolveSavePath anchors what was typed into the save box. A relative name resolves
-// against baseDir — the directory the HOST opened in, which for gote is its scan root,
-// vault or doc store, and is rarely the shell the binary was launched from. With no
-// baseDir the process cwd still decides, nano's rule, but the result is made absolute
-// either way: path becomes the buffer's identity, and a host that keys its open documents
-// by path must not be handed a string whose meaning depends on a cwd it cannot change.
-//
-// Unlike a host's own confined name boxes, this one is allowed to leave baseDir — ".." is
-// resolved, not refused. The save box is the one that writes anywhere by design; baseDir
-// only says where "here" is, not where the user may go.
+// resolveSavePath makes a typed name absolute, resolving relative names against
+// Opts.BaseDir (else the cwd): the path becomes the buffer's identity, and hosts key
+// documents by path. ".." is allowed; the save box may write anywhere.
 func (s *Screen) resolveSavePath(path string) string {
 	if path == "" || filepath.IsAbs(path) {
 		return path
@@ -96,17 +74,9 @@ func (s *Screen) resolveSavePath(path string) string {
 	return path
 }
 
-// saveAsConfirm is the y/n step between a NEW name in the save-as box and the write.
-// This is a save-as, not a rename: the write creates the new file and the BUFFER moves to
-// it, while the old file stays on disk holding whatever was last saved to it. Both halves
-// are worth stating before the y — the second is the one that surprises, since the
-// document appears to have moved and a copy is left behind.
-//
-// It is pushed OVER the save-as box rather than replacing it so cancelling returns to the
-// name still typed there: the reason to say no is usually a typo, and a confirm that
-// threw the name away would make correcting one mean retyping the whole path. Both
-// overlays composite (Router.overlayBase walks the whole chain), so the box stays visible
-// under the modal. Yes pops both levels before the write.
+// saveAsConfirm is the y/n step before saving under a new name: the buffer moves to the
+// new file and the old one keeps its last saved contents. It is pushed over the save-as
+// box, so "no" returns to the typed name for correction. Yes pops both first.
 func (s *Screen) saveAsConfirm(path string) *components.DialogScreen {
 	target := filepath.Base(path)
 	if filepath.Dir(path) != filepath.Dir(s.path) {
@@ -127,9 +97,8 @@ func (s *Screen) saveAsConfirm(path string) *components.DialogScreen {
 	}
 }
 
-// paneGeometry is the editor's assigned outer rectangle in absolute terminal cells.
-// Unlike s.h it does not shrink when a search bar is visible, so every bottom-edge
-// overlay stays pinned to the pane rather than drifting up with the text viewport.
+// paneGeometry is the editor's outer rectangle in absolute cells. It ignores the search
+// bar, so bottom-edge overlays stay pinned to the pane.
 func (s *Screen) paneGeometry(sh *core.Shared) (x, y, w, h int) {
 	x, y, w, h = 0, sh.BodyY(), sh.Width(), s.paneH
 	if s.hasOrigin {
@@ -148,10 +117,8 @@ func (s *Screen) paneW() int {
 	return w
 }
 
-// applySaveName points the buffer at name: a save-as renames it, so the title bar,
-// crumb and host-resolved editing behavior follow the new identity. An explicit
-// highlighter or indent width passed through Opts is a deliberate override and a
-// rename must not undo it.
+// applySaveName points the buffer at name after a save-as; title, crumb and language
+// behavior follow. Explicit Opts overrides survive.
 func (s *Screen) applySaveName(name string) tea.Cmd {
 	if name == s.path {
 		return nil
@@ -166,19 +133,13 @@ func (s *Screen) applySaveName(name string) tea.Cmd {
 	return s.startHighlightParse()
 }
 
-// SetPath points the buffer at path after the file moved underneath it — the host
-// renamed it on disk, as opposed to the save-as applySaveName otherwise serves. The
-// buffer, its dirty flag and its undo history are untouched: only the identity moves,
-// which is exactly what keeps the next ctrl+s from re-creating the old file. The load
-// flag is deliberately left set — a rename does not make the new path worth reading, and
-// re-reading it on a later pane swap would undo everything this method promises.
+// SetPath follows a file the host renamed on disk: only the identity moves (buffer, dirty
+// flag and history are kept), so the next ctrl+s does not recreate the old file. The
+// loaded flag stays set, so nothing is re-read.
 func (s *Screen) SetPath(path string) tea.Cmd { return s.applySaveName(path) }
 
-// saveCmd snapshots the buffer and its revision and writes it to Path asynchronously
-// (IO in the cmd lane); the result arrives as an editorSavedMsg. An empty path is an error — a
-// scratch buffer has nowhere to save to. Parent directories are created: a save-as
-// names a LOCATION, and refusing one because a folder in it doesn't exist yet would
-// make the box ask for something it won't accept.
+// saveCmd writes a snapshot of the buffer to Path asynchronously, reporting an
+// editorSavedMsg. An empty path is an error. Missing parent directories are created.
 func (s *Screen) saveCmd() tea.Cmd {
 	path := s.path
 	revision := s.revision

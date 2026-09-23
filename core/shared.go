@@ -5,21 +5,14 @@ import (
 	"charm.land/bubbles/v2/spinner"
 )
 
-// Shared holds the cross-cutting state owned by the router: the consumer's own
-// context (App), terminal size, the spinner, a help model for rendering static help
-// bars, and the optional Chrome (header/status/output — see chrome.go). A single
-// instance is created in NewShared and pointed at by the router; screens receive it
-// as a method argument. The framework names no domain type: App carries whatever
-// struct the consumer wants (recover it typed with App[T]); the header renderer and
-// output pane ride on Chrome. Per-screen streams (a task's event channel) belong to
-// the screen, not here — anything parked on Shared is shared with every screen.
+// Shared is the cross-cutting state the router owns and passes to every screen: the
+// app's context (App, read with App[T]), terminal size, spinner, static help model and
+// optional Chrome. Per-screen state (a task's channel) belongs on the screen.
 type Shared struct {
 	App    any     // consumer-owned context; recover it with App[T]
 	Chrome *Chrome // optional header/status/output furniture (nil ⇒ fullscreen)
-	// SaveListDensity is wired by bubblestack.Run for participating apps. Standard
-	// lists call it once per user toggle of the app-owned preference. Nil keeps
-	// direct component/router hosts free of persistence side effects. Save failures
-	// do not prevent the live density change, matching theme persistence.
+	// SaveListDensity persists density toggles for participating apps (set by Run); nil
+	// means no persistence. A save failure does not block the change.
 	SaveListDensity func(compact bool) error
 
 	width  int
@@ -47,10 +40,8 @@ func NewShared(app any) *Shared {
 	}
 }
 
-// Log appends a line to the output pane when one is present and supports logging
-// (the default LogPane does), and is a no-op for a chromeless app or a non-logging
-// Output — so context-agnostic callers (e.g. the task screen) needn't know the pane
-// type or whether chrome exists.
+// Log appends a line to the output pane when it supports logging, and is a no-op
+// otherwise.
 func (s *Shared) Log(line string, forceShow ...bool) {
 	if s.Chrome == nil || s.Chrome.Output == nil {
 		return
@@ -61,9 +52,8 @@ func (s *Shared) Log(line string, forceShow ...bool) {
 	}
 }
 
-// WriteStatus sets the transient status line. Meant to be used with core.SetStatus,
-// where a timer will be started to clear after 5s. No-op without chrome.
-// variadic params: log=false forceShow=false
+// WriteStatus sets the status line directly (core.SetStatus also arms the clear timer).
+// Optional flags: log (default false), forceShow (default false). No-op without chrome.
 func (s *Shared) WriteStatus(line string, logParams ...bool) {
 	if s.Chrome == nil {
 		return
@@ -88,17 +78,13 @@ func (s *Shared) ClearStatus() {
 // sites use. Migrate selected sites to WriteStatus(line, true) to also log the line.
 func (s *Shared) SetStatus(msg string) { s.WriteStatus(msg) }
 
-// App recovers the consumer's context from a Shared, type-asserted to *T. The
-// consumer stores a *T in NewShared and reads it back here, so the framework stays
-// domain-agnostic while tabs get a typed handle: c := core.App[MyCtx](sh).
+// App returns the consumer's context as *T: c := core.App[MyCtx](sh).
 func App[T any](s *Shared) *T { return s.App.(*T) }
 
 // Width reports the current terminal width, so a Header closure can size/truncate
 // its content to fit (see HeaderInnerWidth).
 func (s *Shared) Width() int { return s.width }
 
-// BodyY is the terminal row the active screen's body starts at (the height of the
-// chrome above it), maintained by the router on every resize. MouseMsg coordinates
-// are absolute terminal rows, so a screen that hit-tests its own layout subtracts
-// BodyY first.
+// BodyY is the terminal row where the body starts. Mouse rows are absolute, so a screen
+// hit-testing its own layout subtracts it.
 func (s *Shared) BodyY() int { return s.bodyY }

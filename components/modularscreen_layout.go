@@ -19,16 +19,10 @@ const (
 	LayoutVertical                     // children above one another
 )
 
-// LayoutNode is either a Slot leaf or a group of Children. Size fixes this
-// node's extent in cells along its parent's axis; zero uses Weight (default 1).
-// A leaf's Slot.Weight supplies the default when its node Weight is unset.
-// Groups fill their allocated rectangle, and leaves are padded/clipped to it.
-// Slot.ExpandV/H remain useful for the original column-layout constructor;
-// a composable layout allocates all space directly through its split weights.
-//
-// ID names a group in ResizeState.Splits. Use stable IDs when groups can be
-// hidden or reordered; unnamed groups use their structural path. IDs must be
-// unique. Mixing a Slot with Children is a programming error.
+// LayoutNode is a Slot leaf or a group of Children. Size fixes its extent along the
+// parent's axis; otherwise Weight shares the space (default 1, or the leaf's Slot.Weight).
+// ID names a group in ResizeState.Splits (unnamed groups use their path); IDs must be
+// unique. A node with both Slot and Children is a programming error.
 type LayoutNode struct {
 	ID       string
 	Slot     *Slot
@@ -41,9 +35,8 @@ type LayoutNode struct {
 	Weight    float64
 }
 
-// SplitState records a group's child allocations, in declaration order. Sizes
-// uses the same fixed/weighted encoding as LayoutNode.Size; Weights controls
-// only children whose Size is zero. A mismatched child count restores defaults.
+// SplitState records a group's child sizes in declaration order, encoded like
+// LayoutNode.Size. A mismatched count restores the defaults.
 type SplitState struct {
 	Sizes   []int
 	Weights []float64
@@ -65,10 +58,8 @@ type layoutBranch struct {
 	fixed       bool
 }
 
-// NewModularLayout builds one screen over a tree of horizontal/vertical splits.
-// Only leaves are input targets; groups never introduce nested screen updates.
-// ColWidths and the legacy positional resize fields belong to NewModularScreen;
-// composable layouts declare widths in nodes and restore ResizeState.Splits.
+// NewModularLayout builds a screen over a tree of splits; only leaves take input.
+// Widths come from the nodes, and ResizeState.Splits restores adjustments.
 func NewModularLayout(root LayoutNode, opts ModularOpts) *ModularScreen {
 	s := NewModularScreen(nil, opts)
 	s.layoutGroups = make(map[string]*layoutBranch)
@@ -262,9 +253,9 @@ func (g *layoutBranch) splitLengths(total int, mins []int) []int {
 	return out
 }
 
-// splitLengths honors fixed cells and weighted space, freezing children at their
-// minimum before distributing the rest. If even minima cannot fit, scale them
-// down rather than allocating outside the terminal. The final child takes rounding.
+// splitLengths allocates fixed cells, then weighted space, holding children at their
+// minimum; if even the minima do not fit they are scaled down. The last child takes the
+// rounding.
 func splitLengths(total int, sizes []int, weights []float64, mins []int) []int {
 	n := len(sizes)
 	out := make([]int, n)

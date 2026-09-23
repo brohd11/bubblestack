@@ -6,18 +6,11 @@ import (
 	"charm.land/bubbles/v2/list"
 )
 
-// This file holds the standard Actions menu: the small picker an app opens with "a"
-// for the chores every bubblestack app shares — switch the theme, browse the docs,
-// self-update, refresh. It was extracted from repoview's actions.go when golaunch
-// grew the same menu; keeping it here means a new app gets the whole sheet (and the
-// shared self-update flow behind it) for one function call.
+// The standard Actions menu an app opens with "a": theme, docs, self-update, refresh.
 
-// NewActionsMenu builds the standard Actions picker: ◑ Theme, then ? Docs when the
-// app has docs pages (DocsItem — nil/empty docs ⇒ no row), then any app-specific
-// rows, then ⟲ Update <app> and ⟳ Refresh. refreshDesc/refresh are the app's own
-// rescan row (what its global Refresh key fires, described in its terms).
-// PopStop marks the menu as the hub its sub-flows (the theme picker, the update
-// flow) return to.
+// NewActionsMenu builds the Actions picker: Theme, Docs (when docs has pages), any app
+// rows, Update <app>, and Refresh (the app's own rescan, described by refreshDesc). It is
+// a PopStop hub its sub-flows return to.
 func NewActionsMenu(hooks SelfUpdateHooks, refreshDesc string, refresh func(*core.Shared) core.Action, docs []DocPage, extra ...list.Item) *PickerScreen {
 	items := []list.Item{
 		Item{

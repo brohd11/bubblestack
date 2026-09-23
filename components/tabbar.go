@@ -15,9 +15,8 @@ type TabItem struct {
 	ID, Label, Marker string
 }
 
-// TabBar is a single-row, horizontally scrolling panel. It deliberately does
-// not take keyboard focus: the host owns shortcuts and activates Click's ID.
-// Labels and markers are plain text; styles read the current framework theme.
+// TabBar is a single-row, horizontally scrolling panel that never takes focus; the host
+// owns the keys and activates the clicked ID.
 type TabBar struct {
 	items                []TabItem
 	active               string
@@ -122,7 +121,7 @@ func (p *TabBar) View(bool) string {
 		return ""
 	}
 	cells, left, right := p.cells()
-	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
+	muted := core.MutedStyle()
 	active := lipgloss.NewStyle().Foreground(core.OnFocusedColor).Background(core.FocusedColor).Bold(true)
 	var row strings.Builder
 	x := 0

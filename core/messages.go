@@ -2,17 +2,15 @@ package core
 
 // ---------- messages ----------
 
-// ctrlMsg marks the framework's control messages — the ones the router applies to the
-// navigation stack synchronously (rather than dispatching to the active screen). Screens
-// return these in the control-message lane of Update; the marker lets the router also
-// recognize them when they arrive via the queue (an async cmd's result, Init, a batch).
+// ctrlMsg marks the control messages the router applies to the stack synchronously,
+// whether returned from Update or arriving via the queue.
 type ctrlMsg interface{ isCtrl() }
 
 func (propagateMsg) isCtrl()   {}
 func (statusSetMsg) isCtrl()   {}
 func (statusClearMsg) isCtrl() {}
 
-// statusSetMsg used to set the status, will automatically append a timer to the outgoing cmds
+// statusSetMsg sets the status line; the router schedules its clear timer.
 type statusSetMsg struct {
 	str       string
 	wrLog     bool
@@ -31,25 +29,16 @@ func SetStatusAndLog(line string, forceShow ...bool) Action {
 // StatusErr is shorthand for the ubiquitous SetStatusAndLog("error: " + err.Error()).
 func StatusErr(err error) Action { return SetStatusAndLog("error: " + err.Error()) }
 
-// SeqErr reports err on the status line, then runs the given actions — shorthand for
-// Seq(StatusErr(err), then...). Variadic so callers can append any nav/async tail
-// (ResetToRoot, Pop, an extra status line, …), or none.
+// SeqErr reports err on the status line, then runs then.
 func SeqErr(err error, then ...Action) Action {
 	return Seq(append([]Action{StatusErr(err)}, then...)...)
 }
 
-// statusClearMsg is the router's auto-clear timer firing for the status line: a tick
-// scheduled when the status's generation advances (a fresh write). It clears the
-// status only if gen still matches the current generation, so a newer write (which
-// bumped the generation) leaves the stale tick a no-op. Resolved on the control path
-// like the other ctrlMsgs (see router.applyCtrl).
+// statusClearMsg is the status auto-clear timer; it clears only if gen is still current.
 type statusClearMsg struct{ gen int }
 
-// TaskEvent streams a streaming task's progress (one line per event) and its
-// terminating done event (with any error and an opaque result Payload). Produced by
-// a consumer's task command, consumed by the task screen; the framework only routes
-// it, so Payload carries whatever the consumer's onDone needs (recover it with a
-// type assertion). Fields are exported for cross-package use.
+// TaskEvent is one progress line of a streaming task, or its final Done event with an
+// error and an opaque Payload for onDone.
 type TaskEvent struct {
 	Line    string
 	Done    bool
@@ -57,14 +46,9 @@ type TaskEvent struct {
 	Payload any // consumer-defined result for the terminating (Done) event
 }
 
-// propagateMsg carries an opaque payload the router broadcasts to every Receiver
-// (PropagateAll). The router never interprets the payload — each screen type-switches
-// on payloads it recognizes — so no new router case is needed per notification kind.
+// propagateMsg carries an opaque payload broadcast to every Receiver.
 type propagateMsg struct{ payload any }
 
-// MsgThemeChanged is the broadcast payload announcing the active theme changed (after
-// SetTheme). ApplyTheme raises it via PropagateAll, so the router only routes it — it's
-// not a control message. A consumer's App (or any Receiver) recognizes it and typically
-// returns RefreshRoots() to rebuild the cached tab roots with the new palette, so the
-// consumer owns that policy rather than the framework hard-coding it.
+// MsgThemeChanged is broadcast by ApplyTheme. An App typically answers it with
+// RefreshRoots().
 type MsgThemeChanged struct{}

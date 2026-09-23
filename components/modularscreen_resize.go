@@ -19,10 +19,8 @@ type ResizeOpts struct {
 	OnChange func(ResizeState)
 }
 
-// ResizeState is a snapshot of one layout's adjusted proportions. Its slices
-// are positional in the same column and slot order used to build the screen.
-// Cols uses ModularOpts.ColWidths' encoding: a positive cell width is fixed and
-// zero is flex. Flex entries are meaningful only for flex columns.
+// ResizeState snapshots a layout's adjusted proportions, positional in the build order.
+// Cols uses ColWidths' encoding (positive fixed, zero flex).
 type ResizeState struct {
 	// Splits stores composable-layout groups by stable ID. Column layouts keep
 	// using Cols, Flex and Rows.
@@ -355,9 +353,8 @@ func (s *ModularScreen) relayout() {
 	}
 }
 
-// invalidateLayout tells the next SetSize that the grid has moved under it even though
-// the terminal has not. Every path that edits a column width, a flex share or a row
-// share goes through applyDelta or applyResizeState, and both call this.
+// invalidateLayout makes the next SetSize re-lay-out at the same terminal size.
+// applyDelta and applyResizeState both call it.
 func (s *ModularScreen) invalidateLayout() { s.layoutDirty = true }
 
 func (s *ModularScreen) resizeKeyMatches(k string) bool {
@@ -383,9 +380,8 @@ func (s *ModularScreen) SetResizing(resizing bool) {
 // Resizing reports whether the keyboard resize mode is active.
 func (s *ModularScreen) Resizing() bool { return s.resizing }
 
-// Nudge moves the focused pane's trailing edge, or its leading edge when the
-// pane is the last sibling on that axis. dw and dh are physical edge movement
-// in terminal cells, so moving the leading edge right narrows the final pane.
+// Nudge moves the focused pane's trailing edge (its leading edge for the last sibling)
+// by dw, dh cells.
 func (s *ModularScreen) Nudge(dw, dh int) {
 	if s.resize == nil || s.focus < 0 {
 		return

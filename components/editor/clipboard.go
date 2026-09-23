@@ -9,11 +9,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Clipboard verbs for Screen: the alt+c/alt+x/alt+v chords and the optional
-// right-click menu behind them. With no selection they act on the cursor's line — the
-// whole-line shorthand, kept for when nothing is highlighted; a selection (shifted
-// motions or the mouse) is what they act on otherwise.
+// Clipboard verbs for Screen: the alt+c/x/v chords and the optional right-click menu.
+// With no selection they act on the caret's line.
 
+// copySelectionCmd writes the clipboard off the UI thread: atotto shells out to
+// pbcopy/xclip, which must not run inside Update.
 func copySelectionCmd(text string, cut bool) core.Action {
 	return core.Async(func() tea.Msg {
 		return editorCopiedMsg{n: utf8.RuneCountInString(text), err: writeEditorClipboard(text), cut: cut}
@@ -29,14 +29,9 @@ func pasteClipboardCmd(target *Screen) core.Action {
 	})
 }
 
-// editMenu builds the right-click menu: the three clipboard verbs, then whatever the host
-// hung off Opts.ContextItems below a rule. x and y are the pressed cell in ABSOLUTE
-// terminal cells (absCell converts); AnchorBelow is what keeps the box off that cell.
-//
-// Copy and Cut are disabled without a selection, because that state is free to know. Paste
-// never is: finding out whether the clipboard holds anything means platform IO and so
-// cannot happen on the render tick. An empty clipboard is
-// therefore a live row that pastes nothing.
+// editMenu builds the right-click menu: the clipboard verbs, then Opts.ContextItems below
+// a rule. x, y are absolute cells. Copy and Cut are disabled without a selection; Paste is
+// always enabled, since checking the clipboard needs IO.
 func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 	sel := s.selectionActive()
 	items := []components.MenuItem{
@@ -55,22 +50,14 @@ func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 	return components.NewMenu(components.MenuOpts{Items: items, Anchor: components.AnchorBelow(x, y)})
 }
 
-// copySelection is the MENU's Copy and Cut: copyOrCut with the Pop that closes the menu
-// in front of it. The rows are disabled without a selection, so the line fallback below
-// never fires from here.
+// copySelection is the menu's Copy and Cut: copyOrCut after popping the menu.
 func (s *Screen) copySelection(cut bool) core.Action {
 	return core.Seq(core.Pop(), s.copyOrCut(cut))
 }
 
-// copyOrCut is both verbs for both entry points (the alt+c/alt+x chords and the menu
-// rows). A cut deletes before the write completes, on purpose: undo covers a failed
-// write, whereas holding the deletion until the clipboard round trip returns would race
-// the buffer the user can go on editing.
-//
-// Without a selection the target is the whole current line, its newline included, rather
-// than an inert chord. It is what an editor with the same chords does, and it keeps a
-// cut+paste a line move — worth keeping now that shifted motions mean the caret is no
-// longer the only thing the keyboard can offer.
+// copyOrCut backs both verbs from chords and menu. A cut deletes before the write
+// completes (undo covers a failed write). Without a selection it takes the whole line,
+// newline included, so cut and paste moves a line.
 func (s *Screen) copyOrCut(cut bool) core.Action {
 	if s.selectionActive() {
 		text := s.selectedText()
@@ -86,11 +73,8 @@ func (s *Screen) copyOrCut(cut bool) core.Action {
 	return copySelectionCmd(text, cut)
 }
 
-// deleteLine removes the cursor's whole line, newline included, leaving the caret at the
-// start of whatever slid up into its place. The last line has no newline after it to
-// remove, so it takes the one BEFORE it and the caret lands at the end of the previous
-// line; the only line has neither and is emptied in place, since the buffer may never
-// hold zero lines.
+// deleteLine removes the caret's line and newline (the preceding newline for the last
+// line; the only line is emptied, since the buffer is never empty).
 func (s *Screen) deleteLine() {
 	switch {
 	case s.curY+1 < len(s.lines):
@@ -106,9 +90,8 @@ func (s *Screen) deleteLine() {
 	}
 }
 
-// editAtomic runs one buffer mutation as a single undo step from outside key(). key()'s
-// own transaction can't be reused because a menu's Pick never passes through it. A no-op
-// records no changes and therefore leaves the undo stack alone.
+// editAtomic runs one mutation as a single undo step from outside key() (a menu Pick
+// never passes through it). A no-op leaves the undo stack alone.
 func (s *Screen) editAtomic(mutate func()) {
 	entry := s.beginHistory()
 	mutate()
@@ -118,17 +101,3 @@ func (s *Screen) editAtomic(mutate func()) {
 	s.wrapDirty = true
 	s.clampScroll()
 }
-
-// key routes one keystroke. After the exit prompt, the active language profile's Enter
-// hook may handle that one gesture; returning false preserves the ordinary newline.
-// Editor-local keys are matched as raw strings: ctrl+x / tab / enter are this
-// screen's own keys with no core.Keys binding, and the arrows
-// match only the raw keycodes (not the k/j/h/l alternates core.Keys.Up et al. carry
-// — those letters must stay typable). The word/line editing combos mirror
-// bubbles/textinput's KeyMap verbatim (alt+←→ word jumps, alt+⌫ word delete,
-// ctrl+u/k line deletes, ctrl+a/e line ends, ctrl+h/d char-delete aliases) so the
-// editor behaves like the form field. shift+tab is kept as an alias for tab: it is
-// what a form binds to PrevField, so the finger that reaches for it in a field
-// shouldn't do nothing here. The alias only reaches this switch on a STANDALONE
-// editor — in a ModularScreen pane shift+tab is a PaneNext keycode and the host
-// consumes it before the panel is offered anything (see core.Keys.PaneNext).

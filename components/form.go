@@ -10,16 +10,10 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// FormScreen is the reusable, item-driven form: a column of self-rendering fields
-// with one focused at a time. It owns only the generic key handling — field-focus
-// cycling, the QueryUpdate typing split, Back/Left/Right/Select dispatch, and the
-// titled box — while each field carries its own behavior, the same inversion as the
-// self-dispatching Item list row (see internal/tui/doc.go). A tab/flow supplies the
-// fields and an OnSubmit closure; FormScreen names no domain type.
-//
-// The field types (FormField + TextField/TextAreaField/ToggleField/CheckField/
-// PickField/StaticField) and the optional interfaces (Toggler/Activator/Growable/
-// editable/valued) live in form_fields.go.
+// FormScreen is a column of self-rendering fields with one focused. It owns the generic
+// key handling (focus cycling, the QueryUpdate typing split, Back/Left/Right/Select) and
+// the titled box; each field carries its own behavior, and the caller supplies the fields
+// and OnSubmit. Field types and optional capabilities are in form_fields.go.
 
 type FormOpts struct {
 	Title      string // optional in-body title bar (core.WithTitle); omitted ⇒ no bar
@@ -30,9 +24,8 @@ type FormOpts struct {
 	Focus      string // initial focused field key; default first focusable
 	OnSubmit   func(*core.Shared, *FormScreen) core.Action
 	OnCancel   func(*core.Shared) core.Action // Back handler; defaults to a plain Pop
-	// OnKey claims extra keys before the form's default handling: it returns
-	// (action, true) for a key it handles, or (_, false) to let the form process it
-	// normally. Consumers must only claim non-text keys so editing still works.
+	// OnKey claims extra keys before the form's own handling ((act, true) to take one). Only
+	// claim non-text keys, so editing still works.
 	OnKey func(*core.Shared, string) (core.Action, bool)
 	// Overlay draws the form as a centered modal over the screen below it. Width is
 	// the popup's inner content width; zero uses a compact terminal-relative default.
@@ -102,10 +95,8 @@ func (f *FormScreen) firstFocusable() int {
 
 func (f *FormScreen) current() FormField { return f.fields[f.focus] }
 
-// editable returns the focused field's text capability, or nil if it isn't a text
-// field. The comma-ok discard matters: it yields the interface's zero value (a true
-// nil) on a failed assertion, where returning f.current().(editable) directly could
-// box a typed nil that compares != nil.
+// editable returns the focused field's text capability, or a true nil (the comma-ok form
+// avoids returning a typed nil).
 func (f *FormScreen) editable() editable {
 	e, _ := f.current().(editable)
 	return e
@@ -158,9 +149,8 @@ func (f *FormScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 			return f, core.Action{}
 		}
 	case core.MatchKey(k, core.Keys.Toggle):
-		// Space flips the focused field in place — the checkbox key. On a multi-option
-		// ToggleField it steps forward, the same as Right. A focused *text* field never
-		// reaches here: QueryUpdate diverts space into it above the switch.
+		// Space flips a Toggler in place (steps a multi-option toggle forward). A focused text
+		// field never gets here: QueryUpdate takes the space first.
 		if t, ok := f.current().(Toggler); ok {
 			t.OnToggle(true)
 			return f, core.Action{}
@@ -248,18 +238,10 @@ func (f *FormScreen) Focus(key string) tea.Cmd {
 // FocusedKey is the key of the currently focused field.
 func (f *FormScreen) FocusedKey() string { return f.current().Key() }
 
-// FieldAnchor is the dropdown anchor for the field with the given key: a menu opens on
-// the row below it and flips clear above it when the body is short (AnchorBelow), with
-// its left edge under the field's value column. false when the key is absent, so a
-// caller can fall back rather than anchor at a cell that means nothing.
-//
-// The rows above the field are MEASURED, not assumed one apiece — the same reason
-// SetSize measures — so a note or toggle that folds onto a second row moves the anchor
-// with it instead of leaving the menu a row high.
-//
-// Only correct for a form that owns the whole body: the anchor is Shared.BodyY() plus
-// the box's own origin, where a form nested in a ScreenPanel would need its pane origin
-// instead. That's the same seam editor.Screen crosses with absCell.
+// FieldAnchor is the dropdown anchor for field key: below the row (above when the body is
+// short), left edge under the value column. The rows above are measured, so folded rows
+// are accounted for. false when the key is absent. Only correct for a form filling the
+// body; a nested form would need its pane origin.
 func (f *FormScreen) FieldAnchor(sh *core.Shared, key string) (MenuAnchor, bool) {
 	bx, by := core.BoxOrigin()
 	// Measured, matching chromeRows: WithTitle on an empty body is the title bar plus
@@ -279,10 +261,8 @@ func (f *FormScreen) FieldAnchor(sh *core.Shared, key string) (MenuAnchor, bool)
 	return MenuAnchor{}, false
 }
 
-// SetFocused implements FocusableScreen: a host (ScreenPanel) tells the form
-// whether its panel holds focus, and the box border carries the signal —
-// accented when focused, plain when a sibling pane has it. Field-level focus
-// (the row marker) is unaffected.
+// SetFocused implements FocusableScreen: the box border is accented while the form's
+// panel holds focus.
 func (f *FormScreen) SetFocused(focused bool) { f.focused = focused }
 
 func (f *FormScreen) View(sh *core.Shared) string {
@@ -308,14 +288,8 @@ func (f *FormScreen) HelpView(sh *core.Shared) string {
 }
 
 func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
-	// Every field gets the box's inner width and subtracts its own marker and label, so no
-	// constant here has to know the widest label in the form. Source it from sh rather than
-	// the width parameter: View renders through sh.Box, and taking both from the same place
-	// is what stops the sizing and the rendering from drifting apart.
-	//
-	// Widths for *all* fields before measuring any of them — a field's height is a function
-	// of its width, so a measurement taken before the last SetInnerWidth would budget
-	// against a stale layout.
+	// Give every field the box's inner width (from sh, the same source View renders with)
+	// before measuring any height, since heights depend on widths.
 	inner := sh.BoxInnerWidth()
 	if f.overlay {
 		available := max(width-6, 1) // PopupBox border plus two-column padding.
@@ -336,11 +310,8 @@ func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 	if len(growers) == 0 {
 		return
 	}
-	// What the form spends on everything but a grower's *extra* rows: its own frame, plus
-	// each field's real height — a grower counting as its first row only, since the rest is
-	// exactly what's being budgeted. Measured rather than assumed one-per-field: a toggle
-	// or a note can legitimately fold onto a second row, and a budget blind to that would
-	// hand the growers rows the box doesn't have.
+	// Budget growers against everything else's measured height (the frame plus each field,
+	// growers counted at one row), since toggles and notes may fold.
 	fixed := f.chromeRows(sh)
 	if f.overlay {
 		// Measure the popup's own border/padding/title against one placeholder body
@@ -363,10 +334,8 @@ func (f *FormScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 	}
 }
 
-// chromeRows is what the form's frame costs: the box border/padding/margin plus the
-// optional title bar. Measured rather than hardcoded, so a change to boxStyle or
-// RenderTitleBar can't silently un-clamp a growable field. Box("") still carries one
-// content line, so subtract it.
+// chromeRows is the frame's cost (box border, padding, margin and title bar), measured so
+// style changes cannot un-clamp growers. Box("") carries one content line, subtracted.
 func (f *FormScreen) chromeRows(sh *core.Shared) int {
 	return lipgloss.Height(core.WithTitle(f.title, sh.Box(""))) - 1
 }

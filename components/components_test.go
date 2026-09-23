@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
-	"github.com/brohd11/bubblestack/internal/tuitest"
+	"github.com/brohd11/bubblestack/tuitest"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -614,7 +614,7 @@ func TestPickerDensityKeepsCursorAndFilter(t *testing.T) {
 	}
 }
 
-// TestPickerCompactClickSelectsClickedRow guards the listDispatchRows swap: a compact list
+// TestPickerCompactClickSelectsClickedRow guards the dispatch row height: a compact list
 // hit-tested with the three-row constant would select a row three places off.
 func TestPickerCompactClickSelectsClickedRow(t *testing.T) {
 	p, sh := densityPicker(t, PickerOpts{Compact: true})

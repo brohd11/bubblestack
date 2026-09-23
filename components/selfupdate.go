@@ -10,16 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// This file holds the shared self-update TUI flow, extracted from two near-identical
-// copies — gdaddon's internal/tui/tabs/actions/selfupdate.go and repoview's
-// internal/app/update.go — that differed only in the app name, the repo they check,
-// and the install destination. It stays app-agnostic on purpose: components must not
-// depend on the goutil self-update library (a sibling module), so the app injects its
-// release check and install operations as SelfUpdateHooks and this file owns everything
-// else — the screens, the navigation, the timeout, and the message strings. Apps that
-// do use goutil's self-update library should build their hooks via the bridge package
-// bubblestack/selfupdate (the one sanctioned exception to that rule) instead of
-// wiring goutil themselves.
+// The shared self-update TUI flow. It does not import goutil's selfupdate: apps inject
+// the release check and install as SelfUpdateHooks, usually built by bubblestack/selfupdate.
 
 // SelfUpdateInfo mirrors the outcome of a release check.
 type SelfUpdateInfo struct {
@@ -28,9 +20,9 @@ type SelfUpdateInfo struct {
 	Available bool
 }
 
-// SelfUpdateHooks wires an app's self-update machinery into the shared flow:
-// AppName is used in crumbs/status lines; Check fetches the latest release info
-// (off the UI thread, ctx carries the timeout); Apply downloads+installs info.LatestTag.
+// SelfUpdateHooks wires an app into the shared self-update flow: AppName for messages,
+// Check to fetch the latest release (off the UI thread, ctx carries the timeout), Apply
+// to install it.
 type SelfUpdateHooks struct {
 	AppName string
 	Check   func(ctx context.Context) (SelfUpdateInfo, error)
@@ -48,9 +40,8 @@ type selfUpdateInfoMsg struct {
 	err  error
 }
 
-// NewSelfUpdateLoading is the entry point of the Actions ▸ Update <app> flow:
-// loading → confirm → task. It runs hooks.Check off the UI thread; when an update
-// exists it opens the confirm, otherwise it reports "up to date" and pops.
+// NewSelfUpdateLoading starts the Actions ▸ Update flow: check, then confirm and install,
+// or report "up to date".
 func NewSelfUpdateLoading(hooks SelfUpdateHooks) *LoadingScreen {
 	cmd := func(parent context.Context) tea.Cmd {
 		return func() tea.Msg {
@@ -86,9 +77,8 @@ func newSelfUpdateConfirm(hooks SelfUpdateHooks, info SelfUpdateInfo) *DialogScr
 	})
 }
 
-// newSelfUpdateTask downloads and installs the new binary over the running one, then pops
-// back to the Actions root. The running process keeps the old code in memory, so it reports
-// that a relaunch picks up the new binary.
+// newSelfUpdateTask installs the new binary over the running one and pops back to
+// Actions; a relaunch picks it up.
 func newSelfUpdateTask(hooks SelfUpdateHooks, info SelfUpdateInfo) *TaskScreen {
 	run := func(ctx context.Context, sh *core.Shared, report func(string, ...any), done chan<- core.TaskEvent) {
 		done <- core.TaskEvent{Done: true, Err: hooks.Apply(ctx, info, report)}
@@ -108,11 +98,8 @@ func newSelfUpdateTask(hooks SelfUpdateHooks, info SelfUpdateInfo) *TaskScreen {
 	return NewTask("updating "+hooks.AppName+"…", run, onDone)
 }
 
-// SelfUpdateCheckCmd is the app-level startup command (wired onto bubblestack Config.Init):
-// it runs hooks.Check off the UI thread and, only when an update is available, writes an
-// "update available" line to the shared status line and log. Anything else (up to date,
-// dev build, fetch error) is silent. The returned Action rides back on the cmd's tea.Msg
-// and is applied by the router.
+// SelfUpdateCheckCmd is the startup check: it reports on the status line only when an
+// update is available.
 func SelfUpdateCheckCmd(hooks SelfUpdateHooks) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), selfUpdateCheckTimeout)

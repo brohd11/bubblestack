@@ -12,20 +12,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// FormField is one row of a FormScreen. It renders its own row (marker + label +
-// content) so the form just stacks them. Key is a stable identifier used by the
-// form's Value/SetValue/Focus lookups; non-focusable rows (headings/notes/spacers)
-// return false from Focusable and are skipped by field navigation.
+// FormField is one row of a FormScreen, rendering its own marker, label and content. Key
+// identifies it for Value/SetValue/Focus; non-focusable rows (headings, notes) are
+// skipped by navigation.
 type FormField interface {
 	Key() string
 	Focusable() bool
 	Focus() tea.Cmd
 	Blur()
-	// SetInnerWidth hands the field the *box's* inner text width. The field subtracts
-	// its own marker and label (fieldBase.contentWidth) and sizes or folds its content
-	// so that no line it renders exceeds inner. That contract is the point: the box
-	// re-wraps an overrunning line at column 0, where it collides with the label column
-	// and costs the form a row it never budgeted for.
+	// SetInnerWidth gives the field the box's inner width. The field subtracts its own marker
+	// and label and keeps every line within it: the box would re-wrap an overlong line at
+	// column 0, into the label column.
 	SetInnerWidth(int)
 	// View renders the row. It must be pure and cheap — SetSize measures it to budget
 	// the form's rows.
@@ -36,32 +33,24 @@ type FormField interface {
 // switch). OnToggle moves the selection forward (right) or backward (left).
 type Toggler interface{ OnToggle(forward bool) }
 
-// Activator is a field that handles Enter itself instead of submitting the form
-// (e.g. the search Source row, whose Enter drops a MenuScreen open under it). It returns an Action
-// and whether it consumed the Enter; when not consumed the form runs its OnSubmit.
+// Activator is a field that handles Enter itself (reporting whether it did) instead of
+// submitting the form.
 type Activator interface {
 	OnSelect(*core.Shared) (core.Action, bool)
 }
 
-// editable is the (unexported) field capability QueryUpdate needs: a focused text
-// field that owns a text model and feeds it itself. TextField (textinput) and
-// TextAreaField (textarea) both satisfy it — the field, not the form, knows which
-// bubbles model it holds, so the form routes a keystroke without naming either type.
+// editable is a focused text field that feeds keystrokes to its own bubbles model.
 type editable interface{ UpdateInput(tea.Msg) tea.Cmd }
 
-// valued is the (unexported) field capability the form's Value/SetValue look up.
-// Requiring the setter too is deliberate: it keeps ToggleField (which has a Value but
-// no SetValue) out, so f.Value("stage") stays "" exactly as it does today.
+// valued is the capability Value/SetValue look up. Requiring the setter keeps ToggleField
+// out.
 type valued interface {
 	Value() string
 	SetValue(string)
 }
 
-// Growable is a field that renders more than one row and wants a ceiling on how tall it
-// may get. FormScreen.SetSize hands it the rows the body can spare, so a field that
-// grows with its content can't push the form out of its box on a short terminal. Same
-// optional-capability shape as Toggler/Activator: always-one-row fields just don't
-// implement it.
+// Growable is a multi-row field that takes a height ceiling from FormScreen.SetSize, so
+// it cannot push the form out of its box.
 type Growable interface{ SetMaxHeight(rows int) }
 
 // markerWidth is fieldMarker's display width, the same in both of its states.
@@ -74,18 +63,11 @@ type fieldBase struct {
 
 func (b fieldBase) Key() string { return b.key }
 
-// contentWidth is what's left of the box's inner width once the field has drawn its own
-// marker and label — each field subtracting its own label is what keeps the form from
-// needing a constant that knows the widest label in it.
-//
-// Floored at 1, not 0: ansi.Wrap reads a limit below 1 as "don't wrap", so a zero floor
-// would quietly reinstate the overrun this arithmetic exists to prevent.
-// labelWidth is the width of the label column, so a caller anchoring a popup to the row
-// can land it under the field's *value* rather than under the marker. Unexported
-// capability with the Toggler/Activator shape (FieldAnchor type-asserts for it): a field
-// that draws no label — StaticField, which doesn't embed fieldBase — simply lacks it.
+// labelWidth is the label column's width, for anchoring a popup under the value.
 func (b fieldBase) labelWidth() int { return lipgloss.Width(b.label) }
 
+// contentWidth is the box's inner width minus this field's marker and label, floored at 1
+// (ansi.Wrap treats a smaller limit as "don't wrap").
 func (b fieldBase) contentWidth(inner int) int {
 	if w := inner - markerWidth - lipgloss.Width(b.label); w > 1 {
 		return w
@@ -93,11 +75,8 @@ func (b fieldBase) contentWidth(inner int) int {
 	return 1
 }
 
-// fieldRow lays content beside the marker+label prefix, so a content block that folds
-// hangs under the content column instead of restarting at column 0. For single-line
-// content this is exactly prefix+content: JoinHorizontal pads each block to its own
-// widest line, which for a one-line block is that line itself, so a one-row field renders
-// byte-for-byte as it did when this was a concatenation.
+// fieldRow lays content beside the marker and label, so folded content hangs under the
+// content column. Single-line content renders exactly as prefix+content.
 func fieldRow(focused bool, label, content string) string {
 	prefix := fieldMarker(focused) + fieldLabel().Render(label)
 	return lipgloss.JoinHorizontal(lipgloss.Top, prefix, content)
@@ -105,7 +84,7 @@ func fieldRow(focused bool, label, content string) string {
 
 // fieldLabel is the muted style for a field's label. Built per call (not cached in
 // a package var) so it tracks the active theme after a core.SetTheme switch.
-func fieldLabel() lipgloss.Style { return lipgloss.NewStyle().Foreground(core.MutedColor) }
+func fieldLabel() lipgloss.Style { return core.MutedStyle() }
 
 // fieldMarker is the focus arrow rendered to the left of a focusable row.
 func fieldMarker(focused bool) string {
@@ -137,15 +116,9 @@ func (t *TextField) Blur()             { t.input.Blur() }
 func (t *TextField) Value() string     { return t.input.Value() }
 func (t *TextField) SetValue(v string) { t.input.SetValue(v) }
 
-// SetInnerWidth resizes the scrolling window textinput renders through.
-//
-// The SetCursor is not a no-op. textinput recomputes that window (its unexported
-// handleOverflow) only when the value or cursor moves — never when Width changes — and
-// while Width is 0 the window it computed is the *whole* value. A field seeded with
-// SetValue before the first resize has exactly that, so without re-running it here the
-// row renders the entire value and overruns the box until the next keystroke; a resize
-// narrower leaves the same staleness. SetCursor is the exported door to that recompute,
-// and re-seating the cursor where it already is moves nothing.
+// SetInnerWidth resizes the textinput window. SetCursor re-seats the cursor to force
+// textinput to recompute its visible window, which it otherwise does only on edits: a
+// value set before the first resize would render whole and overrun the box.
 func (t *TextField) SetInnerWidth(inner int) {
 	t.input.SetWidth(t.contentWidth(inner))
 	t.input.SetCursor(t.input.Position())
@@ -163,19 +136,12 @@ func (t *TextField) View(focused bool) string {
 
 // ---------- TextAreaField ----------
 
-// growRows is how far a TextAreaField may grow before it scrolls instead. Six rows is a
-// comfortable commit message; past that the field crowds the box even on a tall
-// terminal, and SetSize's bodyHeight clamp cuts it down further on a short one.
+// growRows is how tall a TextAreaField grows before it scrolls.
 const growRows = 6
 
-// TextAreaField is a free-text row that wraps and grows downward instead of scrolling
-// sideways — the shape a commit message wants, where TextField would slide the start of
-// the line out of view. Otherwise a drop-in for TextField: same constructor signature,
-// same Value/SetValue, same marker+label row.
-//
-// The value is held to a single logical line (see UpdateInput and SetValue). That's what
-// makes the height math exact: textarea's LineInfo().Height reports the wrapped height of
-// the *cursor's* logical line, which is the whole block only while there's just one.
+// TextAreaField is a text row that wraps and grows downward (a commit message), otherwise
+// like TextField. The value is kept to one logical line, which keeps the height math
+// exact: LineInfo().Height covers only the cursor's logical line.
 type TextAreaField struct {
 	fieldBase
 	input   textarea.Model
@@ -187,25 +153,19 @@ func NewTextAreaField(key, label, placeholder string) *TextAreaField {
 	ta.Placeholder = placeholder
 	ta.Prompt = ""             // the label is rendered separately, as in TextField
 	ta.ShowLineNumbers = false // a one-line value has nothing to number
-	// textarea's defaults dress the widget up: a background-highlighted cursor line when
-	// focused, greyed text when blurred. TextField has neither, so strip both style sets
-	// back to plain and keep only the placeholder grey (textinput's own default).
+	// Strip textarea's cursor-line and blurred styling to match TextField; keep the
+	// placeholder grey.
 	plain := textarea.StyleState{Placeholder: lipgloss.NewStyle().Foreground(lipgloss.Color("240"))}
 	st := ta.Styles()
 	st.Focused, st.Blurred = plain, plain
 	ta.SetStyles(st)
-	// New aims the live style pointer at a *local* copy of the default blurred style
-	// rather than at the BlurredStyle field, so the two assignments above stay invisible
-	// until a Focus/Blur repoints it. Blur now so the first frame is already plain.
+	// Blur now so the first frame uses the plain styles (New points at a private copy).
 	ta.Blur()
-	// New already called SetWidth — but with its own "┃ " prompt still in place, leaving
-	// the inner width 2 short. Redo it now that Prompt and ShowLineNumbers are ours; the
-	// form's SetSize supplies the real width on the first resize.
+	// Re-apply the width now that the prompt and line numbers are ours; SetSize sets the real
+	// one.
 	ta.SetWidth(40)
-	// The height is pinned at the cap and never tracks the content: growing it after an
-	// Update would leave the viewport scrolled to a taller layout's cursor row
-	// (repositionView runs inside Update, against the old height) and the first row of the
-	// message would vanish. View slices the render down to the rows actually needed.
+	// The height stays pinned at the cap: resizing after an Update would leave the viewport
+	// scrolled for the old height and hide the first row. View slices the render instead.
 	ta.SetHeight(growRows)
 	return &TextAreaField{fieldBase: fieldBase{key, label}, input: ta, maxRows: growRows}
 }
@@ -216,10 +176,7 @@ func (t *TextAreaField) Blur()             { t.input.Blur() }
 func (t *TextAreaField) Value() string     { return t.input.Value() }
 func (t *TextAreaField) SetValue(v string) { t.input.SetValue(oneLine(v)) }
 
-// SetInnerWidth sets the textarea's wrap width from what the row has left after the
-// marker and label. With no prompt and no line numbers the textarea's inner width is
-// exactly what it's given. (textarea.Model has its own SetWidth; this is the FormField
-// hook, which means something different — hence the name.)
+// SetInnerWidth sets the wrap width to what the row leaves after marker and label.
 func (t *TextAreaField) SetInnerWidth(inner int) { t.input.SetWidth(t.contentWidth(inner)) }
 
 // SetMaxHeight (Growable) takes the form's offer of body rows and caps it at growRows.
@@ -232,13 +189,8 @@ func (t *TextAreaField) SetMaxHeight(rows int) {
 	t.input.SetHeight(rows)
 }
 
-// UpdateInput feeds the keystroke to the textarea, first collapsing any newline to a
-// space. textarea's sanitizer keeps newlines where textinput's replaces them, and its
-// sanitizer is unexported, so the message is the only place to do this. A second logical
-// line would break View's height math and smuggle a multi-line message past a form whose
-// Enter submits. A bracketed paste is the only way one can arrive — the form intercepts
-// Keys.Select before the fall-through, so an enter key never reaches the textarea — and
-// v2 delivers a paste as its own tea.PasteMsg, so that is the only case to guard.
+// UpdateInput collapses newlines to spaces before feeding the textarea, keeping the value
+// one logical line. Only a bracketed paste can carry one (the form takes Enter).
 func (t *TextAreaField) UpdateInput(msg tea.Msg) tea.Cmd {
 	if pm, ok := msg.(tea.PasteMsg); ok && strings.ContainsAny(pm.Content, "\r\n") {
 		msg = tea.PasteMsg{Content: oneLine(pm.Content)}
@@ -253,10 +205,8 @@ var newlineRepl = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
 
 func oneLine(s string) string { return newlineRepl.Replace(s) }
 
-// View renders the row as the label prefix beside the textarea block, so wrapped rows
-// hang under the text instead of restarting at column 0. The textarea always renders
-// exactly maxRows rows (padding the tail with end-of-buffer blanks), so slice it back to
-// the rows the value occupies — that, rather than a SetHeight, is what grows the row.
+// View renders the label prefix beside the textarea, sliced to the rows the value uses
+// (the textarea always renders maxRows).
 func (t *TextAreaField) View(focused bool) string {
 	rows := min(max(t.input.LineInfo().Height, 1), t.maxRows)
 	lines := strings.Split(t.input.View(), "\n")
@@ -268,9 +218,8 @@ func (t *TextAreaField) View(focused bool) string {
 
 // ---------- ToggleField ----------
 
-// ToggleField is a multi-option switch (e.g. Project/Global). OnToggle cycles the
-// index, so it works for any number of options; delim controls how RenderToggle
-// joins them (empty → the ◄ ► arrows).
+// ToggleField is a multi-option switch; OnToggle cycles the index. delim joins the options
+// (empty: ◄ ►).
 type ToggleField struct {
 	fieldBase
 	options []string
@@ -317,23 +266,15 @@ func (t *ToggleField) View(focused bool) string {
 	return fieldRow(focused, t.label, packToggle(t.options, t.index, t.delim, t.width))
 }
 
-// RenderToggle renders a multi-option switch on one line, with the active option
-// highlighted and the options joined by delim (empty → the "◄ ►" arrows). Pure rendering —
-// the cycling lives in the caller (ToggleField.OnToggle), so it works for any option
-// count. Reused by the New Plugin confirm screens, which embed it in a dialog body that
-// does its own layout; width 0 is what keeps it on one line for them.
+// RenderToggle renders a multi-option switch on one line, the active option highlighted
+// and the options joined by delim (empty: ◄ ►). Rendering only; the caller cycles.
 func RenderToggle(options []string, index int, delim string) string {
 	return packToggle(options, index, delim, 0)
 }
 
-// packToggle renders the toggle folded to width, breaking only *between* options — never
-// inside one, which is what a general-purpose wrap would do to them: ansi.Wrap and
-// ansi.Wordwrap both treat "-" as an unconditional breakpoint, so "tracked changes (-a)"
-// would come apart as "tracked changes (-" / "a)". A folded line keeps the delimiter
-// trailing so the row reads as continuing.
-//
-// width <= 0 means don't fold — RenderToggle's contract, and the state of a field the
-// form hasn't sized yet.
+// packToggle folds the toggle to width, breaking only between options (ansi.Wrap would
+// split "(-a)" at the hyphen). Folded lines keep the trailing delimiter. width <= 0 does
+// not fold.
 func packToggle(options []string, index int, delim string, width int) string {
 	sep := "  ◄ ►  "
 	if delim != "" {
@@ -342,24 +283,18 @@ func packToggle(options []string, index int, delim string, width int) string {
 	sepW := lipgloss.Width(sep)
 	trail := strings.TrimRight(sep, " ")
 
-	// Style at emit time, from the raw option, because both the packing and the fold below
-	// have to measure and cut raw text: lipgloss re-opens the style on each line it
-	// renders, so folding first keeps every row colored, where folding an already-rendered
-	// run would leave one SGR open across the break and bleed it into the padding
-	// JoinHorizontal writes alongside.
+	// Style each option after packing and folding the raw text, so every folded row is
+	// colored and no SGR stays open across a break.
 	render := func(i int) string {
 		s := options[i]
-		// An option wider than the whole content column can't be packed anywhere, so fold
-		// it rather than let it overrun. The hyphen split is ugly, but it isn't
-		// destructive: fieldRow still hangs the remainder under the content column, where
-		// an overrun would instead collide with the label.
+		// An option wider than the column is folded rather than left to overrun into the label.
 		if width > 0 && lipgloss.Width(s) > width {
 			s = ansi.Wrap(s, width, "")
 		}
 		if i == index {
-			return lipgloss.NewStyle().Foreground(core.FocusedColor).Bold(true).Render(s)
+			return core.AccentStyle().Render(s)
 		}
-		return lipgloss.NewStyle().Foreground(core.MutedColor).Render(s)
+		return core.MutedStyle().Render(s)
 	}
 
 	if width <= 0 {
@@ -373,9 +308,7 @@ func packToggle(options []string, index int, delim string, width int) string {
 	var lines []string
 	line, lineW := "", 0
 	for i := range options {
-		// Raw width, deliberately: an over-wide option measures past width no matter what,
-		// so it never packs beside a neighbour and its folded block lands as its own entry
-		// in lines — which the final Join flattens correctly.
+		// Raw width on purpose: an over-wide option never packs beside a neighbour.
 		w := lipgloss.Width(options[i])
 		switch {
 		case i == 0:
@@ -400,14 +333,8 @@ func packToggle(options []string, index int, delim string, width int) string {
 // checkWidth is the display width of the "[X] " box, the same in both of its states.
 const checkWidth = 4
 
-// CheckField is a boolean row rendered as a checkbox — "[X] Include dirs" — for the flags
-// a two-option Yes/No ToggleField reads as heavier than they are. It satisfies Toggler, so
-// space and ◄ ► both flip it.
-//
-// It deliberately does NOT satisfy Activator: Enter stays the form's submit, since a form
-// of nothing but check fields would otherwise have no way to submit at all. Nor does it
-// satisfy valued — read the state off the field itself with Checked(), the way a
-// ToggleField's Index() is read, rather than through a stringly-typed FormScreen.Value.
+// CheckField is a boolean checkbox row ("[X] Include dirs"). It is a Toggler (space and ◄ ►
+// flip it) but not an Activator, so Enter still submits; read it with Checked().
 type CheckField struct {
 	fieldBase
 	checked bool
@@ -429,12 +356,8 @@ func (c *CheckField) SetChecked(v bool) { c.checked = v }
 // land in the same place.
 func (c *CheckField) OnToggle(bool) { c.checked = !c.checked }
 
-// SetInnerWidth can't use fieldBase.contentWidth, which subtracts the label: on every other
-// field the label sits in the prefix, but here it *is* the content, rendered to the right of
-// the box. So subtract the marker and the box instead.
-//
-// Floored at 1 for the same reason contentWidth is: ansi.Wrap reads a limit below 1 as
-// "don't wrap", which would quietly reinstate the overrun this arithmetic exists to prevent.
+// SetInnerWidth subtracts the marker and box (the label is the content here), floored at
+// 1 like contentWidth.
 func (c *CheckField) SetInnerWidth(inner int) {
 	if w := inner - markerWidth - checkWidth; w > 1 {
 		c.width = w
@@ -443,19 +366,13 @@ func (c *CheckField) SetInnerWidth(inner int) {
 	c.width = 1
 }
 
-// View renders "▸ [X] Label". It can't reuse fieldRow, whose prefix is marker+label — here
-// the box takes the label's place in the prefix and the label becomes the content, so a long
-// label folds under itself rather than under the box. Same JoinHorizontal, same reason.
-//
-// Colors follow the toggle's convention (packToggle): the checked state is the focused
-// color, the unchecked one muted. Styles are built per call, never cached in a package var,
-// so they track a core.SetTheme switch — and the label is wrapped raw and rendered after,
-// since lipgloss re-opens the style per line and folding an already-rendered run would leave
-// an SGR open across the break.
+// View renders "▸ [X] Label", the box in the prefix and the label as content, so a long
+// label folds under itself. Checked uses the focused color, unchecked muted; styles are
+// built per call to track the theme.
 func (c *CheckField) View(focused bool) string {
-	box, style := "[ ] ", lipgloss.NewStyle().Foreground(core.MutedColor)
+	box, style := "[ ] ", core.MutedStyle()
 	if c.checked {
-		box, style = "[X] ", lipgloss.NewStyle().Foreground(core.FocusedColor).Bold(true)
+		box, style = "[X] ", core.AccentStyle()
 	}
 	prefix := fieldMarker(focused) + style.Render(box)
 	return lipgloss.JoinHorizontal(lipgloss.Top, prefix, style.Render(ansi.Wrap(c.label, c.width, "")))
@@ -463,10 +380,8 @@ func (c *CheckField) View(focused bool) string {
 
 // ---------- PickField ----------
 
-// PickField is a focusable row whose Enter runs a custom action (an Activator) — used
-// for the search Source row, whose value is chosen from a menu dropped open under it
-// (FieldAnchor is the geometry that anchors one). value supplies the current display
-// text; onSel runs on Enter.
+// PickField is a focusable row whose Enter runs onSel (an Activator), such as a Source row
+// choosing from a dropdown anchored by FieldAnchor. value supplies the display text.
 type PickField struct {
 	fieldBase
 	value func() string
@@ -484,10 +399,8 @@ func (p *PickField) Blur()                                        {}
 func (p *PickField) SetInnerWidth(inner int)                      { p.width = p.contentWidth(inner) }
 func (p *PickField) OnSelect(sh *core.Shared) (core.Action, bool) { return p.onSel(sh) }
 
-// View folds the value to the content column. Unlike a toggle's options the value is one
-// atom with nothing to pack between, so a plain wrap is all there is; it's unstyled, so
-// ansi.Wrap's unconditional hyphen breakpoint costs nothing here. Before the first resize
-// width is 0 and ansi.Wrap passes the value through, which is what it did before.
+// View wraps the value to the content column (width 0 before the first resize passes it
+// through).
 func (p *PickField) View(focused bool) string {
 	return fieldRow(focused, p.label, ansi.Wrap(p.value(), p.width, ""))
 }
@@ -515,11 +428,6 @@ func (s *StaticField) Blur()           {}
 // label, so it starts at column 0 and has the full width to itself.
 func (s *StaticField) SetInnerWidth(inner int) { s.width = inner }
 
-// View folds the text itself rather than leaving it to the box. The box would fold it to
-// the same place — a static row starts where a re-wrap would restart it, so this was never
-// visibly broken — but folding here is what makes the rendered height honest, and SetSize
-// budgets the form's rows off that height.
-//
-// Wrap raw, then Render: lipgloss re-opens the style per line, where folding an already
-// rendered run would leave an SGR open across the break.
+// View folds the text itself so the rendered height is honest for SetSize's budgeting.
+// Wrap raw, then render, so no SGR spans a break.
 func (s *StaticField) View(bool) string { return s.style.Render(ansi.Wrap(s.text, s.width, "")) }

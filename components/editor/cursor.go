@@ -9,9 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Cursor movement, mouse gestures and selection for Screen: arrow/click positioning,
-// the drag and multi-click (word/line) selections, the shifted-motion and shift+click
-// selections, and the selection range itself.
+// Cursor movement, mouse gestures and selection for Screen.
 
 // ---------- cursor movement ----------
 
@@ -42,14 +40,9 @@ func (s *Screen) moveEnd() {
 	s.wantX = s.curX
 }
 
-// moveVertical moves the cursor delta lines, keeping the wantX target column so a
-// run of up/down moves across short lines returns to the column the user started from.
-//
-// Off either end of the buffer the move becomes a horizontal one instead of a no-op:
-// down on the last line lands at end of line, up on the first line at column zero.
-// That is what makes holding an arrow reach the end of the document rather than stall
-// mid-line, and both ends reset wantX — the caret really moved, so the sticky column
-// follows it exactly as it does for home/end.
+// moveVertical moves delta lines, keeping the wantX column across short lines. Past
+// either end it moves to the end (or start) of the line instead, so holding an arrow
+// reaches the end of the document; wantX then follows the caret.
 func (s *Screen) moveVertical(delta int) {
 	y := s.curY + delta
 	if y < 0 {
@@ -67,9 +60,9 @@ func (s *Screen) moveVertical(delta int) {
 	}
 }
 
-// positionAt maps a mouse cell to a buffer position. Drag events may arrive beyond
-// the pane because ModularScreen keeps the gesture with its originating slot; clamp
-// keeps those endpoints on the nearest visible text cell without scrolling.
+// positionAt maps a mouse cell to a buffer position. Drags can arrive outside the pane
+// (ModularScreen keeps the gesture); clamp pins those to the nearest visible cell without
+// scrolling.
 func (s *Screen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, bool) {
 	if x -= s.insetX(); x < 0 {
 		x = 0 // a press left of text reads as column zero, preserving click behavior
@@ -129,9 +122,9 @@ func (s *Screen) clickAt(sh *core.Shared, x, y int) {
 	s.clampScrollVisible()
 }
 
-// pressSelection handles a left selection press. Repeated presses on the same character
-// inside editorMultiClickWindow promote to word and then line selection; a fourth starts
-// over as a caret/drag gesture. The clock is a parameter so tests can drive click cadence.
+// pressSelection handles a left press. Repeats on the same character within
+// editorMultiClickWindow select a word, then a line; a fourth starts over. now is a
+// parameter for tests.
 func (s *Screen) pressSelection(sh *core.Shared, x, y int, now time.Time) {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
@@ -161,21 +154,11 @@ func (s *Screen) pressSelection(sh *core.Shared, x, y int, now time.Time) {
 	s.clampScrollBounds()
 }
 
-// pressContext is the whole right-button gesture. A press INSIDE the selection leaves the
-// selection and the caret alone, so the menu acts on what is already highlighted; a press
-// outside is an ordinary caret click that clears it, so a paste lands where the pointer
-// did. A press that maps to no buffer position at all — the scrollbar column, the title
-// bar, the search bar — opens nothing: there is no position for the menu to act on, and a
-// menu raised there would silently act on wherever the caret happened to be. clickCount is
-// dropped so a right press between two left clicks cannot become the middle of a
-// multi-click, which is what the old per-button click bookkeeping prevented.
-//
-// The box clears the pressed row — one below it, flipping to one above when there is no
-// room, left edge on the pressed column either way — and the selection has no say in that.
-// Anchoring off the selection's far edge instead would read better on paper, but a press
-// near the top of a long selection would then put the menu a whole selection's length away:
-// having to chase the box down the screen is worse than having it cover text that is
-// already highlighted.
+// pressContext is the right-button gesture. Inside the selection it keeps it, so the menu
+// acts on it; outside it moves the caret (so a paste lands at the pointer). A press on no
+// buffer position (scrollbar, title, search bar) opens nothing. The menu opens below the
+// pressed row (above when there is no room), not relative to the selection, so it stays
+// near the pointer.
 func (s *Screen) pressContext(sh *core.Shared, x, y int) core.Action {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
@@ -190,15 +173,10 @@ func (s *Screen) pressContext(sh *core.Shared, x, y int) core.Action {
 	return core.Push(s.editMenu(sh, ax, ay))
 }
 
-// absCell converts an incoming mouse cell into the absolute terminal cells an overlay
-// anchor is stated in. The discriminator is s.embedded rather than s.hasOrigin, because
-// embedded is the same bit positionAt uses to decide which frame the coordinates arrived
-// in: standalone the router hands over absolute cells (BodyY included, which is why
-// nothing is added back), embedded ModularScreen subtracts the slot's rect before
-// forwarding (updateMouseSlot), and the pane origin pushed back every View is that same
-// rect. Going through paneGeometry rather than the origin fields directly matters only
-// before the first frame, when no origin has arrived: its (0, BodyY) fallback at least
-// gets the chrome rows right, where the bare fields would be off by the whole header.
+// absCell converts an incoming mouse cell to absolute terminal cells for an overlay
+// anchor. Keyed on s.embedded, like positionAt: standalone cells are already absolute;
+// embedded ones are slot-relative, so the pane origin is added back (paneGeometry falls
+// back to (0, BodyY) before the first frame).
 func (s *Screen) absCell(sh *core.Shared, x, y int) (int, int) {
 	if !s.embedded {
 		return x, y
@@ -207,9 +185,8 @@ func (s *Screen) absCell(sh *core.Shared, x, y int) (int, int) {
 	return ox + x, oy + y
 }
 
-// positionSelected reports whether the buffer character at p belongs to the current
-// half-open selection — the context menu's inside-the-selection test. For a multiline
-// range, the insertion position after a line's final rune represents its selected newline.
+// positionSelected reports whether the character at p is inside the selection; the
+// position after a line's last rune stands for its selected newline.
 func (s *Screen) positionSelected(p textPos) bool {
 	return s.selectionActive() && !posLess(p, s.selStart) && posLess(p, s.selEnd)
 }
@@ -255,19 +232,15 @@ func (s *Screen) startDragAt(p textPos) {
 	s.dragging = true
 }
 
-// resetMouseGesture ends the active mouse gesture. It is the single kill switch for the
-// auto-scroll clock too: every path that abandons a drag — release, any key press, a paste,
-// a click on the search bar or scrollbar, the context menu — already calls it, and bumping
-// the generation makes whichever tick is still in flight land as stale rather than needing
-// each of those sites to know the clock exists.
+// resetMouseGesture ends the active mouse gesture and bumps the drag generation, so any
+// in-flight auto-scroll tick arrives stale.
 func (s *Screen) resetMouseGesture() {
 	s.dragging, s.dragScrolling = false, false
 	s.dragSeq++
 }
 
-// dragScrollCmd schedules one auto-scroll frame for the current gesture. PropagateAll, as
-// the highlight clock uses, so the tick still reaches this editor while it sits under a
-// dialog — a drag can outlive a focus change.
+// dragScrollCmd schedules one auto-scroll frame, broadcast so it reaches this editor even
+// under a dialog.
 func (s *Screen) dragScrollCmd() tea.Cmd {
 	seq := s.dragSeq
 	return tea.Tick(editorDragScrollInterval, func(time.Time) tea.Msg {
@@ -275,20 +248,13 @@ func (s *Screen) dragScrollCmd() tea.Cmd {
 	})
 }
 
-// trackDrag records where the pointer is and extends the selection to it, then arms the
-// auto-scroll clock if that cell sits in an edge band. The clock is armed at most once —
-// each frame re-arms itself — and stops on its own the moment the pointer comes back inside
-// or the gesture ends, so nothing here needs a release path of its own.
+// trackDrag records the pointer, extends the selection to it and arms the auto-scroll
+// clock when it is in an edge band. Each frame re-arms itself and stops when the pointer
+// returns or the gesture ends.
 func (s *Screen) trackDrag(sh *core.Shared, x, y int) tea.Cmd {
-	// A pointer that has not left its cell OVER A VIEW THAT HAS NOT MOVED has nothing to
-	// add: the selection would be extended to where it already reaches, and the frame that
-	// follows would be the frame already on screen. Terminals report motion per cell, but a
-	// duplicate still costs a whole re-render to discover it changed nothing, and during a
-	// drag those frames are what the pointer is queued up behind.
-	//
-	// The scroll offsets are half the test because the wheel comes through here too: a
-	// notch mid-drag rolls the view under a stationary pointer, and the selection has to
-	// grow over what that revealed. Same cell, different text.
+	// Nothing to do when neither the pointer cell nor the view moved; a duplicate would cost
+	// a full re-render. The scroll offsets matter because a mid-drag wheel notch moves the
+	// view under a still pointer.
 	if s.dragging && x == s.dragX && y == s.dragY && s.scrY == s.dragScrY && s.scrX == s.dragScrX {
 		return nil
 	}
@@ -305,18 +271,14 @@ func (s *Screen) trackDrag(sh *core.Shared, x, y int) tea.Cmd {
 	return s.dragScrollCmd()
 }
 
-// handleDragScroll runs one auto-scroll frame: roll the view, then re-extend the selection
-// over the cells that roll revealed. scrollLines and scrollCells are the browse-mode
-// primitives, which is exactly right here — they are bounds-clamped and they leave the caret
-// alone, so the selection still follows the POINTER rather than the view running away with
-// it. extendDrag keeps its clampScrollBounds for the same reason (see clampScrollBounds).
+// handleDragScroll runs one auto-scroll frame: scroll (clamped, caret untouched), then
+// re-extend the selection over what was revealed, so it follows the pointer.
 func (s *Screen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.Action {
 	if m.target != s || m.seq != s.dragSeq || !s.dragging || !s.dragScrolling {
 		return core.Action{} // a stale frame, or the gesture is over: the clock stops here
 	}
-	// A broadcast can reach this editor through both a pane and a host's retained
-	// buffer registry. Consume the tick BEFORE rearming: a gesture-only generation
-	// lets each delivery start another timer, doubling the queue every frame.
+	// Consume the tick before re-arming: the broadcast can deliver it twice (pane and host
+	// registry), and each delivery would otherwise start another timer.
 	s.dragSeq++
 	dx, dy := s.dragEdgeScroll(sh, s.dragX, s.dragY)
 	if dx == 0 && dy == 0 {
@@ -325,9 +287,8 @@ func (s *Screen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.A
 	}
 	wasY, wasX := s.scrY, s.scrX
 	s.scrollLines(dy)
-	// Browse scrolling uses the widest line in the document. Selection scrolling
-	// must stop at the line under the pointer: a longer line elsewhere can otherwise
-	// pull this entire line off screen, making every returning motion map to its end.
+	// Stop horizontal scrolling at the line under the pointer, not the widest line, or the
+	// line can scroll off screen and every motion maps to its end.
 	if dx > 0 {
 		if p, ok := s.positionAt(sh, s.dragX, s.dragY, true); ok {
 			line := s.lines[p.y]
@@ -344,13 +305,9 @@ func (s *Screen) handleDragScroll(sh *core.Shared, m editorDragScrollMsg) core.A
 	return core.Async(s.dragScrollCmd())
 }
 
-// dragEdgeScroll reports the per-frame scroll deltas for a pointer at (x, y), and (0, 0)
-// when it is nowhere near an edge. Everything is measured against the CONTENT window —
-// insets and gutter off, contentW wide — because that is the window scrX indexes and
-// renderLine cuts. Coordinates outside the pane are the ordinary case rather than an error:
-// ModularScreen keeps a gesture with the slot that started it, so a drag off the pane keeps
-// arriving with negative or oversized cells, and that overshoot — which positionAt's clamp
-// throws away — is the whole input to the ramp.
+// dragEdgeScroll returns the per-frame scroll deltas for a pointer at (x, y), measured
+// against the content window. Off-pane coordinates are normal (ModularScreen keeps the
+// gesture) and the overshoot drives the ramp.
 func (s *Screen) dragEdgeScroll(sh *core.Shared, x, y int) (dx, dy int) {
 	cy := y - s.insetY()
 	if !s.embedded {
@@ -380,10 +337,8 @@ func (s *Screen) dragEdgeScroll(sh *core.Shared, x, y int) (dx, dy int) {
 	return dx, dy
 }
 
-// editorDragStep turns an overshoot into one frame's step: one unit anywhere inside the
-// band, one more for every further band-width past it, capped. over runs 1..zone inside the
-// band and grows without bound off the pane, so a nudge at the edge crawls at the unit rate
-// and a pointer flung into the next pane runs at the ceiling.
+// editorDragStep turns an overshoot into one frame's step: one unit inside the band, one
+// more per further band-width, capped.
 func editorDragStep(over, zone, unit int) int {
 	zone = max(zone, 1)
 	return unit * min(1+(over-1)/zone, editorDragScrollMaxUnits)
@@ -427,15 +382,10 @@ func (s *Screen) selectionActive() bool { return posLess(s.selStart, s.selEnd) }
 
 // ---------- keyboard selection ----------
 
-// selectionAnchor is the FIXED end of the current selection — the one a shifted motion
-// pivots on. It is derived rather than stored, which is the whole reason a shifted key
-// can pick up a selection the mouse made: with no selection the caret is its own anchor,
-// so the first shifted key drops the anchor where the caret already stands; with one, the
-// caret is always sitting on an end (extendDrag, selectWordAt and selectLineAt all leave
-// it there), so the anchor is the OTHER end.
-//
-// A stored anchor field would be a second copy of that fact, and every mouse gesture
-// writing selStart/selEnd directly would have to remember to keep it honest.
+// selectionAnchor is the fixed end of the selection that shifted motions pivot on. It is
+// derived, not stored, so shifted keys pick up mouse selections too: with no selection
+// the caret is the anchor, otherwise the caret sits on one end and the anchor is the
+// other.
 func (s *Screen) selectionAnchor() textPos {
 	caret := textPos{s.curY, s.curX}
 	switch {
@@ -448,16 +398,9 @@ func (s *Screen) selectionAnchor() textPos {
 	}
 }
 
-// selectFrom sets the selection to the ordered range between anchor and the caret. A
-// caret back on its own anchor is no selection at all, and clearing there is what makes
-// a shift+→ that undoes a shift+← leave nothing highlighted — and what lets the next
-// shifted key re-anchor at that spot, since selectionAnchor reads an empty selection as
-// "anchor at the caret".
-//
-// clampScroll, not clampScrollBounds: a shifted motion is a caret move and the view has
-// to follow it, unlike a drag whose off-pane endpoints are clamped in place instead. The
-// range itself is split out because shift+CLICK wants the same span under the mouse clamp
-// (extendSelectionTo) — the two gestures differ in nothing but which clamp ends them.
+// selectFrom selects the range between anchor and caret; a caret back on its anchor
+// clears it. It uses clampScroll so the view follows the caret (unlike drags, whose
+// off-pane ends use the mouse clamp in extendSelectionTo).
 func (s *Screen) selectFrom(anchor textPos) {
 	s.selectRangeFrom(anchor)
 	s.clampScroll()
@@ -483,18 +426,9 @@ func (s *Screen) extendSelection(move func()) {
 	s.selectFrom(anchor)
 }
 
-// selectMove returns the caret move a shifted motion chord extends the selection over,
-// or nil when k is not one of them.
-//
-// ctrl+shift+←/→ carries the word moves rather than the alt+shift+←/→ that would pair
-// with the editor's own alt+←/→: bubbletea has keycodes for the ctrl form (KeyCtrlShift*)
-// and none for the alt one, so alt+shift+← does not arrive as a distinct key at all.
-//
-// shift+↑/↓ are bound even though Apple Terminal strips the modifier off the vertical
-// arrows — there they arrive as a bare "up"/"down" and degrade to plain moves that clear
-// the selection. That is a graceful loss on one terminal, unlike the pane-navigation case
-// (core.Keys.PaneUp), where the same fact would have silently handed a reserved key to
-// the panel underneath and is why those stayed unbound.
+// selectMove returns the caret move a shifted chord extends the selection over, or nil.
+// Word moves use ctrl+shift+←/→: bubbletea has no alt+shift arrow keys. shift+↑/↓ lose
+// their shift on Apple Terminal and degrade to plain moves, which is acceptable here.
 func (s *Screen) selectMove(k string) func() {
 	switch k {
 	case "shift+left":
@@ -517,14 +451,9 @@ func (s *Screen) selectMove(k string) func() {
 	return nil
 }
 
-// extendSelectionTo is the shift+click gesture: keep the anchor, put the caret on the
-// pointer. A press that maps to no buffer cell (the scrollbar column, the title bar) is
-// ignored, exactly as an ordinary press there is.
-//
-// The drag is left running from the same anchor so shift+click-and-drag keeps extending.
-// Both its ends are the caret position rather than the inclusive cell startDragAt uses,
-// which is what stops keyboard selection and mouse selection from disagreeing about whether
-// the anchored character is itself selected.
+// extendSelectionTo is shift+click: keep the anchor, move the caret to the pointer.
+// Presses off the text are ignored. The drag continues from the same anchor, using caret
+// positions at both ends so keyboard and mouse agree on the anchored character.
 func (s *Screen) extendSelectionTo(sh *core.Shared, x, y int) {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
@@ -569,7 +498,5 @@ func (s *Screen) selectedText() string {
 	return b.String()
 }
 
-// scrollLines moves the viewport delta lines without touching the caret — the
-// wheel's browse mode — clamped so the view never passes the buffer's ends. The
-// caret may leave the screen; the next caret-moving key snaps the view back to it
-// (clampScroll runs after every keystroke).
+// scrollLines moves the viewport delta lines without moving the caret (wheel browsing),
+// clamped to the buffer. The next caret-moving key snaps the view back.

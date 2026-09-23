@@ -1,14 +1,8 @@
 package core
 
-// Dim returns c one step quieter: blended toward the terminal's own ground, which means
-// DARKER on a dark background and LIGHTER on a light one. Both variants are dimmed, each
-// toward its own ground (Light toward white, Dark toward black), so a dimmed accent reads
-// as subordinate to the undimmed one under EITHER background — a literal darken would make
-// it the louder of the two on a light terminal, inverting the hierarchy it exists to
-// express. amount is the fraction of the distance to the ground, 0..1.
-//
-// The palette is ANSI-256 indices rather than hex (see Color), so this is not a plain
-// multiply: the index is expanded to RGB, blended, then snapped back to the nearest index.
+// Dim returns c blended toward the terminal's ground by amount (0..1): darker on dark
+// backgrounds, lighter on light ones, so a dimmed accent is quieter on both. Colors are
+// ANSI-256 indexes, so each is expanded to RGB, blended and snapped back.
 func Dim(c Color, amount float64) Color {
 	return Color{
 		Light: dimIndex(c.Light, 255, amount),
@@ -16,11 +10,9 @@ func Dim(c Color, amount float64) Color {
 	}
 }
 
-// dimIndex blends one ANSI-256 index toward ground (0 black, 255 white) and returns the
-// nearest index to the result. Quantizing can land back on the input — the 6×6×6 cube is
-// coarse and a small blend need not leave the cell — which would make Dim a silent no-op
-// on some themes, so the blend is stepped up until the index actually moves. A color
-// already sitting on the ground never moves and comes back as it went in.
+// dimIndex blends one index toward ground (0 black, 255 white) and returns the nearest
+// index, stepping the blend up until the index actually changes (the cube is coarse). A
+// color already at the ground is returned unchanged.
 func dimIndex(i uint8, ground int, amount float64) uint8 {
 	r, g, b := ansiRGB(i)
 	for a := amount; a <= 1.0001; a += 0.05 {
@@ -40,9 +32,8 @@ func blend(c, ground int, amount float64) int {
 // and the reverse search.
 var ansiCube = [6]int{0, 95, 135, 175, 215, 255}
 
-// ansiBasic is the xterm default for indices 0..15. Those sixteen are the ones a terminal
-// theme is free to redefine, so they are expanded (an input can be one) but never chosen
-// as an output — see nearestANSI.
+// ansiBasic is xterm's default 0..15. Terminals redefine these, so they are expanded as
+// inputs but never chosen as outputs.
 var ansiBasic = [16][3]int{
 	{0, 0, 0}, {128, 0, 0}, {0, 128, 0}, {128, 128, 0},
 	{0, 0, 128}, {128, 0, 128}, {0, 128, 128}, {192, 192, 192},
@@ -67,10 +58,8 @@ func ansiRGB(idx uint8) (int, int, int) {
 	}
 }
 
-// nearestANSI is the reverse: the index whose RGB is closest to (r,g,b) by squared
-// distance. Only 16..255 are candidates — the basic sixteen are whatever the user's
-// terminal profile says they are, so picking one would make the dim's result depend on a
-// palette this code cannot see.
+// nearestANSI returns the closest index in 16..255 to (r, g, b); the basic sixteen are
+// excluded because their real colors are unknown.
 func nearestANSI(r, g, b int) uint8 {
 	best, bestDist := 16, 1<<31-1
 	for i := 16; i < 256; i++ {

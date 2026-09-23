@@ -10,19 +10,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// ScrollContainer is a read-only content panel in the LogPane visual idiom: a
-// bordered box whose hand-drawn top edge carries a title legend, scrolling a
-// viewport of caller-supplied lines. It is the ModularScreen building block for
-// "show this text here" — a detail view, a log tail, a diff — without owning any
-// navigation: esc deliberately falls through (handled=false) so the host screen
-// keeps its pop, and the pane keys never reach a panel at all. It is purely
-// presentational —
-// no nav keys, no Push/Pop, no domain type; the caller owns the content via
-// SetLines/SetStatus.
+// ScrollContainer is a read-only panel in the LogPane style: a bordered box with a title
+// legend, scrolling caller-supplied lines (SetLines/SetStatus). It owns no navigation:
+// esc falls through so the host keeps its pop.
 type ScrollContainer struct {
-	// OnLink is what a left click on a hyperlink in the content does; nil ⇒ nothing.
-	// The spans come from SetLinks, so a pane showing rendered markdown wires the two
-	// together and a pane showing plain lines sets neither.
+	// OnLink handles a left click on a hyperlink from SetLinks; nil does nothing.
 	OnLink func(*core.Shared, Link) core.Action
 
 	vp         viewport.Model
@@ -45,12 +37,8 @@ func NewScrollContainer(title string) *ScrollContainer {
 	return &ScrollContainer{vp: viewport.New(), title: title}
 }
 
-// SetKeyHints turns the key legend the focused border carries on or off; on is the
-// default, so a panel that says nothing keeps it. Off leaves the title alone on the
-// edge, which is what a ListPanel's bordered legend has always shown (see its View) —
-// so a layout that pairs the two reads as one set of elements rather than one pane
-// shouting its keys next to a quiet one. The keys are unchanged either way: they are
-// still in the host's help bar via PanelHelp, which is the bar's job.
+// SetKeyHints turns the focused border's key legend on (the default) or off, e.g. to
+// match a quiet ListPanel legend beside it. The keys stay in the help bar either way.
 func (p *ScrollContainer) SetKeyHints(show bool) { p.noKeyHints = !show }
 
 // SetTitle replaces the top-border legend. A pane whose content changes shape — a
@@ -61,11 +49,9 @@ func (p *ScrollContainer) Focus()        { p.focused = true }
 func (p *ScrollContainer) Blur()         { p.focused = false }
 func (p *ScrollContainer) Focused() bool { return p.focused }
 
-// SetLines replaces the content. The first set opens at the top — a listing is
-// read from the first entry down, matching git's own tag output — after which
-// the position is the user's: later refreshes keep it instead of yanking the
-// reader back up. SetStatus resets the pin, so content arriving after a
-// "loading…" status opens afresh.
+// SetLines replaces the content. The first set opens at the top; later refreshes keep the
+// scroll position. SetStatus resets that, so content after a "loading…" status opens
+// fresh.
 func (p *ScrollContainer) SetLines(lines []string) {
 	p.vp.SetContent(strings.Join(lines, "\n"))
 	if !p.pinned {
@@ -82,16 +68,12 @@ func (p *ScrollContainer) SetStatus(status string) {
 	p.vp.GotoTop()
 }
 
-// SetLinks gives the pane the hyperlink spans of the content it was just handed
-// (components.ScanLinks over the same rendered string), making them clickable through
-// OnLink. Set it beside SetLines or not at all: the rows a map indexes are the rows of
-// one particular render, so a stale map points at text that has moved.
+// SetLinks gives the pane the link spans for the content just set (ScanLinks over the same
+// render). Set it with SetLines or not at all: a stale map points at moved text.
 func (p *ScrollContainer) SetLinks(links LinkMap) { p.links = links }
 
-// clickLink answers the link under a click, in content coordinates: the box's left
-// border and its 1-col padding off the left, its hand-drawn top edge off the top, and
-// the scroll offset added back. Coordinates arrive pane-relative (ModularScreen
-// translates them), so there is no body offset to subtract here.
+// clickLink resolves a pane-relative click to a link, removing border, padding and the
+// top edge and adding the scroll offset.
 func (p *ScrollContainer) clickLink(sh *core.Shared, x, y int) (core.Action, bool) {
 	if len(p.links) == 0 || p.OnLink == nil {
 		return core.Action{}, false
@@ -103,12 +85,8 @@ func (p *ScrollContainer) clickLink(sh *core.Shared, x, y int) (core.Action, boo
 	return p.OnLink(sh, l), true
 }
 
-// UpdatePanel scrolls the viewport on the nav keys and the wheel, and nothing
-// else: esc/back returns handled=false so the host ModularScreen keeps its pop
-// fallback. The page keys match against the
-// viewport's own keymap (they have no core.Keys binding). The wheel only scrolls
-// while focused — mouse msgs are broadcast to every panel, and a wheel that
-// rolled every pane at once would read as a bug.
+// UpdatePanel scrolls on nav keys, page keys (the viewport's own keymap) and the wheel
+// (only while focused, since mouse messages reach every panel). esc is left to the host.
 func (p *ScrollContainer) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool) {
 	if m, ok := msg.(tea.MouseMsg); ok {
 		if !p.focused {
@@ -155,31 +133,23 @@ func (p *ScrollContainer) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action
 	return core.Action{}, false
 }
 
-// PanelHelp contributes the scroll hint shown in the host's help bar while this
-// panel is focused.
-//
-// Scrolling only. g/G still jump to either end (see UpdatePanel), but a jump is a
-// command rather than navigation, and what a panel contributes lands on a bar — which
-// is capped (core.ShortHelp). So the (?) menu owns it: every list already lists g/G
-// there through bubbles' own GoToStart/GoToEnd, and gote names it in its overlay.
+// PanelHelp contributes only the scroll hint; g/G jumps are commands, which belong in the
+// (?) menu (see core.ShortHelp).
 func (p *ScrollContainer) PanelHelp() []key.Binding {
 	return []key.Binding{
 		core.Hint("scroll", core.Keys.Up, core.Keys.Down),
 	}
 }
 
-// SetSize takes the OUTER cell dimensions (borders included) assigned by the
-// host layout; the viewport gets the inner dims net of the side borders, the
-// top/bottom border rows, and the 1-col padding on each side.
+// SetSize takes the outer dims; the viewport gets them minus borders and padding.
 func (p *ScrollContainer) SetSize(width, height int) {
 	p.width, p.height = width, height
 	p.vp.SetWidth(p.innerWidth())
 	p.vp.SetHeight(p.contentHeight())
 }
 
-// TextWidth is the width content must be wrapped to before SetLines: the viewport
-// clips rather than wraps, so a caller folding prose (or a rendered markdown page)
-// into this pane needs the box's inner measurement.
+// TextWidth is the width to wrap content to before SetLines: the viewport clips rather
+// than wraps.
 func (p *ScrollContainer) TextWidth() int { return p.innerWidth() }
 
 // ScrollTo moves the content so line is the topmost visible row; the viewport
@@ -202,45 +172,21 @@ func (p *ScrollContainer) VisibleRows() int { return p.vp.Height() }
 
 // innerWidth is the text width inside the box (cell width minus side borders and
 // the 1-col padding on each side).
-func (p *ScrollContainer) innerWidth() int {
-	w := p.width - 2 - 2
-	if w < 10 {
-		w = 10
-	}
-	return w
-}
+func (p *ScrollContainer) innerWidth() int { return max(p.width-2-2, 10) }
 
 // contentHeight is the viewport height inside the box (cell height minus the
 // hand-drawn top border row and the bottom border row).
-func (p *ScrollContainer) contentHeight() int {
-	h := p.height - 2
-	if h < 1 {
-		h = 1
-	}
-	return h
-}
+func (p *ScrollContainer) contentHeight() int { return max(p.height-2, 1) }
 
-// View draws the content inside a bordered box whose top edge is interrupted by
-// the title legend (plus a scroll hint while focused) — the LogPane shape, so a
-// detail pane and the output pane read as the same kind of element.
+// View draws the content in a bordered box with the title (and, focused, a scroll hint)
+// in its top edge, like LogPane.
 func (p *ScrollContainer) View(focused bool) string {
 	label := p.title
 	if focused && !p.noKeyHints {
-		// Scrolling only: a border legend advertises what acts on THIS pane, and pane
-		// navigation is the screen's, not the pane's — it belongs to the host's help bar
-		// one row below (and to the (?) menu), which is where it now lives alone. That is
-		// also the durable fix for the rot this legend had: it read "⇧←→ panes" for months
-		// after the pane keys became shift+tab alone, contradicting the bar beneath it.
-		// The scroll hint that remains is still built from the live bindings rather than
-		// spelled out, so it can't drift the same way.
+		// Only keys that act on this pane; pane navigation belongs to the help bar.
 		label = p.title + " · " + core.Legend(
 			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
 		)
 	}
-	// The run between the corners is the same width as the bottom border: the
-	// inner text plus the 1-col padding on each side. Composed from the frame
-	// helpers rather than Frame() because of that padding.
-	inner := p.innerWidth() + 2
-	content := frameBox(inner, focused).Padding(0, 1).Render(p.vp.View())
-	return frameTop(label, inner, focused) + "\n" + content
+	return paddedFrame(label, p.innerWidth(), focused, p.vp.View())
 }

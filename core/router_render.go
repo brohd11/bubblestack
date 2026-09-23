@@ -7,29 +7,12 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// chromeCache memoizes the chrome renders belonging to ONE message.
-//
-// The same header, tab strip and breadcrumb were rendered three times per keystroke:
-// twice inside resize() (once to publish Shared.bodyY, once more inside bodyHeightFor)
-// and a third time in View's frame(). None of it is cheap — topChrome was 77% of the
-// router's per-message cost, and 56% of that was ansi.stringWidth segmenting grapheme
-// clusters inside lipgloss's own Render, all to re-measure furniture a keystroke rarely
-// touches.
-//
-// resize() resets the cache, so every entry is rendered from state that has already had
-// the message's Actions applied to it; nothing runs between resize() and View, so the
-// strings View reuses are exactly the ones the body sizing was computed from. That was
-// always the intended invariant — the two computations agreeing — and caching is now what
-// enforces it rather than two identical call chains.
-//
-// Only the top chrome is cached, and deliberately: it was 77% of the cost, while the
-// status line and output pane below the body are rendered once each and cheaply. Keeping
-// them uncached also keeps belowChrome answering from live state for anything that calls
-// it outside the Update→View cycle.
-//
-// Two slots: a frame renders at most the top screen's mask and, under an overlay, the
-// mask of the screen below it. A third distinct mask renders uncached rather than
-// evicting, which is correct if slower.
+// chromeCache memoizes the top chrome (header, tab strip, breadcrumb) for one message:
+// it was rendered three times per keystroke and dominated the router's cost. resize()
+// resets it after the message's Actions apply, so View reuses exactly the strings the
+// body was sized from. Only the top chrome is cached; the status line and output pane are
+// cheap and stay live. Two slots cover the top screen's mask and an overlay base's; a
+// third renders uncached.
 type chromeCache struct {
 	valid bool
 	n     int
@@ -68,10 +51,8 @@ func (c *chromeCache) slot(mask ChromeMask) *chromeSlot {
 	return &c.slots[c.n-1]
 }
 
-// maskOf is the chrome suppression requested by screen s, or the zero mask (hide
-// nothing) when it doesn't implement ChromeMasker. Parameterized by screen (rather
-// than always reading r.Top()) so the overlay path can frame the screen below the
-// popup with that screen's own mask.
+// maskOf is s's ChromeMask, or the zero mask. It takes the screen so an overlay's base can
+// be framed with its own mask.
 func (r Router) maskOf(s Screen) ChromeMask {
 	if m, ok := s.(ChromeMasker); ok {
 		return m.ChromeMask()
@@ -101,9 +82,7 @@ func (r Router) helpHeightFor(s Screen, mask ChromeMask) int {
 	return vheight(r.helpViewFor(s, mask))
 }
 
-// tabStripView renders the top-level tab strip (omitted when there's only one
-// tab): the tab titles followed by a full-width rule that delimits it from the
-// content below.
+// tabStripView renders the tab titles and a full-width rule (nothing with one tab).
 func (r Router) tabStripView() string {
 	if len(r.tabs) < 2 {
 		return ""
@@ -124,13 +103,8 @@ func (r Router) tabStripView() string {
 	return lipgloss.JoinVertical(lipgloss.Left, row, rule)
 }
 
-// tabSpans maps each tab to the cells it occupies in the rendered strip, so the
-// click hit-test (tabClick) and the renderer can never disagree: tabStripStyle's
-// 1-cell left padding, then each title plus its own 1-cell horizontal padding
-// (tabStyle/activeTabStyle are identical but for color). The tabs are joined with
-// no gap, so each span starts where the previous one ends. Computed from the
-// titles rather than the rendered row, so a title containing spaces hit-tests
-// exactly.
+// tabSpans maps each tab to its cells in the strip, computed from the titles so the
+// renderer and tabClick agree exactly.
 func (r Router) tabSpans() []crumbSpan {
 	spans := make([]crumbSpan, len(r.tabs))
 	x := 1 // tabStripStyle's left padding
@@ -142,10 +116,8 @@ func (r Router) tabSpans() []crumbSpan {
 	return spans
 }
 
-// crumbTrail walks the live nav stack collecting breadcrumb segments (screens
-// implementing Crumber with a non-empty full label), paired with each segment's
-// stack index — the click hit-test (crumbClick) needs the index to know how far
-// to Pop, since non-Crumber screens leave no segment to click.
+// crumbTrail collects breadcrumb segments with their stack indexes, which crumbClick
+// needs to know how far to pop.
 func (r Router) crumbTrail() ([]Crumb, []int) {
 	var crumbs []Crumb
 	var idxs []int
@@ -164,12 +136,8 @@ func (r Router) crumbTrail() ([]Crumb, []int) {
 	return crumbs, idxs
 }
 
-// breadcrumbView builds the breadcrumb bar from the live nav stack: it asks each
-// screen implementing Crumber for its segment (root→top, the top screen full and the
-// upstream ones short), skips empty ones, and hands the crumbs to Chrome.Breadcrumb
-// to render (joined path + separator rule, gated by the pane's hidden flag). Built
-// fresh each frame so it always reflects the current stack — pushing/popping needs no
-// breadcrumb bookkeeping.
+// breadcrumbView builds the breadcrumb bar from the live stack each frame (top screen
+// full, upstream short), so push and pop need no bookkeeping.
 func (r Router) breadcrumbView() string {
 	crumbs, _ := r.crumbTrail()
 	var bc *BreadcrumbPane
@@ -179,10 +147,8 @@ func (r Router) breadcrumbView() string {
 	return bc.view(crumbs, r.sh.width) // nil-safe: renders normally
 }
 
-// topChrome is the persistent chrome above the body: the header box, the tab strip
-// (if any), and the breadcrumb bar below it, each gated by the active screen's mask.
-// Its height is measured (not a constant) so adding/removing a part automatically
-// reflows the body.
+// topChrome is the header, tab strip and breadcrumb, each gated by mask. Its height is
+// measured, so the body reflows when a part comes or goes.
 func (r Router) topChrome(mask ChromeMask) string {
 	slot := r.sh.chrome.slot(mask)
 	if slot == nil {
@@ -217,10 +183,9 @@ func (r Router) renderTopChrome(mask ChromeMask) string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// belowChrome is the chrome rendered between the active screen's body and the help
-// bar: the status line (if any) then the output box (when shown), each gated by the
-// screen's mask. Drawn by the router around every screen, so output/status persist
-// across tab switches and screen pushes. Empty when there's neither.
+// belowChrome is the status line and output pane between the body and the help bar, each
+// gated by mask. The router draws it around every screen, so it persists across tabs and
+// pushes.
 func (r Router) belowChrome(mask ChromeMask) string {
 	ch := r.sh.Chrome
 	if ch == nil {
@@ -252,10 +217,7 @@ func vheight(s string) int {
 // chrome and the help bar, minus the status/output chrome below the body.
 func (r Router) bodyHeightFor(s Screen) int {
 	mask := r.maskOf(s)
-	h := r.sh.height - vheight(r.topChrome(mask)) - vheight(r.belowChrome(mask)) - r.helpHeightFor(s, mask)
-	if h < 1 {
-		h = 1
-	}
+	h := max(r.sh.height-vheight(r.topChrome(mask))-vheight(r.belowChrome(mask))-r.helpHeightFor(s, mask), 1)
 	return h
 }
 
@@ -285,9 +247,8 @@ func (r Router) resize() {
 	r.Top().SetSize(r.sh, r.sh.width, r.bodyHeightFor(r.Top()))
 }
 
-// frame composes the persistent chrome (header/tab strip above, status/output and
-// help below) around screen s's body — the full-screen layout the router shows for
-// the active screen, and the background it draws a popup over (see View).
+// frame composes the chrome around screen s's body: the full layout, and the background
+// an overlay is drawn over.
 func (r Router) frame(s Screen) string {
 	sh := r.sh
 	mask := r.maskOf(s)
@@ -295,9 +256,8 @@ func (r Router) frame(s Screen) string {
 	body := s.View(sh)
 	below := r.belowChrome(mask)
 	help := r.helpViewFor(s, mask)
-	// Pad the body so the status/output chrome and the always-visible help bar sit
-	// at the very bottom. Clamp an overflowing body to the same allocation so the
-	// terminal renderer never has to recover by dropping rows from the frame's top.
+	// Pad the body so the status, output and help sit at the bottom, and clamp an overflowing
+	// body so the terminal never drops rows from the top.
 	avail := sh.height - vheight(chrome) - vheight(below) - vheight(help)
 	if pad := avail - lipgloss.Height(body); pad > 0 {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, Blanks(pad))
@@ -319,14 +279,9 @@ func (r Router) frame(s Screen) string {
 }
 
 func (r Router) View() tea.View {
-	// Overlays (popups, floating line edits) STACK: the base is the deepest screen
-	// below the top that isn't an overlay, framed whole, and each overlay above it
-	// is composited on bottom-first — so a popup pushed over a floating line edit
-	// lands over both, with the base's chrome and panes intact underneath. Only
-	// the top screen receives input, so the chain stays modal. A box is centered
-	// unless its overlay implements OverlayPositioner (a floating edit anchored
-	// over the element it covers); either way the position clamps into the frame
-	// so a box near an edge stays fully on screen.
+	// Overlays stack: the deepest non-overlay screen is framed whole and each overlay above
+	// is composited bottom-first, centered unless it is an OverlayPositioner, clamped into
+	// the frame.
 	base, bi := r.overlayBase()
 	out := r.frame(base)
 	for i := bi + 1; i < len(r.stack); i++ {
@@ -344,11 +299,8 @@ func (r Router) View() tea.View {
 		out = Composite(out, box, x, y)
 	}
 
-	// Alt screen and mouse reporting are view state in v2, not program options: what
-	// the last View asked for is what the terminal is put into. mouseOn is the ctrl+g
-	// toggle (see globalKey) — cell motion reports the wheel and clicks but only
-	// streams motion while a button is held, so there is no hover traffic through
-	// Update. It costs the terminal's own drag-select, which is why the key exists.
+	// Alt screen and mouse reporting are View state in v2. mouseOn is the mouse toggle; cell
+	// motion reports wheel and clicks, and motion only while a button is held.
 	v := tea.NewView(out)
 	v.AltScreen = true
 	v.ReportFocus = true
@@ -358,10 +310,8 @@ func (r Router) View() tea.View {
 	return v
 }
 
-// overlayBase returns the deepest screen below the top that is NOT an overlay —
-// the screen the overlay chain is composited over — and its stack index. It is
-// the top screen itself when the top isn't an overlay (the common case: no popup
-// up), so single-screen and single-overlay stacks render exactly as before.
+// overlayBase returns the deepest non-overlay screen below the top and its index (the top
+// itself when no overlay is up).
 func (r Router) overlayBase() (Screen, int) {
 	i := len(r.stack) - 1
 	for i > 0 {

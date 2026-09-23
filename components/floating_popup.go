@@ -11,9 +11,8 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-// PopupPlacement places a floating popup within its parent's rendered frame. All
-// coordinates are relative to that frame; FloatingPopup clamps the result before
-// compositing it.
+// PopupPlacement places a popup within its parent's frame; FloatingPopup clamps the
+// result.
 type PopupPlacement func(frameW, frameH, popupW, popupH int) (x, y int)
 
 // PopupAnchor describes a preferred popup corner and the edges it should flip away
@@ -50,9 +49,8 @@ func PlacePopupTopRight(margin int) PopupPlacement {
 	}
 }
 
-// FloatingPopup is a parent-owned visual overlay. Unlike an overlay Screen it never
-// enters the router stack and therefore never takes focus. The parent offers messages
-// to Update first and forwards every message for which handled is false.
+// FloatingPopup is a parent-owned overlay that never enters the router stack or takes
+// focus. The parent offers messages to Update first and handles those it declines.
 type FloatingPopup struct {
 	Content   func() string
 	Placement PopupPlacement
@@ -99,10 +97,9 @@ type PopupListItem[T any] struct {
 	Value                     T
 }
 
-// PopupListOpts configures an input-transparent selectable popup list. Fuzzy matches
-// non-empty queries against FilterText, orders matches by quality, and selects the new
-// best match whenever the query changes; an optional Filter runs first as a prefilter.
-// Empty queries retain source order.
+// PopupListOpts configures a selectable popup list. With a query, Fuzzy matches against
+// FilterText and selects the best match on each change; Filter runs first. Empty queries
+// keep source order.
 type PopupListOpts[T any] struct {
 	Items      []PopupListItem[T]
 	MaxVisible int
@@ -113,9 +110,8 @@ type PopupListOpts[T any] struct {
 	OnCancel   func(*core.Shared) core.Action
 }
 
-// PopupList is the reusable selection/filter state used inside a FloatingPopup.
-// It claims only arrow-up/down, tab/enter, and escape; all other messages return
-// handled=false so the owning parent can continue processing them.
+// PopupList is the selection state inside a FloatingPopup. It handles only up/down,
+// tab/enter and esc; everything else returns handled=false.
 type PopupList[T any] struct {
 	items      []PopupListItem[T]
 	visible    []int
@@ -152,9 +148,7 @@ func (p *PopupList[T]) SetQuery(query string) {
 	}
 	p.query = query
 	if p.fuzzy {
-		// A fuzzy query has a newly ranked best answer. Arrow navigation remains in
-		// force until the query changes, at which point accepting should follow that
-		// new ranking rather than an item selected for an older query.
+		// The query changed, so accept should follow the new best match.
 		p.sel = -1
 	}
 	p.rebuild()
@@ -223,18 +217,11 @@ func (s popupListFuzzySource[T]) String(i int) string { return s.items[s.indexes
 func (s popupListFuzzySource[T]) Len() int            { return len(s.indexes) }
 
 func (p *PopupList[T]) clampWindow() {
-	n := p.visibleRows()
 	if p.sel < 0 {
 		p.top = 0
 		return
 	}
-	if p.sel < p.top {
-		p.top = p.sel
-	}
-	if p.sel >= p.top+n {
-		p.top = p.sel - n + 1
-	}
-	p.top = max(0, min(p.top, max(len(p.visible)-n, 0)))
+	p.top = clampTop(p.top, p.sel, p.visibleRows(), len(p.visible))
 }
 
 func (p *PopupList[T]) visibleRows() int {
@@ -299,56 +286,31 @@ func (p *PopupList[T]) View() string {
 		contentW = min(contentW, p.maxWidth)
 	}
 
-	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
-	accent := lipgloss.NewStyle().Foreground(core.FocusedColor).Bold(true)
+	gutter := rows < len(p.visible)
+	field := contentW
+	if gutter {
+		field -= menuGutterW
+	}
 	out := make([]string, 0, rows)
 	for row := 0; row < rows; row++ {
 		idx := p.top + row
 		item := p.items[p.visible[idx]]
-		field := contentW
-		if rows < len(p.visible) {
-			field -= menuGutterW
-		}
-		labelStyle, detailStyle := lipgloss.NewStyle(), muted
+		labelStyle, detailStyle := lipgloss.NewStyle(), core.MutedStyle()
 		if idx == p.sel {
-			labelStyle, detailStyle = accent, accent
+			labelStyle, detailStyle = core.AccentStyle(), core.AccentStyle()
 		}
-		detailW := ansi.StringWidth(item.Detail)
-		reserve := 0
-		if item.Detail != "" && field-menuHintGap-detailW >= 1 {
-			reserve = menuHintGap + detailW
-		} else {
-			detailW = 0
-		}
-		label := ansi.Truncate(item.Label, max(field-reserve, 1), "…")
-		line := labelStyle.Render(label) + strings.Repeat(" ", max(field-ansi.StringWidth(label)-detailW, 0))
-		if detailW > 0 {
-			line += detailStyle.Render(item.Detail)
-		}
-		if rows < len(p.visible) {
-			mark := " "
-			if row == 0 && p.top > 0 {
-				mark = "↑"
-			} else if row == rows-1 && p.top+rows < len(p.visible) {
-				mark = "↓"
-			}
-			line += muted.Render(strings.Repeat(" ", menuGutterW-1) + mark)
+		line := menuRow(item.Label, item.Detail, field, labelStyle, detailStyle)
+		if gutter {
+			line += scrollGutter(row, rows, p.top, len(p.visible))
 		}
 		out = append(out, line)
 	}
 	return PopupPanel(strings.Join(out, "\n"), contentW)
 }
 
-// PopupPanel renders body inside the slim bordered box every floating panel in this
-// package draws — the completion list, the context menu, the line edit. width is the
-// INNER content width; the box's own chrome is added on top (lipgloss v2's Width counts
-// the border and padding, which is why callers pass content width rather than the total).
-//
-// The fixed width is not cosmetic. core.Composite splices a popup over the screen below
-// it one line at a time, punching a hole exactly as wide as THAT line — so ragged content
-// lets the background show through beside every short line. Only equal-width lines make
-// an opaque rectangle, and that is what the box's Width supplies. Anything given to a
-// FloatingPopup as bare text will look transparent and misplaced; render it through here.
+// PopupPanel renders body in the slim bordered box every floating panel uses. width is
+// the inner width. The fixed width makes the box opaque: core.Composite punches a hole
+// only as wide as each line, so ragged lines would let the background through.
 func PopupPanel(body string, width int) string {
 	return menuBox().Width(width + menuChromeW).Render(body)
 }
