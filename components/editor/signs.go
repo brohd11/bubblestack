@@ -61,6 +61,7 @@ func (s *Screen) ShowSignColumn(id string, on bool) {
 		return
 	}
 	col.shown = on
+	s.wrapGoalValid = false
 	s.wrapDirty = true
 	s.clampScrollBounds()
 }
@@ -117,6 +118,7 @@ func (s *Screen) RemoveSignColumn(id string) {
 		s.signOrder = slices.Delete(s.signOrder, i, i+1)
 	}
 	if col.shown {
+		s.wrapGoalValid = false
 		s.wrapDirty = true
 		s.clampScrollBounds()
 	}

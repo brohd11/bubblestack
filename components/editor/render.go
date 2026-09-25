@@ -180,9 +180,8 @@ func (s *Screen) renderRow(i int) string {
 	return s.renderLine(i)
 }
 
-// gutterOn reports whether line numbers are drawn: the ctrl+l preference, or always when
-// wrapped, where they are the only way to tell a soft break from a real line.
-func (s *Screen) gutterOn() bool { return s.lineNums || s.wrap }
+// gutterOn reports whether line numbers are enabled, independently of wrapping.
+func (s *Screen) gutterOn() bool { return s.lineNums }
 
 // numGutterWidth is the line-number column's width, just wide enough for the last line
 // number; zero when the viewport is too narrow for numbers and text. It must not consult
@@ -264,17 +263,32 @@ func (s *Screen) rebuildWrapRows() {
 	}
 }
 
-// buildWrapRows breaks each line into chunks of at most w cells. A line of an exact
-// multiple of w (or empty) gets a trailing empty row for the caret at end of line.
+// buildWrapRows prefers breaks after spaces and tabs (expanded to spaces). Other
+// characters, including punctuation and nonbreaking spaces, stay with their word.
+// Oversized words and whitespace runs still split at w cells; no text is discarded.
+// A full final row needs an extra empty row for the end-of-line caret.
 func (s *Screen) buildWrapRows(w int) {
 	w = max(w, 1)
 	s.wrapRows = s.wrapRows[:0]
 	for i, line := range s.lines {
-		n := len(expandLine(line))
-		for start := 0; start < n; start += w {
-			s.wrapRows = append(s.wrapRows, wrapRow{i, start, min(start+w, n)})
+		disp := expandLine(line)
+		n, lastWidth := len(disp), 0
+		for start := 0; start < n; {
+			end := min(start+w, n)
+			// An exact word boundary already fits. Otherwise retreat to the last
+			// separator, moving the entire next word onto a fresh row.
+			if end < n && disp[end] != ' ' && disp[end-1] != ' ' {
+				for at := end - 1; at >= start; at-- {
+					if disp[at] == ' ' {
+						end = at + 1
+						break
+					}
+				}
+			}
+			s.wrapRows = append(s.wrapRows, wrapRow{i, start, end})
+			lastWidth, start = end-start, end
 		}
-		if n%w == 0 {
+		if n == 0 || lastWidth == w {
 			s.wrapRows = append(s.wrapRows, wrapRow{i, n, n})
 		}
 	}

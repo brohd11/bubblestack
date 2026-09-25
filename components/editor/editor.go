@@ -106,11 +106,13 @@ type Screen struct {
 	w, h  int // viewport dims in cells (the body net of editor chrome), set by SetSize
 	paneH int // full height assigned to the editor, including title/frame and search bar
 
-	wrap      bool      // soft-wrap long lines to the viewport width
-	lineNums  bool      // the sticky ctrl+l preference (see gutterOn: wrap forces the gutter on)
-	wrapRows  []wrapRow // the wrapped display rows scrY indexes while wrap is on
-	wrapBar   bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
-	wrapDirty bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
+	wrap          bool      // soft-wrap long lines to the viewport width
+	lineNums      bool      // line numbers, independent of wrapping
+	wrapRows      []wrapRow // the wrapped display rows scrY indexes while wrap is on
+	wrapBar       bool      // whether those rows overflow the viewport — resolved by rebuildWrapRows
+	wrapDirty     bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
+	wrapGoal      int       // desired display column for consecutive wrapped vertical moves
+	wrapGoalValid bool
 
 	// The geometry SetSize last laid out, so an unchanged re-size costs nothing. See
 	// SetSize; sizeDirty is how a change that is not a dimension (SetEmbedded) forces it.
@@ -203,6 +205,7 @@ type wrapRow struct{ line, start, end int }
 //   - ResolveLanguage supplies pairs, structured Enter, indent unit and highlighter for a
 //     path, and is consulted again when the path changes.
 //   - IndentGuides draws muted guides in leading whitespace.
+//   - Wrap and LineNumbers independently enable soft wrapping and line numbers.
 type Opts struct {
 	Path string
 	// BaseDir resolves a relative name typed into the save box (usually the directory the
@@ -223,6 +226,8 @@ type Opts struct {
 	Indent          IndentMode
 	IndentWidth     int
 	IndentGuides    bool
+	Wrap            bool
+	LineNumbers     bool
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -448,6 +453,8 @@ func New(opts Opts) *Screen {
 		hlDebounce:      editorHighlightDebounce,
 		textSeq:         -1,
 		wrapDirty:       true, // no rows measured yet, even before the first edit
+		wrap:            opts.Wrap,
+		lineNums:        opts.LineNumbers,
 		nextRevision:    1,
 		searchEnabled:   opts.Search,
 		searchSeq:       -1,
@@ -829,6 +836,9 @@ func editorExtendClick(m tea.Mouse) bool { return m.Mod.Contains(tea.ModShift) }
 // the host's pane key.
 func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Action) {
 	k := m.String()
+	if k != "up" && k != "down" && k != "shift+up" && k != "shift+down" {
+		s.wrapGoalValid = false
+	}
 	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
 	if s.confirmExit {
@@ -1090,7 +1100,8 @@ func (s *Screen) Dirty() bool { return s.dirty }
 func (s *Screen) ToggleWrap() {
 	top := s.TopLine() // in the mode we are leaving
 	s.wrap = !s.wrap
-	s.wrapDirty = true // the gutter appears or goes: the whole geometry moved
+	s.wrapGoalValid = false
+	s.wrapDirty = true
 	s.SetTopLine(top)
 }
 
@@ -1142,12 +1153,13 @@ func (s *Screen) firstRowOfLine(line int) int {
 	return 0
 }
 
-// ToggleLineNums flips the line-number preference. Wrapped, the gutter shows regardless
-// (see gutterOn), so the flip only shows once wrap is off.
+// ToggleLineNums flips line numbers independently of wrapping, preserving the top line.
 func (s *Screen) ToggleLineNums() {
+	top := s.TopLine()
 	s.lineNums = !s.lineNums
+	s.wrapGoalValid = false
 	s.wrapDirty = true // the gutter's width is part of the wrap geometry
-	s.clampScrollBounds()
+	s.SetTopLine(top)
 }
 
 // WrapMode and LineNumMode return the current toggle states, so hosts can keep their
@@ -1166,6 +1178,7 @@ func (s *Screen) SetSize(_ *core.Shared, width, bodyHeight int) {
 		return
 	}
 	s.lastSizeW, s.lastSizeH, s.lastSearchBar, s.sizeDirty = width, bodyHeight, searchBar, false
+	s.wrapGoalValid = false
 	s.paneH = bodyHeight
 	s.w, s.h = width-s.insetX(), bodyHeight-s.insetY()
 	if searchBar {

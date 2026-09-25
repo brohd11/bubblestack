@@ -11,7 +11,7 @@ import (
 
 // TestSignsColumnIndependentOfLineNums is the point of giving signs their own flag: a
 // host wanting change markers without line numbers must get them. Riding gutterOn would
-// have tied the two together and made ctrl+l blank the markers.
+// have tied the two together and made the line-number toggle blank the markers.
 func TestSignsColumn(t *testing.T) {
 	s, _ := newEditor(Opts{})
 	s.setContent("alpha\nbeta")
@@ -51,7 +51,7 @@ func TestSignsColumn(t *testing.T) {
 // on the line's first row. Repeating it down the continuations would read as several
 // changed lines where there is one.
 func TestSignsWrappedRows(t *testing.T) {
-	s, _ := newEditor(Opts{})
+	s, _ := newEditor(Opts{LineNumbers: true})
 	s.setContent(strings.Repeat("c", 200))
 	s.ShowSigns(true)
 	s.SetSigns(map[int]Sign{0: {Text: "+"}})

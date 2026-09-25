@@ -2217,37 +2217,34 @@ func TestEditorWrapClick(t *testing.T) {
 	}
 }
 
-// TestEditorLineNumbers: ctrl+l sets a sticky preference that decides the gutter while
-// wrap is off. Wrap forces the gutter on — soft breaks are indistinguishable from real
-// ones without it — without disturbing the preference, so unwrapping goes back to
-// whatever the user last chose.
+// Line numbers and wrapping are independent, including their startup options.
 func TestEditorLineNumbers(t *testing.T) {
-	s, _ := newEditor(Opts{})
-	s.setContent("alpha\nbeta")
-	first := func() string { return ansi.Strip(strings.Split(s.body(), "\n")[0]) }
-
-	if got := first(); !strings.HasPrefix(got, "alpha") {
-		t.Fatalf("no gutter by default, got %q", got)
-	}
-	s.ToggleLineNums()
-	if got := first(); !strings.HasPrefix(got, "1 alpha") {
-		t.Fatalf("ctrl+l unwrapped should number the rows, got %q", got)
-	}
-	s.ToggleLineNums()
-	if got := first(); !strings.HasPrefix(got, "alpha") {
-		t.Fatalf("ctrl+l again should take the gutter away, got %q", got)
-	}
-
-	s.ToggleWrap()
-	if got := first(); !strings.HasPrefix(got, "1 alpha") {
-		t.Fatalf("wrap should number the rows whatever the preference, got %q", got)
-	}
-	if s.LineNumMode() {
-		t.Fatal("wrap must not change the preference itself")
-	}
-	s.ToggleWrap()
-	if got := first(); !strings.HasPrefix(got, "alpha") {
-		t.Fatalf("unwrapping should go back to the preference, got %q", got)
+	for _, wrap := range []bool{false, true} {
+		for _, nums := range []bool{false, true} {
+			s, _ := newEditor(Opts{Wrap: wrap, LineNumbers: nums})
+			s.setContent("alpha\nbeta")
+			check := func() {
+				t.Helper()
+				want := "alpha"
+				if s.LineNumMode() {
+					want = "1 alpha"
+				}
+				if got := ansi.Strip(strings.Split(s.body(), "\n")[0]); !strings.HasPrefix(got, want) {
+					t.Fatalf("wrap=%v nums=%v: got %q, want prefix %q", s.WrapMode(), s.LineNumMode(), got, want)
+				}
+			}
+			check()
+			s.ToggleWrap()
+			if s.LineNumMode() != nums {
+				t.Fatal("wrapping changed line numbers")
+			}
+			check()
+			s.ToggleLineNums()
+			if s.WrapMode() != !wrap {
+				t.Fatal("line numbers changed wrapping")
+			}
+			check()
+		}
 	}
 }
 

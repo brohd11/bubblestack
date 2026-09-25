@@ -15,6 +15,7 @@ import (
 
 // setContent replaces the buffer with loaded file content, marking it clean.
 func (s *Screen) setContent(content string) {
+	s.wrapGoalValid = false
 	s.cancelCompletionSession()
 	s.lineEnding = "\n"
 	if strings.Contains(content, "\r\n") {
@@ -70,6 +71,7 @@ func (s *Screen) historyState() editorState {
 }
 
 func (s *Screen) restoreHistoryState(state editorState) {
+	s.wrapGoalValid = false
 	s.curY, s.curX, s.wantX = state.curY, state.curX, state.wantX
 	s.selStart, s.selEnd = state.selStart, state.selEnd
 	s.revision = state.revision
@@ -226,6 +228,7 @@ func (s *Screen) applyTextReplacement(start, end textPos, inserted string) {
 // replaceText is the only recorded text mutation. Multiple calls inside one key event
 // become ordered changes in the same history entry.
 func (s *Screen) replaceText(start, end textPos, inserted string) textPos {
+	s.wrapGoalValid = false
 	if start == end && inserted == "" {
 		return start
 	}

@@ -14,6 +14,7 @@ import (
 // ---------- cursor movement ----------
 
 func (s *Screen) moveLeft() {
+	s.wrapGoalValid = false
 	if s.curX > 0 {
 		s.curX--
 	} else if s.curY > 0 {
@@ -24,6 +25,7 @@ func (s *Screen) moveLeft() {
 }
 
 func (s *Screen) moveRight() {
+	s.wrapGoalValid = false
 	if s.curX < len(s.lines[s.curY]) {
 		s.curX++
 	} else if s.curY < len(s.lines)-1 {
@@ -33,17 +35,25 @@ func (s *Screen) moveRight() {
 	s.wantX = s.curX
 }
 
-func (s *Screen) moveHome() { s.curX, s.wantX = 0, 0 }
+func (s *Screen) moveHome() {
+	s.wrapGoalValid = false
+	s.curX, s.wantX = 0, 0
+}
 
 func (s *Screen) moveEnd() {
+	s.wrapGoalValid = false
 	s.curX = len(s.lines[s.curY])
 	s.wantX = s.curX
 }
 
-// moveVertical moves delta lines, keeping the wantX column across short lines. Past
-// either end it moves to the end (or start) of the line instead, so holding an arrow
-// reaches the end of the document; wantX then follows the caret.
+// moveVertical moves delta display rows, preserving the desired column across short
+// rows. Unwrapped it uses the rune column wantX; wrapped it uses a row-relative cell.
+// Holding an arrow past either boundary reaches the start or end of the document.
 func (s *Screen) moveVertical(delta int) {
+	if s.wrap {
+		s.moveWrappedVertical(delta)
+		return
+	}
 	y := s.curY + delta
 	if y < 0 {
 		s.curX, s.wantX = 0, 0
@@ -60,10 +70,63 @@ func (s *Screen) moveVertical(delta int) {
 	}
 }
 
+// moveWrappedVertical uses the same display rows as rendering. The goal is a cell
+// offset within a row, retained even when a short row or a tab clamps the caret.
+func (s *Screen) moveWrappedVertical(delta int) {
+	row := s.wrapRowForCursor()
+	if !s.wrapGoalValid {
+		s.wrapGoal = cellOfCol(s.lines[s.curY], s.curX) - s.wrapRows[row].start
+		s.wrapGoalValid = true
+	}
+	dir := 1
+	if delta < 0 {
+		dir = -1
+	}
+	for target := row + delta; target >= 0 && target < len(s.wrapRows); target += dir {
+		p, ok := s.wrappedPosition(target, s.wrapGoal)
+		if !ok {
+			continue // this row contains only the middle of an expanded tab
+		}
+		s.curY, s.curX, s.wantX = p.y, p.x, p.x
+		return
+	}
+	// Holding an arrow at the document boundary still reaches its first/last cell.
+	if dir < 0 {
+		s.curY = 0
+		s.moveHome()
+	} else {
+		s.curY = len(s.lines) - 1
+		s.moveEnd()
+	}
+}
+
+// wrappedPosition clamps a row-relative cell to an insertion position on that row.
+// Blank padding must not map into the next row's text. If only a tab's interior is
+// present, false lets vertical navigation skip the row; mouse gestures use the tab's
+// start, preserving the usual click-inside-a-tab behavior.
+func (s *Screen) wrappedPosition(row, x int) (textPos, bool) {
+	r := s.wrapRows[row]
+	line := s.lines[r.line]
+	end := r.end
+	if !s.lastRowOfLine(row) {
+		end-- // the boundary itself belongs to the next row
+	}
+	col := colAtCell(line, min(r.start+max(x, 0), end))
+	if cellOfCol(line, col) < r.start {
+		if col < len(line) && cellOfCol(line, col+1) <= end {
+			col++ // a tab began on the preceding row; use its other side
+		} else {
+			return textPos{r.line, col}, false
+		}
+	}
+	return textPos{r.line, col}, true
+}
+
 // positionAt maps a mouse cell to a buffer position. Drags can arrive outside the pane
 // (ModularScreen keeps the gesture); clamp pins those to the nearest visible cell without
 // scrolling.
 func (s *Screen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, bool) {
+	s.wrapGoalValid = false
 	if x -= s.insetX(); x < 0 {
 		x = 0 // a press left of text reads as column zero, preserving click behavior
 	}
@@ -100,8 +163,8 @@ func (s *Screen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, boo
 		// The clicked row is a wrapped chunk: it names the line, and its start is the
 		// origin the click's column counts from.
 		s.rebuildWrapRows()
-		r := s.wrapRows[min(row, len(s.wrapRows)-1)]
-		row, cell = r.line, r.start+x
+		p, _ := s.wrappedPosition(min(row, len(s.wrapRows)-1), x)
+		return p, true
 	} else if row >= len(s.lines) {
 		row = len(s.lines) - 1
 	}

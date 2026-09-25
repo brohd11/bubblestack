@@ -56,6 +56,7 @@ func (s *Screen) CursorAnchor() (x, y int, visible bool) {
 // the selection without an undo step. A line beyond the buffer is rejected, so a caller
 // can retry once a file finishes loading.
 func (s *Screen) Reveal(p Position) bool {
+	s.wrapGoalValid = false
 	if p.Line < 0 || p.Line >= len(s.lines) {
 		return false
 	}
