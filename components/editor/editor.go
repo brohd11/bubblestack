@@ -123,6 +123,7 @@ type Screen struct {
 
 	signColumns map[string]*signColumn // host-named per-line decoration columns (see signs.go)
 	signOrder   []string               // outermost to innermost; registration order for unlisted columns
+	onSignClick func(*core.Shared, SignClick) (core.Action, bool)
 
 	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
@@ -228,6 +229,9 @@ type Opts struct {
 	IndentGuides    bool
 	Wrap            bool
 	LineNumbers     bool
+	// OnSignClick handles an unmodified left press on a visible sign. Returning true
+	// consumes the press without moving the caret or changing the selection.
+	OnSignClick func(*core.Shared, SignClick) (core.Action, bool)
 }
 
 // editorLoadedMsg carries the async file read from Init back to Update.
@@ -460,6 +464,7 @@ func New(opts Opts) *Screen {
 		searchSeq:       -1,
 		contextMenu:     opts.ContextMenu,
 		contextItems:    opts.ContextItems,
+		onSignClick:     opts.OnSignClick,
 
 		indentMode:          opts.Indent,
 		indentWidth:         opts.IndentWidth,
@@ -748,6 +753,15 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		mm := m.Mouse()
 		switch mm.Button {
 		case tea.MouseLeft:
+			if s.onSignClick != nil && mm.Mod == 0 {
+				if hit, ok := s.signAt(sh, mm.X, mm.Y); ok {
+					if act, handled := s.onSignClick(sh, hit); handled {
+						s.resetMouseGesture()
+						s.clickCount = 0
+						return s, act
+					}
+				}
+			}
 			if s.searchBarHit(sh, mm.X, mm.Y) {
 				s.resetMouseGesture()
 				s.clickCount = 0

@@ -2,8 +2,10 @@ package editor
 
 import (
 	"slices"
+	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/brohd11/bubblestack/core"
 )
 
 // The sign column: one decorated cell per line, left of the line numbers. The editor
@@ -15,6 +17,45 @@ import (
 type Sign struct {
 	Text  string
 	Style lipgloss.Style
+}
+
+// SignClick identifies a rendered sign, with a zero-based buffer line and an
+// absolute terminal-cell anchor. Blank cells and wrapped continuations do not hit.
+type SignClick struct {
+	Column string
+	Line   int
+	X, Y   int
+}
+
+func (s *Screen) signAt(sh *core.Shared, x, y int) (SignClick, bool) {
+	columns, _ := s.visibleGutter()
+	column := x - s.insetX()
+	row := y - s.insetY()
+	if !s.embedded {
+		row -= sh.BodyY()
+	}
+	if column < 0 || column >= len(columns) || row < 0 || row >= s.h {
+		return SignClick{}, false
+	}
+	line := s.scrY + row
+	if s.wrap {
+		s.rebuildWrapRows()
+		if line >= len(s.wrapRows) || s.wrapRows[line].start != 0 {
+			return SignClick{}, false
+		}
+		line = s.wrapRows[line].line
+	}
+	if line >= len(s.lines) {
+		return SignClick{}, false
+	}
+	id := columns[column]
+	if sign, ok := s.signColumns[id].signs[line]; !ok || strings.TrimSpace(sign.Text) == "" {
+		return SignClick{}, false
+	}
+	if s.embedded {
+		x, y = x+s.originX, y+s.originY
+	}
+	return SignClick{Column: id, Line: line, X: x, Y: y}, true
 }
 
 type signColumn struct {
