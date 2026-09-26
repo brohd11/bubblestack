@@ -254,7 +254,9 @@ PROMPT_COMMAND=('printf "FIRST:%s\n" "$?"' 'printf "SECOND\n"')
 		t.Fatal(err)
 	}
 	cmd.Args = append(cmd.Args, "-i")
-	cmd.Stdin = strings.NewReader("false\nexit\n")
+	// Keep false's status for the prompt assertion, then exit successfully:
+	// bare exit preserves status 1, which Linux script -e propagates.
+	cmd.Stdin = strings.NewReader("false\nexit 0\n")
 	out, err := interactiveOutput(t, cmd)
 	if err != nil || !strings.Contains(string(out), "[gofer] exit returns to gofer\nFIRST:1\nSECOND\n") {
 		t.Fatalf("array prompt hooks: %v\n%s", err, out)
