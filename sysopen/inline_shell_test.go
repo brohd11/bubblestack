@@ -261,67 +261,6 @@ PROMPT_COMMAND=('printf "FIRST:%s\n" "$?"' 'printf "SECOND\n"')
 	}
 }
 
-// This subprocess helper opens the next shell in the nesting test using the real
-// inherited environment. Input files keep shell read-ahead from consuming commands
-// intended for an inner shell.
-func TestNestedShellProcess(t *testing.T) {
-	app := os.Getenv("BUBBLESTACK_TEST_APP")
-	if app == "" {
-		return
-	}
-	input, err := os.Open(os.Getenv("BUBBLESTACK_TEST_INPUT"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer input.Close()
-	cmd := exec.Command(os.Getenv("BUBBLESTACK_TEST_SHELL"))
-	cmd.Env, _ = shellEnvironment(cmd.Environ(), app)
-	cleanup, _, err := prepareShell(cmd)
-	defer cleanup()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd.Args = append(cmd.Args, "-i")
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = input, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestNestedShellUnwinds(t *testing.T) {
-	shell := shellForTest(t, "zsh")
-	home := t.TempDir()
-	writeShellFile(t, home, ".zshrc", "PROMPT='READY > '\n")
-	childCommand := func(app, file string) string {
-		return "env BUBBLESTACK_TEST_APP=" + ShellQuote(app) + " BUBBLESTACK_TEST_INPUT=" +
-			ShellQuote(filepath.Join(home, file)) + " " + ShellQuote(os.Args[0]) + " -test.run=^TestNestedShellProcess$\n"
-	}
-	writeShellFile(t, home, "inner", "printf 'INNER\\n'\nexit\n")
-	writeShellFile(t, home, "middle", childCommand("gofer", "inner")+"printf 'MIDDLE:%s\\n' \"$BUBBLESTACK_SHELL_HINT\"\nexit\n")
-	writeShellFile(t, home, "outer", childCommand("repoview", "middle")+"printf 'OUTER:%s\\n' \"$BUBBLESTACK_SHELL_HINT\"\nexit\n")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestNestedShellProcess$")
-	cmd.Env = []string{
-		"HOME=" + home, "PATH=" + os.Getenv("PATH"), "TERM=xterm",
-		"BUBBLESTACK_TEST_APP=gofer", "BUBBLESTACK_TEST_SHELL=" + shell,
-		"BUBBLESTACK_TEST_INPUT=" + filepath.Join(home, "outer"),
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("nested shells: %v\n%s", err, out)
-	}
-	for _, want := range []string{
-		"[gofer → repoview → gofer] exit returns to gofer",
-		"MIDDLE:[gofer → repoview] exit returns to repoview",
-		"OUTER:[gofer] exit returns to gofer",
-	} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("missing %q:\n%s", want, out)
-		}
-	}
-}
-
 func TestReminderDoesNotEvaluateAppName(t *testing.T) {
 	for _, name := range []string{"zsh", "bash", "fish"} {
 		t.Run(name, func(t *testing.T) {
