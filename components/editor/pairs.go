@@ -5,6 +5,16 @@ package editor
 
 // ---------- delimiter pairs ----------
 
+// canAutoPair checks the immediate word boundaries around the caret. Symmetric
+// delimiters (quotes/backticks) need both sides clear; brackets only need the right.
+func (s *Screen) canAutoPair(open, close rune) bool {
+	line := s.lines[s.curY]
+	if s.curX < len(line) && editorWordClass(line[s.curX]) == 1 {
+		return false
+	}
+	return open != close || s.curX == 0 || editorWordClass(line[s.curX-1]) != 1
+}
+
 // deleteEmptyAutoPair removes an auto-closing pair around the caret (typed or not: no
 // provenance is kept), inside the key's undo step.
 func (s *Screen) deleteEmptyAutoPair() bool {

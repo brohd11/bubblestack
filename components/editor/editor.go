@@ -1020,10 +1020,10 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 	case "end", "ctrl+e":
 		s.moveEnd()
 	default:
-		// A single typed opener brings its closer and leaves the caret between them; a
-		// bracketed paste (many runes in one key) goes through insertText instead.
+		// A single typed opener brings its closer when adjacent word characters allow
+		// it, leaving the caret between them. Pasted text bypasses auto-pairing.
 		if r, typed := editorTypedRune(m); typed {
-			if closer, ok := s.autoPairs[r]; ok {
+			if closer, ok := s.autoPairs[r]; ok && s.canAutoPair(r, closer) {
 				s.insertRunes(r, closer)
 				s.curX--
 				s.wantX = s.curX

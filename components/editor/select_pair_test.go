@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -337,6 +338,88 @@ func TestEditorAutoPair(t *testing.T) {
 			}
 			if s.wantX != s.curX {
 				t.Fatalf("wantX %d out of sync with curX %d", s.wantX, s.curX)
+			}
+		})
+	}
+}
+
+func TestEditorAutoPairAdjacency(t *testing.T) {
+	for _, tc := range []struct {
+		name, before     string
+		quotes, brackets bool
+	}{
+		{"empty", "|", true, true},
+		{"before word", "|this", false, false},
+		{"inside word", "th|is", false, false},
+		{"after word", "this|", false, true},
+		{"after word before space", "this| next", false, true},
+		{"before word after space", "prev |this", false, false},
+		{"spaces", " | ", true, true},
+		{"tabs", "\t|\t", true, true},
+		{"inside parentheses", "print(|)", true, true},
+		{"inside brackets", "[|]", true, true},
+		{"punctuation", ",|;", true, true},
+		{"before underscore", "|_", false, false},
+		{"after underscore", "_|", false, true},
+		{"before digit", "|2", false, false},
+		{"after digit", "2|", false, true},
+		{"before Unicode letter", "|界", false, false},
+		{"after Unicode letter", "界|", false, true},
+		{"before Unicode digit", "|٢", false, false},
+		{"after Unicode digit", "٢|", false, true},
+		{"start of line", "word\n| ", true, true},
+		{"end of line", " |\nword", true, true},
+	} {
+		for _, pair := range editorTestAutoPairs {
+			t.Run(tc.name+"/"+string(pair.Open), func(t *testing.T) {
+				before, after, _ := strings.Cut(tc.before, "|")
+				s, _ := newEditor(editorTestPairOpts("x.go"))
+				s.setContent(before + after)
+				row := strings.Count(before, "\n")
+				col := len([]rune(before[strings.LastIndex(before, "\n")+1:]))
+				s.curY, s.curX, s.wantX = row, col, col
+				paired := tc.brackets
+				if pair.Open == pair.Close {
+					paired = tc.quotes
+				}
+				want := before + string(pair.Open)
+				if paired {
+					want += string(pair.Close)
+				}
+				want += after
+				typeRunes(s, pair.Open)
+				check := func(want string, wantCol int) {
+					t.Helper()
+					if got := buffer(s); got != want {
+						t.Fatalf("buffer = %q, want %q", got, want)
+					}
+					if s.curY != row || s.curX != wantCol || s.wantX != wantCol {
+						t.Fatalf("caret = %d:%d (wantX %d), want %d:%d", s.curY, s.curX, s.wantX, row, wantCol)
+					}
+				}
+				check(want, col+1)
+				s.key(nil, keyMsg("ctrl+z"))
+				check(before+after, col)
+				s.key(nil, keyMsg("ctrl+y"))
+				check(want, col+1)
+			})
+		}
+	}
+}
+
+func TestEditorPairsSurroundSelectionBesideText(t *testing.T) {
+	for _, pair := range editorTestAutoPairs {
+		t.Run(string(pair.Open), func(t *testing.T) {
+			s, _ := newEditor(editorTestPairOpts("x.go"))
+			s.setContent("abcdef")
+			selectRange(s, 0, 1, 0, 4)
+			typeRunes(s, pair.Open)
+			want := "a" + string(pair.Open) + "bcd" + string(pair.Close) + "ef"
+			if got := buffer(s); got != want {
+				t.Fatalf("buffer = %q, want %q", got, want)
+			}
+			if got := s.selectedText(); got != "bcd" {
+				t.Fatalf("selected text = %q, want bcd", got)
 			}
 		})
 	}

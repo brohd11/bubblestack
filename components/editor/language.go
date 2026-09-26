@@ -16,7 +16,11 @@ type LanguageResolver func(path string) *LanguageConfig
 // independent instance: previews and background parses may run concurrently.
 // IndentSpaces is the automatic block-indent unit (0 means a tab); Opts overrides it.
 type LanguageConfig struct {
-	NewHighlighter   func() Highlighter
+	NewHighlighter func() Highlighter
+	// AutoClosingPairs apply to single typed openers when the next rune is not a
+	// word character (Unicode letter, digit, or underscore). Symmetric pairs also
+	// require the previous rune not to be a word character. Line boundaries permit
+	// pairing; SurroundingPairs wrap selections regardless of adjacent text.
 	AutoClosingPairs []Pair
 	SurroundingPairs []Pair
 	IndentSpaces     int
