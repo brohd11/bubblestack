@@ -328,7 +328,7 @@ func (s *Screen) renderWrappedRow(idx int) string {
 	// here. Mid-line it belongs to the next row, at its column 0.
 	eol := s.lastRowOfLine(idx)
 
-	if s.focused && (s.hl != nil || len(s.hlOverlayRows) > 0) {
+	if s.hl != nil || len(s.hlOverlayRows) > 0 {
 		if styled, ok := s.renderLineStyled(r.line, start, end, eol); ok {
 			return num + styled
 		}
@@ -344,7 +344,7 @@ func (s *Screen) lastRowOfLine(idx int) bool {
 // renderLine renders one buffer row's window in display cells behind the gutter, with the
 // caret as a reverse-video cell (a blank at end of line). With a highlighter the window
 // renders through its spans; the caret still wins. Styles never change widths.
-// Unfocused, the row is muted and the caret hidden, so only the live pane shows one.
+// Unfocused, text keeps its styling and the caret is hidden.
 func (s *Screen) renderLine(row int) string {
 	disp := expandLine(s.lines[row])
 	w := s.contentW()
@@ -365,7 +365,7 @@ func (s *Screen) renderLine(row int) string {
 	num := s.gutterText(row, true)
 	var body string
 	done := false
-	if s.focused && (s.hl != nil || len(s.hlOverlayRows) > 0) {
+	if s.hl != nil || len(s.hlOverlayRows) > 0 {
 		body, done = s.renderLineStyled(row, start, end, !over)
 	}
 	if !done {
@@ -377,7 +377,7 @@ func (s *Screen) renderLine(row int) string {
 	return num + body
 }
 
-// renderLinePlain layers muted, selection and caret over a cell window. Selection is
+// renderLinePlain layers selection and caret over a cell window. Selection is
 // converted to cells so a tab's whole expansion is highlighted.
 func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	line := s.lines[row]
@@ -388,7 +388,6 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 	if s.focused && row == s.curY {
 		c = cellOfCol(s.lines[row], s.curX) - start
 	}
-	muted := core.MutedStyle()
 	selected := lipgloss.NewStyle().Background(core.MutedColor).Foreground(core.OnFocusedColor)
 	selFrom, selTo, hasSel := s.selectedCells(row)
 	inSel := func(cell int) bool { return hasSel && cell >= selFrom && cell < selTo }
@@ -409,10 +408,6 @@ func (s *Screen) renderLinePlain(row, start, end int, eol bool) string {
 		}
 		style := lipgloss.NewStyle()
 		styled := false
-		if !s.focused {
-			style = muted
-			styled = true
-		}
 		if guide {
 			style = style.Foreground(core.MutedColor)
 			styled = true
@@ -617,7 +612,7 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 	}
 	vis, vidx := drunes[start:end], didx[start:end]
 	c := -1 // no cursor splice off the cursor row
-	if row == s.curY {
+	if s.focused && row == s.curY {
 		c = cellOfCol(line, s.curX) - start // start is the window origin in BOTH modes
 	}
 	selFrom, selTo, hasSel := s.selectedCells(row)

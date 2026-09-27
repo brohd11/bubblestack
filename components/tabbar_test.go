@@ -5,8 +5,39 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+	"github.com/brohd11/bubblestack/core"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestTabBarUsesOwnerFocus(t *testing.T) {
+	previous := core.BackgroundIsDark()
+	t.Cleanup(func() { core.SetBackgroundIsDark(previous) })
+	p := NewTabBar()
+	p.SetItems([]TabItem{{ID: "a", Label: "alpha", Marker: " (*)"}, {ID: "b", Label: "beta"}})
+	p.SetActive("a")
+	p.SetSize(30, 1)
+	for _, dark := range []bool{false, true} {
+		core.SetBackgroundIsDark(dark)
+		for _, focused := range []bool{false, true} {
+			background := core.MutedColor
+			if focused {
+				background = core.FocusedColor
+			}
+			selected := lipgloss.NewStyle().Foreground(core.OnFocusedColor).Background(background).Bold(true).Render(" alpha (*) ")
+			row := p.View(focused)
+			if !strings.Contains(row, selected) || !strings.Contains(row, core.MutedStyle().Render(" beta ")) {
+				t.Fatalf("dark=%v focused=%v: incorrect tab colors: %q", dark, focused, row)
+			}
+			if ansi.StringWidth(row) != 30 {
+				t.Fatal("focus changed tab geometry")
+			}
+			if id, hit := p.Click(13, 0); !hit || id != "b" {
+				t.Fatal("focus changed tab hit testing")
+			}
+		}
+	}
+}
 
 func TestTabBarOverflowAndClicks(t *testing.T) {
 	p := NewTabBar()

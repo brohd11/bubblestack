@@ -100,7 +100,7 @@ type Screen struct {
 	bordered  bool // Opts.Border: draw the frame instead of the title bar
 	hideTitle bool // host supplies the document label (for example, in a tab bar)
 	embedded  bool // one pane of a layout (core.Embeddable): pane-relative mouse, gutter
-	focused   bool // false ⇒ muted body, no cursor (core.FocusableScreen); true standalone
+	focused   bool // false ⇒ muted chrome, no cursor (core.FocusableScreen); true standalone
 
 	originX, originY int  // the pane's absolute top-left (components.PaneOriginer)
 	hasOrigin        bool // false standalone ⇒ the save-as box spans the full width
@@ -532,8 +532,8 @@ func (s *Screen) SetEmbedded(on bool) {
 	}
 }
 
-// SetFocused implements core.FocusableScreen. Unfocused, the body and (unbordered) title
-// are muted and the caret is hidden.
+// SetFocused implements core.FocusableScreen. Unfocused, text keeps its colors,
+// chrome is muted and the caret is hidden.
 func (s *Screen) SetFocused(focused bool) {
 	s.focused = focused
 	if !focused {

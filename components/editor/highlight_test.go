@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -463,14 +464,68 @@ func TestEditorHighlighterRejectsPreviousLanguageSnapshot(t *testing.T) {
 	}
 }
 
-func TestEditorUnfocusedSuppressesHighlight(t *testing.T) {
+func TestEditorUnfocusedRetainsHighlight(t *testing.T) {
 	s, sh := newPaneEditor(Opts{Highlighter: &countingHL{}})
 	s.setContent("alpha")
 	s.SetFocused(false)
 	dark := s.View(sh)
 	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
-	if !strings.Contains(dark, muted.Render("alpha")) || strings.Contains(dark, testHighlightStyle.Render("alpha")) {
-		t.Fatalf("unfocused render did not replace syntax styling with muted text: %q", dark)
+	if strings.Contains(dark, muted.Render("alpha")) || !strings.Contains(dark, testHighlightStyle.Render("alpha")) {
+		t.Fatalf("unfocused render did not retain syntax styling: %q", dark)
+	}
+}
+
+func TestEditorBlurKeepsColorsAndHidesCaret(t *testing.T) {
+	for _, mode := range []string{"plain", "syntax", "overlay"} {
+		for _, wrap := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/wrap=%v", mode, wrap), func(t *testing.T) {
+				opts := Opts{HideTitle: true, Wrap: wrap}
+				if mode == "syntax" {
+					opts.Highlighter = &countingHL{}
+				}
+				s, sh := newEditor(opts)
+				s.SetSize(sh, 8, 6)
+				s.SetText("abcdefghijkl\ntail")
+				if mode == "overlay" {
+					s.SetHighlightOverlay(s.EditSeq(), []HighlightRange{{
+						Range: Range{Start: Position{}, End: Position{Column: 12}}, Style: &testHighlightStyle,
+					}})
+				}
+				// Compare to the same content with the focused caret on another row.
+				s.curY, s.curX = 1, 0
+				render := func() string {
+					if !wrap {
+						return s.renderLine(0)
+					}
+					s.rebuildWrapRows()
+					var rows []string
+					for i, row := range s.wrapRows {
+						if row.line == 0 {
+							rows = append(rows, s.renderWrappedRow(i))
+						}
+					}
+					return strings.Join(rows, "\n")
+				}
+				want := render()
+				for _, column := range []int{0, 8, 12} {
+					s.curY, s.curX = 0, column
+					s.SetFocused(false)
+					if got := render(); got != want {
+						t.Fatalf("blur at column %d changed text styling or rendered a caret:\n%q\nwant %q", column, got, want)
+					}
+				}
+				// End-of-line carets must also disappear when the complete line fits.
+				s.SetSize(sh, 24, 6)
+				s.curY = 1
+				s.SetFocused(true)
+				want = render()
+				s.curY, s.curX = 0, 12
+				s.SetFocused(false)
+				if got := render(); got != want {
+					t.Fatalf("blur retained end-of-line caret: %q, want %q", got, want)
+				}
+			})
+		}
 	}
 }
 

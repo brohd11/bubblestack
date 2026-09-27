@@ -117,7 +117,9 @@ a resize snapshot and have no adjacent resize handles.
 cell-width truncation, and keeping the active tab visible on selection or resize.
 Call `Click(x, y)` with local coordinates: a nonempty returned ID requests
 activation; arrow clicks scroll without selecting. The bar does not take keyboard
-focus, so the host owns shortcuts and routes its mouse clicks explicitly.
+focus, so the host owns shortcuts and routes its mouse clicks explicitly. Pass the
+owning pane's focus to `View(focused)` to accent its selected tab while focused and
+use the muted background otherwise.
 
 ### FilePanel colors
 

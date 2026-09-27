@@ -767,8 +767,8 @@ func TestEditorPaneClick(t *testing.T) {
 	})
 }
 
-// TestEditorUnfocusedRender: an unfocused pane mutes its body and drops the cursor —
-// a caret where the keys don't land reads as a lie — and mutes its title bar with it.
+// TestEditorUnfocusedRender: an unfocused pane retains its body colors, hides the
+// cursor and mutes its title bar.
 // A standalone editor is focused from birth, so none of this shows.
 func TestEditorUnfocusedRender(t *testing.T) {
 
@@ -788,8 +788,8 @@ func TestEditorUnfocusedRender(t *testing.T) {
 		t.Fatal("an unfocused pane must not draw a cursor")
 	}
 	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
-	if !strings.Contains(dark, muted.Render("hello")) {
-		t.Fatal("an unfocused pane should mute its body text")
+	if strings.Contains(dark, muted.Render("hello")) || !strings.Contains(dark, "hello") {
+		t.Fatal("an unfocused pane should retain normal body text")
 	}
 	if strings.Contains(dark, core.RenderTitleBar("notes.md")) {
 		t.Fatal("an unfocused pane should mute its title bar too")

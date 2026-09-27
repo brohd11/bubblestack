@@ -116,13 +116,19 @@ func tabText(item TabItem, width int) string {
 	return strings.Repeat(" ", padding) + text + strings.Repeat(" ", max(0, width-padding-ansi.StringWidth(text)))
 }
 
-func (p *TabBar) View(bool) string {
+// View uses the owning pane's focus to style the selected tab. The bar itself
+// never takes keyboard focus.
+func (p *TabBar) View(focused bool) string {
 	if p.width == 0 || p.height == 0 {
 		return ""
 	}
 	cells, left, right := p.cells()
 	muted := core.MutedStyle()
-	active := lipgloss.NewStyle().Foreground(core.OnFocusedColor).Background(core.FocusedColor).Bold(true)
+	background := core.MutedColor
+	if focused {
+		background = core.FocusedColor
+	}
+	active := lipgloss.NewStyle().Foreground(core.OnFocusedColor).Background(background).Bold(true)
 	var row strings.Builder
 	x := 0
 	if len(cells) > 0 && cells[0].x > 0 {
