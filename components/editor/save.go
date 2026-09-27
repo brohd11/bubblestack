@@ -32,8 +32,17 @@ import (
 // standalone, like nano's prompt.
 func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 	x, y, w, h := s.paneGeometry(sh)
+	var attempt uint64
+	cancelCheck := func() {
+		attempt++
+		s.disk.saveCheck = false
+	}
 	edit := components.NewLineEdit("file name to write", x, y+max(h-2, 0), w,
 		func(_ *core.Shared, name string) core.Action {
+			cancelCheck()
+			if s.disk.writing {
+				return core.SetStatus("save already in progress")
+			}
 			name = strings.TrimSpace(name)
 			if name == "" {
 				return core.Pop()
@@ -49,9 +58,19 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 			if s.path != "" && path != s.path {
 				return core.Push(s.saveAsConfirm(path))
 			}
-			highlight := s.applySaveName(path)
-			return core.Seq(core.Pop(), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
-		}, nil)
+			write := func(pop int) core.Action {
+				cancelCheck()
+				highlight := s.applySaveName(path)
+				return core.Seq(core.Pop(pop), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
+			}
+			if s.disk.enabled && path == s.path {
+				s.disk.saveCheck = true
+				token := attempt
+				return core.Async(s.diskCheck(&diskSaveIntent{valid: func() bool { return token == attempt }, write: write}))
+			}
+			return write(1)
+		}, func(*core.Shared) core.Action { cancelCheck(); return core.Pop() })
+	edit.OnChange = func(*core.Shared, string) core.Action { cancelCheck(); return core.Action{} }
 	if s.path != "" {
 		edit.SetValue(s.path) // the full path: an unchanged enter re-saves the same file
 	}
@@ -123,6 +142,7 @@ func (s *Screen) applySaveName(name string) tea.Cmd {
 	if name == s.path {
 		return nil
 	}
+	s.disk.generation++
 	s.path = name
 	s.title = filepath.Base(name)
 	s.crumb = s.title
@@ -147,15 +167,29 @@ func (s *Screen) saveCmd() tea.Cmd {
 	if s.lineEnding == "\r\n" {
 		content = strings.ReplaceAll(content, "\n", "\r\n")
 	}
+	s.disk.generation++ // invalidate reads dispatched before this write
+	s.disk.writeSerial++
+	s.disk.writing = true
+	result := editorSavedMsg{revision: revision, generation: s.disk.generation}
+	if s.disk.enabled {
+		result.target, result.serial = s, s.disk.writeSerial
+		result.baseline = fingerprint(content, true)
+	}
+	tracked := s.disk.enabled
 	return func() tea.Msg {
 		if path == "" {
-			return editorSavedMsg{err: errors.New("no file path"), revision: revision}
-		}
-		if dir := filepath.Dir(path); dir != "" && dir != "." {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return editorSavedMsg{err: err, revision: revision}
+			result.err = errors.New("no file path")
+		} else {
+			if dir := filepath.Dir(path); dir != "" && dir != "." {
+				result.err = os.MkdirAll(dir, 0o755)
+			}
+			if result.err == nil {
+				result.err = os.WriteFile(path, []byte(content), 0o644)
 			}
 		}
-		return editorSavedMsg{err: os.WriteFile(path, []byte(content), 0o644), revision: revision}
+		if tracked {
+			return core.PropagateAll(result)
+		}
+		return result
 	}
 }

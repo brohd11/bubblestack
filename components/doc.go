@@ -80,6 +80,14 @@ func (s *DocScreen) SetSize(_ *core.Shared, width, bodyHeight int) {
 		return
 	}
 	s.width = width
+	s.Refresh()
+}
+
+// Refresh re-renders a changed source while retaining the viewport position.
+func (s *DocScreen) Refresh() {
+	if s.width < 0 {
+		return
+	}
 	body := s.Render(s.textWidth())
 	// The map belongs to THIS render: the rows it indexes are the ones just laid out,
 	// and a re-wrap at a new width moves every one of them.

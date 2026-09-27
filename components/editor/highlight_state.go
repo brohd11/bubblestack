@@ -236,6 +236,20 @@ func (s *Screen) handleHighlightReady(m editorHighlightReadyMsg) core.Action {
 // PropagateAll even under a menu or dialog.
 func (s *Screen) Receive(sh *core.Shared, payload any) core.Action {
 	switch m := payload.(type) {
+	case diskCheckMsg:
+		return s.applyDiskCheck(m)
+	case editorLoadedMsg:
+		if m.target != s {
+			return core.Action{}
+		}
+		_, act := s.Update(sh, m)
+		return act
+	case editorSavedMsg:
+		if m.target != s {
+			return core.Action{}
+		}
+		_, act := s.Update(sh, m)
+		return act
 	case tea.BlurMsg:
 		s.resetMouseGesture()
 		return core.Action{}

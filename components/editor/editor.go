@@ -37,6 +37,8 @@ import (
 // click-to-cursor needs the scroll offset, and tabs are stored raw but never rendered raw
 // (see expandLine).
 type Screen struct {
+	disk diskState
+
 	path    string // file to load/save; empty ⇒ unsavable scratch buffer
 	baseDir string // directory a relative save-as name resolves against; empty ⇒ the process cwd
 	title   string // title-bar text (defaults to the file's base name, else "Editor")
@@ -208,6 +210,9 @@ type wrapRow struct{ line, start, end int }
 //   - IndentGuides draws muted guides in leading whitespace.
 //   - Wrap and LineNumbers independently enable soft wrapping and line numbers.
 type Opts struct {
+	// TrackDiskChanges enables host-triggered disk checks and checks before saving.
+	TrackDiskChanges bool
+
 	Path string
 	// BaseDir resolves a relative name typed into the save box (usually the directory the
 	// host opened in). Empty uses the process cwd.
@@ -236,13 +241,20 @@ type Opts struct {
 
 // editorLoadedMsg carries the async file read from Init back to Update.
 type editorLoadedMsg struct {
-	content string
-	err     error
+	target     *Screen
+	generation uint64
+	content    string
+	err        error
 }
 
 // editorSavedMsg carries the async write and the revision it snapshotted back to
 // Update, so an edit made while the write is in flight remains dirty.
 type editorSavedMsg struct {
+	target     *Screen
+	serial     uint64
+	generation uint64
+	baseline   diskFingerprint
+
 	err      error
 	revision uint64
 }
@@ -433,6 +445,7 @@ func New(opts Opts) *Screen {
 	}
 	hl, hlExplicit := opts.Highlighter, opts.Highlighter != nil
 	ed := &Screen{
+		disk:            diskState{enabled: opts.TrackDiskChanges},
 		path:            opts.Path,
 		baseDir:         opts.BaseDir,
 		title:           title,
@@ -498,10 +511,15 @@ func (s *Screen) Init(*core.Shared) tea.Cmd {
 		s.refreshHighlightPreview()
 		return s.startHighlightParse()
 	}
-	path := s.path
+	path, generation, tracked := s.path, s.disk.generation, s.disk.enabled
 	return func() tea.Msg {
 		b, err := os.ReadFile(path)
-		return editorLoadedMsg{content: string(b), err: err}
+		m := editorLoadedMsg{content: string(b), err: err}
+		if tracked {
+			m.target, m.generation = s, generation
+			return core.PropagateAll(m)
+		}
+		return m
 	}
 }
 
@@ -560,6 +578,7 @@ func (s *Screen) Text() string {
 func (s *Screen) SetText(content string) {
 	s.loaded = true
 	s.setContent(content)
+	s.recordDisk(content, true)
 }
 
 // SetPaneOrigin implements components.PaneOriginer: ScreenPanel forwards the host layout's
@@ -656,10 +675,14 @@ func (s *Screen) parseHighlight() {
 // Update handles load/save results, mouse and keys (only y/n/esc/c while the exit prompt
 // is up). An edit schedules a repaint after the highlighter's quiet window.
 func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, action core.Action) {
+	wasDirty := s.dirty
 	seq := s.editSeq
 	epoch := s.hlEpoch
 	scroll := s.scrY
 	defer func() {
+		if wasDirty && !s.dirty && s.disk.changed {
+			action.Cmd = tea.Batch(action.Cmd, s.CheckDiskChanges())
+		}
 		if s.hlEpoch != epoch && s.hlFactory != nil {
 			s.refreshHighlightPreview()
 			action.Cmd = tea.Batch(action.Cmd, s.startHighlightParse())
@@ -681,19 +704,45 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 	case editorHighlightReadyMsg:
 		return s, s.handleHighlightReady(m)
 	case editorLoadedMsg:
+		if m.target != nil && (m.target != s || m.generation != s.disk.generation) {
+			return s, core.Action{}
+		}
+		s.disk.ready = true
 		if m.err == nil {
-			s.setContent(m.content)
+			if !s.dirty {
+				s.setContent(m.content)
+			}
+			s.recordDisk(m.content, true)
 			s.refreshHighlightPreview()
 			action.Cmd = s.startHighlightParse()
+		}
+		if os.IsNotExist(m.err) {
+			s.recordDisk("", false)
+		}
+		if s.disk.enabled {
+			// Also consume failed loads so duplicate broadcasts cannot apply twice.
+			s.disk.generation++
+			action = core.Seq(action, core.PropagateAll(DiskStateChangedMsg{Editor: s, Reloaded: m.err == nil}))
 		}
 		// A read error (missing file, permissions) leaves the empty buffer: the first
 		// save creates the file, as nano does.
 		return s, action
 	case editorSavedMsg:
+		if m.target != nil && (m.target != s || m.serial != s.disk.writeSerial || !s.disk.writing) {
+			return s, core.Action{}
+		}
+		s.disk.writing = false
+		if m.target != nil && m.generation != s.disk.generation {
+			return s, core.Action{}
+		}
 		if m.err != nil {
 			s.confirmExit = false
 			sh.Log("editor: save failed: " + m.err.Error())
 			return s, core.SetStatus("save failed: " + m.err.Error())
+		}
+		if s.disk.enabled {
+			s.disk.baseline, s.disk.ready, s.disk.known, s.disk.changed = m.baseline, true, true, false
+			s.disk.generation++
 		}
 		s.savedRevision = m.revision
 		s.dirty = s.revision != s.savedRevision

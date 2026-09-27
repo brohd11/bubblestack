@@ -50,10 +50,7 @@ func (s *Screen) insetY() int {
 }
 
 func (s *Screen) baseTitleText() string {
-	if s.dirty {
-		return s.title + " (*)"
-	}
-	return s.title
+	return s.title + s.ChangeMark()
 }
 
 func (s *Screen) titleText() string {
