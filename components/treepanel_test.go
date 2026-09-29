@@ -1,12 +1,14 @@
 package components
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
 	"github.com/brohd11/bubblestack/core"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -24,6 +26,71 @@ func treeTestNodes(picked *string) []TreeNode {
 			Children: []TreeNode{{ID: "local", Item: CompactItem{Name: "needle"}}},
 		}},
 	}, {ID: "other", Item: CompactItem{Name: "Other"}}}
+}
+
+func TestTreePanelHostKeysAndRowPosition(t *testing.T) {
+	var hostKeys, itemKeys []string
+	nodes := []TreeNode{{ID: "folder", Item: CompactItem{Name: "folder"}, Children: []TreeNode{
+		{ID: "file", Item: CompactItem{Name: "file.md", Keys: func(_ *core.Shared, k string) (core.Action, bool) {
+			itemKeys = append(itemKeys, k)
+			return core.Action{}, k == "ctrl+d"
+		}}},
+	}}}
+	p := NewTreePanel(nodes, "Docs", TreePanelOpts{Border: true,
+		OnKey: func(_ *core.Shared, k string, node TreeNode) (core.Action, bool) {
+			hostKeys = append(hostKeys, node.ID+":"+k)
+			return core.Action{}, k == "ctrl+r"
+		},
+	})
+	p.SetSize(30, 12)
+	p.Focus()
+	sh := core.NewShared(nil)
+	p.UpdatePanel(sh, keyMsg("right")) // built-in navigation precedes host keys
+	if node, _ := p.Selected(); node.ID != "file" || len(hostKeys) != 0 {
+		t.Fatal("host intercepted built-in folding/navigation")
+	}
+	if row, ok := p.RowY(p.List().Index()); !ok || row != 2 {
+		t.Fatalf("file row = %d, %v; want row 2 inside the frame", row, ok)
+	}
+	p.UpdatePanel(sh, keyMsg("ctrl+r"))
+	if len(hostKeys) != 1 || hostKeys[0] != "file:ctrl+r" || len(itemKeys) != 0 {
+		t.Fatal("host key did not receive the original file node or suppress fallback")
+	}
+	p.UpdatePanel(sh, keyMsg("ctrl+d"))
+	if len(itemKeys) != 1 || itemKeys[0] != "ctrl+d" {
+		t.Fatal("unhandled host key did not fall back to the item's keys")
+	}
+	p.UpdatePanel(sh, keyMsg("/"))
+	if p.List().FilterState() != list.Filtering {
+		t.Fatal("filter did not open")
+	}
+	hostCount, itemCount := len(hostKeys), len(itemKeys)
+	p.UpdatePanel(sh, keyMsg("x"))
+	if len(hostKeys) != hostCount || len(itemKeys) != itemCount {
+		t.Fatal("filter input dispatched a row action")
+	}
+}
+
+type treeColorItem struct {
+	CompactItem
+	keep bool
+}
+
+func (i treeColorItem) TitleColor() color.Color { return lipgloss.Color("11") }
+func (i treeColorItem) KeepColor() bool         { return i.keep }
+
+func TestTreePanelForwardsKeepColor(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		p := NewTreePanel([]TreeNode{{ID: "file", Item: treeColorItem{CompactItem: CompactItem{Name: "file.md"}, keep: keep}}}, "Docs", TreePanelOpts{})
+		row := p.List().SelectedItem()
+		if row.(core.KeepColorItem).KeepColor() != keep || row.(core.ColorItem).TitleColor() != lipgloss.Color("11") {
+			t.Fatal("tree row lost underlying color behavior")
+		}
+	}
+	p := NewTreePanel([]TreeNode{{ID: "plain", Item: CompactItem{Name: "plain"}}}, "Outline", TreePanelOpts{})
+	if p.List().SelectedItem().(core.KeepColorItem).KeepColor() {
+		t.Fatal("plain outline row opted out of the selection accent")
+	}
 }
 
 func TestTreePanelRendersAndFolds(t *testing.T) {

@@ -24,8 +24,13 @@ type TreeNode struct {
 // CompactItem dispatches its own Pick.
 type TreePanelOpts struct {
 	OnSelect func(*core.Shared, TreeNode) core.Action
-	Help     []key.Binding
-	Border   bool
+	// ToggleBranchesOnSelect folds branches on Enter/click instead of invoking
+	// OnSelect. Filtering keeps branches expanded for searching.
+	ToggleBranchesOnSelect bool
+	// OnKey handles row keys after built-in folding and before the item's own keys.
+	OnKey  func(*core.Shared, string, TreeNode) (core.Action, bool)
+	Help   []key.Binding
+	Border bool
 }
 
 // TreePanel is a compact, filterable tree panel. Filtering shows every node so collapsed
@@ -106,6 +111,13 @@ func (r treeRow) TitleColor() color.Color {
 	return nil
 }
 
+func (r treeRow) KeepColor() bool {
+	if item, ok := r.node.Item.(core.KeepColorItem); ok {
+		return item.KeepColor()
+	}
+	return false
+}
+
 // SetNodes replaces the data while retaining folds for IDs seen before. Selection follows
 // the same ID when possible and otherwise lands on its deepest visible ancestor.
 func (p *TreePanel) SetNodes(nodes []TreeNode) {
@@ -178,6 +190,13 @@ func (p *TreePanel) selectRow(sh *core.Shared, item list.Item) core.Action {
 	if !ok {
 		return core.Action{}
 	}
+	if row.branch && p.opts.ToggleBranchesOnSelect {
+		if !p.filtering() {
+			p.collapsed[row.id] = !p.collapsed[row.id]
+			p.rebuild(false, row.id)
+		}
+		return core.Action{}
+	}
 	if p.opts.OnSelect != nil {
 		return p.opts.OnSelect(sh, row.node)
 	}
@@ -219,6 +238,11 @@ func (p *TreePanel) keyRow(sh *core.Shared, k string, item list.Item) (core.Acti
 				p.Select(row.parent)
 			}
 			return core.Action{}, true
+		}
+	}
+	if p.opts.OnKey != nil {
+		if act, handled := p.opts.OnKey(sh, k, row.node); handled {
+			return act, true
 		}
 	}
 	if keys := itemKeys(row.node.Item); keys != nil {
@@ -271,3 +295,6 @@ func (p *TreePanel) PanelHelp() []key.Binding     { return p.panel.PanelHelp() }
 func (p *TreePanel) Init(sh *core.Shared) tea.Cmd { return p.panel.Init(sh) }
 func (p *TreePanel) OnFocus() tea.Cmd             { return p.panel.OnFocus() }
 func (p *TreePanel) List() *list.Model            { return p.panel.List() }
+
+// RowY returns the panel-relative row for a visible item, including frame and filter.
+func (p *TreePanel) RowY(idx int) (int, bool) { return p.panel.RowY(idx) }
