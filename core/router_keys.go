@@ -14,7 +14,7 @@ func wrapperOutput(ch *Chrome) (Wrapper, bool) {
 	return w, ok
 }
 
-// quitAction resolves q / ctrl+c by walking the stack top-down for a QuitGater, so a modal
+// quitAction resolves Keys.Quit / Keys.ForceQuit by walking the stack top-down for a QuitGater, so a modal
 // above the gating screen does not silence it; otherwise it quits.
 func (r *Router) quitAction() Action {
 	for i := len(r.stack) - 1; i >= 0; i-- {
@@ -53,7 +53,7 @@ func (r *Router) dirKeyAction(k string, b key.Binding, action func(string) Actio
 // Pointer receiver: tab switching mutates active/stack.
 func (r *Router) globalKey(msg tea.KeyPressMsg) (Action, bool) {
 	k := msg.String()
-	if k == "ctrl+c" {
+	if MatchKey(k, Keys.ForceQuit) {
 		return r.quitAction(), true
 	}
 

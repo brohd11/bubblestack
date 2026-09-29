@@ -21,16 +21,17 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Screen is a nano-like editor. ctrl+x exits, prompting to save a dirty buffer (y opens
+// Screen is a nano-like editor. alt+w closes, prompting to save a dirty buffer (y opens
 // a save-as box seeded with the current name, n discards, esc/c cancels). ctrl+z/ctrl+y
-// undo and redo; alt+c/x/v copy, cut and paste (the whole line with no selection); tab
+// undo and redo; ctrl+c/x/v copy, cut and paste (the whole line with no selection); tab
 // over a multi-line selection indents it (alt+, / alt+. / alt+i: see indent.go). The
 // left mouse button places the caret and selects (drag, double, triple click); the
 // right one raises a copy/cut/paste menu when Opts.ContextMenu is set. The wheel
 // scrolls without moving the caret.
 //
 // It reports Filtering at all times so the router's single-key shortcuts never steal
-// typed text. Embedded in a pane layout (SetEmbedded), mouse coordinates are
+// typed text. The router's core.Keys.ForceQuit is not gated, so a host rebinds it off
+// ctrl+c to let copy through. Embedded in a pane layout (SetEmbedded), mouse coordinates are
 // pane-relative and focus shows by muting the body; the host's pane keys still leave it.
 //
 // The buffer is a hand-rolled lines/cursor/scroll model rather than bubbles/textarea:
@@ -587,8 +588,9 @@ func (s *Screen) SetPaneOrigin(x, y int) {
 	s.originX, s.originY, s.hasOrigin = x, y, true
 }
 
-// Filtering reports true at all times: the editor types every printable key. ctrl+c
-// remains the router's quit.
+// Filtering reports true at all times: the editor types every printable key. The
+// router's core.Keys.ForceQuit still runs first, so a host must move it off ctrl+c or
+// copy never arrives.
 func (s *Screen) Filtering() bool { return true }
 
 // CrumbLabel contributes the screen's breadcrumb segment (title, or the short crumb
@@ -957,13 +959,20 @@ func (s *Screen) commandKey(sh *core.Shared, k string, m tea.KeyPressMsg) (core.
 	case k == "ctrl+y":
 		s.redo()
 		return core.Action{}, true
-	// alt+c/x/v, since ctrl+c is the router's quit and ctrl+x this screen's exit.
-	case k == "alt+c":
+	// ctrl+c/x/v, as on every desktop: the host moves core.Keys.ForceQuit off ctrl+c.
+	case k == "ctrl+c":
 		return s.copyOrCut(false), true
-	case k == "alt+x":
+	case k == "ctrl+x":
 		return s.copyOrCut(true), true
-	case k == "alt+v":
+	case k == "ctrl+v":
 		return pasteClipboardCmd(s), true
+	// alt+w closes, here rather than in editKey so the selection pre-pass never sees it.
+	case k == "alt+w":
+		if !s.dirty {
+			return s.exit(sh), true
+		}
+		s.confirmExit = true
+		return core.Action{}, true
 	}
 	if move := s.selectMove(k); move != nil {
 		s.extendSelection(move) // selectFrom does its own clampScroll
@@ -1015,11 +1024,6 @@ func (s *Screen) selectionKey(k string, m tea.KeyPressMsg) bool {
 // buffer untouched and return straight away.
 func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core.Action, settle bool) {
 	switch k {
-	case "ctrl+x":
-		if !s.dirty {
-			return s.exit(sh), false
-		}
-		s.confirmExit = true
 	case "ctrl+s":
 		// A plain save on the prefilled path, or a save-as when edited; offered on a clean
 		// buffer too, as the way to fork a doc to a new name.
@@ -1119,7 +1123,7 @@ func (s *Screen) HelpView(sh *core.Shared) string {
 func (s *Screen) HelpBindings() []key.Binding {
 	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
-		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "exit")),
+		key.NewBinding(key.WithKeys("alt+w"), key.WithHelp("alt+w", "close")),
 	}
 	if s.searchEnabled {
 		hints = append(hints, key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search")))
@@ -1147,9 +1151,9 @@ func (s *Screen) HelpBindings() []key.Binding {
 		// Kitty protocol, and ctrl+u also arrives where no modified backspace does.
 		key.NewBinding(key.WithKeys("ctrl+alt+backspace", "ctrl+alt+h", "ctrl+u"),
 			key.WithHelp("ctrl+alt+backspace", "clear to line start")),
-		key.NewBinding(key.WithKeys("alt+c"), key.WithHelp("alt+c", "copy")),
-		key.NewBinding(key.WithKeys("alt+x"), key.WithHelp("alt+x", "cut")),
-		key.NewBinding(key.WithKeys("alt+v"), key.WithHelp("alt+v", "paste")),
+		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "copy")),
+		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "cut")),
+		key.NewBinding(key.WithKeys("ctrl+v"), key.WithHelp("ctrl+v", "paste")),
 	)
 }
 

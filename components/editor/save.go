@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Saving for Screen: the ctrl+x prompt's save path and the save-as line edit that
+// Saving for Screen: the close prompt's save path and the save-as line edit that
 // seeds it with the current name.
 
 // ---------- save ----------

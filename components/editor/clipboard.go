@@ -9,7 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Clipboard verbs for Screen: the alt+c/x/v chords and the optional right-click menu.
+// Clipboard verbs for Screen: the ctrl+c/x/v chords and the optional right-click menu.
 // With no selection they act on the caret's line.
 
 // copySelectionCmd writes the clipboard off the UI thread: atotto shells out to

@@ -35,7 +35,7 @@ type Screen interface {
 // shortcuts (O/c) don't steal keystrokes meant for the filter input.
 type Filterer interface{ Filtering() bool }
 
-// QuitGater lets a screen intercept the quit keys (q, ctrl+c), e.g. to confirm losing
+// QuitGater lets a screen intercept the quit keys (Keys.Quit, Keys.ForceQuit), e.g. to confirm losing
 // unsaved work: (act, true) replaces the quit. The stack is walked top-down and the first
 // taker wins, so a screen pushed by a gate must answer for itself (DialogScreen.OnQuit) or
 // the walk reaches the same gate again.

@@ -8,10 +8,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// altKey builds the alt-modified rune the clipboard chords arrive as: bubbletea reports
-// KeyRunes with Alt set, whose String() is "alt+<rune>".
-func altKey(r rune) tea.KeyMsg {
-	return keyMsg("alt+" + string(r))
+// ctrlKey builds the ctrl-modified rune the clipboard chords arrive as, whose String() is
+// "ctrl+<rune>".
+func ctrlKey(r rune) tea.KeyMsg {
+	return keyMsg("ctrl+" + string(r))
 }
 
 // chord presses one clipboard chord and runs the command it returns — the write travels
@@ -19,16 +19,16 @@ func altKey(r rune) tea.KeyMsg {
 // until the returned Action is executed the way the router would.
 func chord(t *testing.T, s *Screen, sh *core.Shared, r rune) tea.Msg {
 	t.Helper()
-	_, act := s.Update(sh, altKey(r))
+	_, act := s.Update(sh, ctrlKey(r))
 	if act.Cmd == nil {
-		t.Fatalf("alt+%c returned no command", r)
+		t.Fatalf("ctrl+%c returned no command", r)
 	}
 	return act.Cmd()
 }
 
-// TestEditorCopyChordSelection: alt+c writes the selection and touches nothing else. The
-// selection surviving is the point — the chord arrives as a rune, and key()'s selection
-// pre-switch would take an unrecognized rune for typing and delete it.
+// TestEditorCopyChordSelection: ctrl+c writes the selection and touches nothing else. The
+// selection surviving is the point: key()'s selection pre-switch would take a key it
+// does not recognize for typing and delete the selection.
 func TestEditorCopyChordSelection(t *testing.T) {
 	wrote := stubClipboard(t, "")
 	s, sh := newEditor(Opts{})
@@ -36,7 +36,7 @@ func TestEditorCopyChordSelection(t *testing.T) {
 	selectRange(s, 0, 1, 0, 4)
 
 	if msg := chord(t, s, sh, 'c'); msg != (editorCopiedMsg{n: 3}) {
-		t.Fatalf("alt+c ran %#v, want a three-character copy", msg)
+		t.Fatalf("ctrl+c ran %#v, want a three-character copy", msg)
 	}
 	if *wrote != "bcd" {
 		t.Errorf("clipboard got %q, want %q", *wrote, "bcd")
@@ -49,7 +49,7 @@ func TestEditorCopyChordSelection(t *testing.T) {
 	}
 }
 
-// TestEditorCutChordSelection: alt+x writes the same text and deletes it, as one undo step.
+// TestEditorCutChordSelection: ctrl+x writes the same text and deletes it, as one undo step.
 func TestEditorCutChordSelection(t *testing.T) {
 	wrote := stubClipboard(t, "")
 	s, sh := newEditor(Opts{})
@@ -57,7 +57,7 @@ func TestEditorCutChordSelection(t *testing.T) {
 	selectRange(s, 0, 1, 0, 4)
 
 	if msg := chord(t, s, sh, 'x'); msg != (editorCopiedMsg{n: 3, cut: true}) {
-		t.Fatalf("alt+x ran %#v, want a three-character cut", msg)
+		t.Fatalf("ctrl+x ran %#v, want a three-character cut", msg)
 	}
 	if *wrote != "bcd" {
 		t.Errorf("clipboard got %q, want %q", *wrote, "bcd")
@@ -164,7 +164,7 @@ func TestEditorCutEmptyOnlyLine(t *testing.T) {
 	}
 }
 
-// TestEditorPasteChord: alt+v is the read half, addressed back to this editor; the splice
+// TestEditorPasteChord: ctrl+v is the read half, addressed back to this editor; the splice
 // itself is the editorPastedMsg case (TestEditorContextPaste covers it).
 func TestEditorPasteChord(t *testing.T) {
 	s, sh := newEditor(Opts{})
@@ -172,16 +172,16 @@ func TestEditorPasteChord(t *testing.T) {
 	s.setContent("ab")
 	s.curX = 1
 
-	_, act := s.Update(sh, altKey('v'))
+	_, act := s.Update(sh, ctrlKey('v'))
 	if act.Cmd == nil {
-		t.Fatal("alt+v should return the clipboard read command")
+		t.Fatal("ctrl+v should return the clipboard read command")
 	}
 	pasted, ok := act.Cmd().(editorPastedMsg)
 	if !ok {
-		t.Fatalf("alt+v ran %#v, want an editorPastedMsg", act.Cmd())
+		t.Fatalf("ctrl+v ran %#v, want an editorPastedMsg", act.Cmd())
 	}
 	if pasted.target != s || pasted.text != "hello" {
-		t.Fatalf("alt+v read %+v, want the text addressed to this editor", pasted)
+		t.Fatalf("ctrl+v read %+v, want the text addressed to this editor", pasted)
 	}
 	s.Update(sh, pasted)
 	if got := buffer(s); got != "ahellob" {
@@ -198,12 +198,12 @@ func TestEditorChordsDoNotType(t *testing.T) {
 		s.setContent("abcdef")
 		selectRange(s, 0, 1, 0, 4)
 
-		s.Update(sh, altKey(r))
+		s.Update(sh, ctrlKey(r))
 		if r != 'x' && buffer(s) != "abcdef" {
-			t.Errorf("alt+%c typed into the buffer: %q", r, buffer(s))
+			t.Errorf("ctrl+%c typed into the buffer: %q", r, buffer(s))
 		}
 		if r == 'c' && s.selectedText() != "bcd" {
-			t.Errorf("alt+c dropped the selection: %q", s.selectedText())
+			t.Errorf("ctrl+c dropped the selection: %q", s.selectedText())
 		}
 	}
 }

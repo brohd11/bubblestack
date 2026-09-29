@@ -175,7 +175,7 @@ func TestDiskSaveAcknowledgementAndCancellation(t *testing.T) {
 			model, _ = model.Update(keyMsg("!"))
 			diskWrite(t, ed.path, "external")
 			if exit {
-				model, _ = model.Update(keyMsg("ctrl+x"))
+				model, _ = model.Update(keyMsg("alt+w"))
 				model, _ = model.Update(keyMsg("y"))
 			} else {
 				model, _ = model.Update(keyMsg("ctrl+s"))

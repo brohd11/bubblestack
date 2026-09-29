@@ -1200,19 +1200,19 @@ func TestEditorSetTextSuppressesTheInitRead(t *testing.T) {
 	}
 }
 
-// TestEditorExitCleanPops: ctrl+x on an unmodified buffer pops without a prompt.
+// TestEditorExitCleanPops: alt+w on an unmodified buffer pops without a prompt.
 func TestEditorExitCleanPops(t *testing.T) {
 	s, _ := newEditor(Opts{})
-	_, act := s.key(nil, keyMsg("ctrl+x"))
+	_, act := s.key(nil, keyMsg("alt+w"))
 	if act.Msg == nil {
-		t.Fatal("ctrl+x on a clean buffer should pop (non-nil nav msg)")
+		t.Fatal("alt+w on a clean buffer should pop (non-nil nav msg)")
 	}
 	if s.confirmExit {
 		t.Fatal("no prompt for a clean buffer")
 	}
 }
 
-// TestEditorExitPrompt covers the dirty ctrl+x flow: the prompt shows, c cancels,
+// TestEditorExitPrompt covers the dirty alt+w flow: the prompt shows, c cancels,
 // n discards and pops, y saves and pops after the async write lands.
 func TestEditorExitPrompt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "saved.txt")
@@ -1221,9 +1221,9 @@ func TestEditorExitPrompt(t *testing.T) {
 	s.key(nil, keyMsg("enter"))
 	typeRunes(s, 'y', 'o')
 
-	s.key(nil, keyMsg("ctrl+x"))
+	s.key(nil, keyMsg("alt+w"))
 	if !s.confirmExit {
-		t.Fatal("ctrl+x on a dirty buffer should show the save prompt")
+		t.Fatal("alt+w on a dirty buffer should show the save prompt")
 	}
 
 	// While the prompt is up, other keys are swallowed.
@@ -1240,7 +1240,7 @@ func TestEditorExitPrompt(t *testing.T) {
 
 	// y pushes the filename prompt (nano's "File Name to Write"), seeded with the
 	// buffer's name; enter saves, and the async result pops the screen.
-	s.key(nil, keyMsg("ctrl+x"))
+	s.key(nil, keyMsg("alt+w"))
 	_, act := s.Update(sh, keyMsg("y"))
 	if act.Msg == nil || act.Cmd != nil {
 		t.Fatal("y should push the filename prompt (nav msg, no cmd)")
@@ -1276,7 +1276,7 @@ func TestEditorDiscardExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discarded.txt")
 	s, _ := newEditor(Opts{Path: path})
 	typeRunes(s, 'x')
-	s.key(nil, keyMsg("ctrl+x"))
+	s.key(nil, keyMsg("alt+w"))
 	_, act := s.key(nil, keyMsg("n"))
 	if act.Msg == nil {
 		t.Fatal("n should pop (non-nil nav msg)")
@@ -1381,7 +1381,7 @@ func TestEditorSaveKey(t *testing.T) {
 }
 
 // TestEditorOnExitHook: with Opts.OnExit set (embedded use), every exit path —
-// clean ctrl+x, discard, and save — runs the hook instead of popping.
+// clean alt+w, discard, and save — runs the hook instead of popping.
 // TestEditorSaveBaseDir: a relative name typed into the save box belongs to the
 // directory the HOST opened in, not to the shell the binary was launched from. The
 // cases are the three states baseDir can be in, plus the one the resolution must NOT
@@ -1482,9 +1482,9 @@ func TestEditorOnExitHook(t *testing.T) {
 		fired := 0
 		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
 		s, _ := newEditor(Opts{OnExit: hook})
-		_, act := s.key(nil, keyMsg("ctrl+x"))
+		_, act := s.key(nil, keyMsg("alt+w"))
 		if fired != 1 || act.Msg != nil {
-			t.Fatalf("clean ctrl+x should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
+			t.Fatalf("clean alt+w should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
 		}
 	})
 
@@ -1494,7 +1494,7 @@ func TestEditorOnExitHook(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "discarded.txt")
 		s, _ := newEditor(Opts{Path: path, OnExit: hook})
 		typeRunes(s, 'x')
-		s.key(nil, keyMsg("ctrl+x"))
+		s.key(nil, keyMsg("alt+w"))
 		_, act := s.key(nil, keyMsg("n"))
 		if fired != 1 || act.Msg != nil {
 			t.Fatalf("n should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
@@ -1510,7 +1510,7 @@ func TestEditorOnExitHook(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "saved.txt")
 		s, sh := newEditor(Opts{Path: path, OnExit: hook})
 		typeRunes(s, 'h', 'i')
-		s.key(nil, keyMsg("ctrl+x"))
+		s.key(nil, keyMsg("alt+w"))
 		// Through the real "y": it is what marks this save as the exit path's, and
 		// so what makes the write end in the hook rather than in a plain save. It
 		// needs the real Shared — the prompt it pushes anchors off the body.
@@ -1542,7 +1542,7 @@ func TestEditorSaveAs(t *testing.T) {
 	s.Update(sh, s.Init(sh)())
 	typeRunes(s, '!')
 
-	s.key(nil, keyMsg("ctrl+x"))
+	s.key(nil, keyMsg("alt+w"))
 	s.key(sh, keyMsg("y"))
 	edit := s.saveAsEdit(sh)
 	if got := edit.Value(); got != old {
@@ -1568,7 +1568,7 @@ func TestEditorSaveAs(t *testing.T) {
 
 	scratch, sh2 := newEditor(Opts{})
 	typeRunes(scratch, 'n', 'o')
-	scratch.key(nil, keyMsg("ctrl+x"))
+	scratch.key(nil, keyMsg("alt+w"))
 	scratch.key(sh2, keyMsg("y"))
 	edit2 := scratch.saveAsEdit(sh2)
 	if got := edit2.Value(); got != "" {
@@ -1766,9 +1766,9 @@ func TestEditorWheelFocus(t *testing.T) {
 	}
 
 	s.dirty = true
-	s.key(nil, keyMsg("ctrl+x"))
+	s.key(nil, keyMsg("alt+w"))
 	if !s.confirmExit {
-		t.Fatal("dirty ctrl+x should raise the exit prompt")
+		t.Fatal("dirty alt+w should raise the exit prompt")
 	}
 	before := s.scrY // raising the prompt re-clamps the view to the caret
 	wheel(s, sh, tea.MouseWheelDown)

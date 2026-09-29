@@ -161,11 +161,11 @@ func TestEditorShiftSelectionFeedsTheEditVerbs(t *testing.T) {
 
 	s.setContent("abcdef")
 	pressKeyN(s, shiftRightKey, 3)
-	// alt+x's clipboard write travels in the cmd lane; not running the returned Action
+	// ctrl+x's clipboard write travels in the cmd lane; not running the returned Action
 	// keeps the test off pbcopy while still exercising the buffer half of the cut.
-	s.key(nil, keyMsg("alt+x"))
+	s.key(nil, keyMsg("ctrl+x"))
 	if got := buffer(s); got != "def" {
-		t.Fatalf("alt+x over a shift-selection gave %q, want %q — the LINE was cut", got, "def")
+		t.Fatalf("ctrl+x over a shift-selection gave %q, want %q — the LINE was cut", got, "def")
 	}
 }
 

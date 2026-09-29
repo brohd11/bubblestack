@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/brohd11/bubblestack/tuitest"
@@ -222,6 +223,34 @@ func TestQuitWithoutGate(t *testing.T) {
 	}
 	if _, cmd := tm.Update(keyMsg("ctrl+c")); cmd == nil {
 		t.Fatal("ctrl+c should quit when the top screen has no QuitGater")
+	}
+}
+
+// TestForceQuitRebind: a host that moves ForceQuit off ctrl+c (gote, for the editor's
+// copy) gets its chord through the gate, and ctrl+c reaches the screen untouched.
+func TestForceQuitRebind(t *testing.T) {
+	prev := Keys.ForceQuit
+	Keys.ForceQuit = key.NewBinding(key.WithKeys("ctrl+q"))
+	t.Cleanup(func() { Keys.ForceQuit = prev })
+
+	gate := &gateScreen{handled: true}
+	sh := NewShared(nil)
+	r := NewRouter(sh, []TabEntry{{Title: "Gate", New: func(*Shared) Screen { return gate }}})
+	tm := sized(r)
+
+	if _, cmd := tm.Update(keyMsg("ctrl+c")); cmd != nil || gate.gates != 0 {
+		t.Fatalf("ctrl+c should pass to the screen once rebound, gates=%d", gate.gates)
+	}
+	if _, cmd := tm.Update(keyMsg("ctrl+q")); cmd != nil || gate.gates != 1 {
+		t.Fatalf("the rebound chord should consult the gate, gates=%d", gate.gates)
+	}
+	gate.handled = false
+	_, cmd := tm.Update(keyMsg("ctrl+q"))
+	if cmd == nil {
+		t.Fatal("the rebound chord should quit through a declining gate")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("the rebound chord should be tea.Quit")
 	}
 }
 

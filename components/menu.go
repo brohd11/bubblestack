@@ -17,7 +17,7 @@ import (
 //
 // It is modal because only the top screen gets Update; Filtering always reports true so
 // the router's single-key shortcuts cannot fire underneath, and QuitGate closes the menu
-// on ctrl+c. Submenus are a Pick that pushes another menu at ChildAnchor. The callback
+// on Keys.ForceQuit. Submenus are a Pick that pushes another menu at ChildAnchor. The callback
 // owns dismissal: a Pick that wants the menu gone returns core.Pop(). Esc closes one
 // level; set a child's OnCancel to core.Pop(n) to close a cascade. It adds no breadcrumb
 // segment, since a dropdown is not a place.
@@ -326,7 +326,7 @@ func (s *MenuScreen) OverlayPos(int, int) (int, int) {
 // shortcuts must not fire under it (the LineEditScreen precedent).
 func (s *MenuScreen) Filtering() bool { return true }
 
-// QuitGate implements core.QuitGater: ctrl+c closes the menu, so a host's unsaved-changes
+// QuitGate implements core.QuitGater: Keys.ForceQuit closes the menu, so a host's unsaved-changes
 // confirm never stacks on top of an open menu. It pops directly rather than via OnCancel,
 // which the host could make do something else.
 func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }

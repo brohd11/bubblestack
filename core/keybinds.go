@@ -9,7 +9,7 @@ import (
 
 // KeyMap is the single source of truth for shared keybindings. Dispatch sites match with
 // MatchKey and help bars build from Hint/FullHint, so adding a key to a WithKeys list
-// rebinds it everywhere. A screen's own one-off keys (the editor's ctrl+x) may still be
+// rebinds it everywhere. A screen's own one-off keys (the editor's alt+w) may still be
 // matched as raw strings; any key shared between sites belongs here.
 type KeyMap struct {
 	// navigation
@@ -26,6 +26,10 @@ type KeyMap struct {
 	Select key.Binding
 	Back   key.Binding
 	Quit   key.Binding
+	// ForceQuit is the router's ungated quit chord, checked ahead of every screen and
+	// capture gate (QuitGaters still answer it). A host whose screens need ctrl+c (an
+	// editor's copy) rebinds it.
+	ForceQuit key.Binding
 
 	// confirm — Yes carries enter, No carries esc, so a confirm screen matches
 	// them directly without consulting Select/Back.
@@ -68,7 +72,7 @@ type KeyMap struct {
 	PagePrev key.Binding
 }
 
-// Keys is the active keymap. ctrl+c is handled directly by the router as quit.
+// Keys is the active keymap.
 var Keys = KeyMap{
 	Up:     key.NewBinding(key.WithKeys("up", "k", "alt+w")),
 	Down:   key.NewBinding(key.WithKeys("down", "j", "alt+s")),
@@ -77,9 +81,10 @@ var Keys = KeyMap{
 	Top:    key.NewBinding(key.WithKeys("g", "home")),
 	Bottom: key.NewBinding(key.WithKeys("G", "end")),
 
-	Select: key.NewBinding(key.WithKeys("enter", "e")),
-	Back:   key.NewBinding(key.WithKeys("esc", "backspace", "c")),
-	Quit:   key.NewBinding(key.WithKeys("q")),
+	Select:    key.NewBinding(key.WithKeys("enter", "e")),
+	Back:      key.NewBinding(key.WithKeys("esc", "backspace", "c")),
+	Quit:      key.NewBinding(key.WithKeys("q")),
+	ForceQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "quit")),
 
 	Yes: key.NewBinding(key.WithKeys("enter", "y", "Y", "e")),
 	No:  key.NewBinding(key.WithKeys("esc", "n", "N", "c")),

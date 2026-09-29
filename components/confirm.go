@@ -22,7 +22,7 @@ type DialogScreen struct {
 	OnYes      func(*core.Shared) core.Action
 	OnKey      func(*core.Shared, string) core.Action // handles keys other than the reserved confirm/cancel keys
 	// OnQuit, when set, answers the quit gate while the dialog is on top, so a quit confirm
-	// keeps q/ctrl+c as force-quit rather than stacking another popup. nil abstains.
+	// keeps Quit/ForceQuit as force-quit rather than stacking another popup. nil abstains.
 	OnQuit  func(*core.Shared) (core.Action, bool)
 	Help    []key.Binding
 	Overlay bool // draw as a centered modal over the screen below (core.Overlayer)
