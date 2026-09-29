@@ -616,7 +616,7 @@ func (s *Screen) buildSearchEdit(sh *core.Shared, seedSelection bool) *component
 	s.searchEditing = true
 	x, y, w, h := s.paneGeometry(sh)
 	y += max(h-editorSearchBarH, 0)
-	edit := components.NewLineEdit("search", x, y, w,
+	edit := components.NewLineEdit("search", x, y, w, false,
 		func(_ *core.Shared, query string) core.Action {
 			s.searchQuery = query
 			s.searchEditing = false
@@ -630,7 +630,6 @@ func (s *Screen) buildSearchEdit(sh *core.Shared, seedSelection bool) *component
 	edit.SetPrompt("find: ")
 	edit.SetValue(initial)
 	edit.SetCursorBlink(false)
-	edit.Help = []key.Binding{} // keep the overlay to the shared component's slim shape
 	edit.OnChange = func(_ *core.Shared, query string) core.Action {
 		s.searchQuery = query
 		return core.Action{}

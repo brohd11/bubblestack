@@ -33,7 +33,7 @@ type LineEditScreen struct {
 	OnDone   func(*core.Shared, string) core.Action // enter; nil ⇒ plain Pop
 	OnCancel func(*core.Shared) core.Action         // esc; nil ⇒ plain Pop
 	OnChange func(*core.Shared, string) core.Action // value changed; nil ⇒ nothing
-	Help     []key.Binding                          // rendered inside the box; nil ⇒ default enter/esc hints, empty ⇒ none
+	Help     []key.Binding                          // rendered inside the box; nil/empty ⇒ none (NewLineEdit's help seeds the enter/esc hints)
 }
 
 var _ core.Overlayer = (*LineEditScreen)(nil)
@@ -48,12 +48,13 @@ var defaultLineEditHelp = []key.Binding{
 }
 
 // NewLineEdit builds a line edit with its box's top-left at absolute cell (x, y),
-// covering width cells.
-func NewLineEdit(placeholder string, x, y, width int, onDone func(*core.Shared, string) core.Action, onCancel func(*core.Shared) core.Action) *LineEditScreen {
+// covering width cells. help adds the enter/esc hint row inside the box; without it the
+// box is a single input row.
+func NewLineEdit(placeholder string, x, y, width int, help bool, onDone func(*core.Shared, string) core.Action, onCancel func(*core.Shared) core.Action) *LineEditScreen {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.Focus()
-	return &LineEditScreen{
+	s := &LineEditScreen{
 		input:    ti,
 		x:        x,
 		y:        y,
@@ -61,6 +62,10 @@ func NewLineEdit(placeholder string, x, y, width int, onDone func(*core.Shared, 
 		OnDone:   onDone,
 		OnCancel: onCancel,
 	}
+	if help {
+		s.Help = defaultLineEditHelp
+	}
+	return s
 }
 
 func (s *LineEditScreen) Init(*core.Shared) tea.Cmd {
@@ -158,14 +163,10 @@ func (s *LineEditScreen) View(sh *core.Shared) string {
 	}
 	// Cell-truncate so a narrow pane cannot wrap the input: the box must stay one row.
 	body := ansi.Truncate(s.input.View(), contentW, "…")
-	help := s.Help
-	if help == nil {
-		help = defaultLineEditHelp
-	}
-	if len(help) > 0 {
+	if len(s.Help) > 0 {
 		// BindingHelp renders for the chrome help bar and leads with a blank
 		// row; the slim box wants just the entries line.
-		if hint := strings.TrimLeft(sh.BindingHelp(help), " \n"); hint != "" {
+		if hint := strings.TrimLeft(sh.BindingHelp(s.Help), " \n"); hint != "" {
 			body = body + "\n" + hint
 		}
 	}

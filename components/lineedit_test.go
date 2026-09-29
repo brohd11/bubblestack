@@ -6,14 +6,12 @@ import (
 
 	"github.com/brohd11/bubblestack/core"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
 func newLineEdit(width int) (*LineEditScreen, *core.Shared) {
-	s := NewLineEdit("name", 0, 0, width, nil, nil)
-	s.Help = []key.Binding{} // the slim shape both narrow callers use
+	s := NewLineEdit("name", 0, 0, width, false, nil, nil)
 	sh := core.NewShared(nil)
 	s.SetSize(sh, 80, 24)
 	return s, sh
@@ -93,22 +91,31 @@ func TestLineEditNarrowBox(t *testing.T) {
 	}
 }
 
-// TestLineEditHelpRow keeps the default hint row inside the box (one row taller) for
-// callers wide enough to hold it — save-as's shape.
-func TestLineEditHelpRow(t *testing.T) {
-	s, sh := newLineEdit(80)
-	s.Help = nil // default enter/esc hints
-	s.SetValue(strings.Repeat("a", 200))
-	if got := lipgloss.Height(s.View(sh)); got != 4 {
-		t.Errorf("height with the default help row = %d, want 4", got)
-	}
-}
-
 // TestLineEditNoCrumb: the box is a popup over another screen, so it must leave the
 // breadcrumb reading as the screen it covers.
 func TestLineEditNoCrumb(t *testing.T) {
 	s, _ := newLineEdit(30)
 	if c, ok := any(s).(core.Crumber); ok {
 		t.Errorf("a line edit must contribute no breadcrumb segment, got %q", c.CrumbLabel(false))
+	}
+}
+
+// TestLineEditHelpToggle: the hint row is opt-in through the constructor. Without it
+// the box is one input row inside its border; with it, one row taller.
+func TestLineEditHelpToggle(t *testing.T) {
+	sh := core.NewShared(nil)
+	for _, tc := range []struct {
+		help bool
+		want int
+	}{{false, 3}, {true, 4}} {
+		s := NewLineEdit("name", 0, 0, 40, tc.help, nil, nil)
+		s.SetSize(sh, 80, 24)
+		v := s.View(sh)
+		if got := lipgloss.Height(v); got != tc.want {
+			t.Errorf("help=%v: height %d, want %d:\n%s", tc.help, got, tc.want, v)
+		}
+		if got := strings.Contains(v, "done"); got != tc.help {
+			t.Errorf("help=%v: hint shown = %v:\n%s", tc.help, got, v)
+		}
 	}
 }

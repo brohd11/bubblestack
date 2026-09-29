@@ -37,7 +37,7 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 		attempt++
 		s.disk.saveCheck = false
 	}
-	edit := components.NewLineEdit("file name to write", x, y+max(h-2, 0), w,
+	edit := components.NewLineEdit("file name to write", x, y+max(h-2, 0), w, false,
 		func(_ *core.Shared, name string) core.Action {
 			cancelCheck()
 			if s.disk.writing {
