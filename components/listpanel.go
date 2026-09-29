@@ -31,6 +31,11 @@ type ListPanel struct {
 	height   int    // outer cell height, so the list can be re-sized when the filter line appears
 	itemRows int    // delegate height + spacing; drives mouse and overlay geometry
 
+	// selection is ListPanelOpts.Selection; selHidden is its HideUnfocused resolved against
+	// the focus View was last drawn with. The delegate holds a pointer to it.
+	selection core.SelectionOpts
+	selHidden bool
+
 	// ownFilter: the panel draws the filter line itself, so it costs a row only while a
 	// filter is live. Compact panels only.
 	ownFilter bool
@@ -61,6 +66,10 @@ type ListPanelOpts struct {
 	OnKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	Help     []key.Binding
 	Border   bool
+
+	// Selection styles the selected row; the zero value is the accent left border, always
+	// shown.
+	Selection core.SelectionOpts
 
 	// OnPointer handles a click on a row before the default, right reporting which button;
 	// the row is already selected. It is how a list tells a click from enter. handled=false
@@ -111,7 +120,9 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 		title:     title,
 		bordered:  opts.Border,
 		itemRows:  itemRows,
+		selection: opts.Selection,
 	}
+	p.applyDelegate()
 	// A bordered panel has no title bar, but bubbles would still draw an empty header row.
 	// Drawing the filter ourselves means that row appears only while a filter is live.
 	if opts.Border {
@@ -146,7 +157,19 @@ func marqueeTick(id int64) tea.Cmd {
 func (p *ListPanel) startMarquee() {
 	p.marqueeID = marqueeIDs.Add(1)
 	p.hold = marqueeHold
-	p.list.SetDelegate(core.CompactDelegate{Offset: &p.marquee})
+	p.applyDelegate()
+}
+
+// applyDelegate installs the delegate for the panel's kind (the marqueeing compact one, or
+// the three-row one) wired to its selection options and the hidden flag View maintains.
+func (p *ListPanel) applyDelegate() {
+	if p.marqueeID != 0 {
+		p.list.SetDelegate(core.CompactDelegate{Offset: &p.marquee, Selection: p.selection, Hidden: &p.selHidden})
+		return
+	}
+	d := core.NewDelegate()
+	d.Selection, d.Hidden = p.selection, &p.selHidden
+	p.list.SetDelegate(d)
 }
 
 // marqueeOverflow reports the selected row's last useful offset, and false when it fits,
@@ -384,6 +407,7 @@ func (p *ListPanel) chromeRows() int {
 
 // View renders the list under its filter line, framed and focus-tinted when Border is set.
 func (p *ListPanel) View(focused bool) string {
+	p.selHidden = p.selection.HideUnfocused && !focused
 	body := p.list.View()
 	if line := p.filterLine(); line != "" {
 		body = line + "\n" + body

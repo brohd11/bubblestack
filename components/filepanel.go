@@ -60,6 +60,8 @@ type FilePanelOpts struct {
 	Root   string // navigation floor; "" leaves the panel free to walk to the filesystem root
 	Title  string // fixed border legend; "" tracks the current directory's base name
 	Border bool   // draw the shared frame (the instancer's call, never the embedder's)
+	// Selection styles the selected row (see ListPanelOpts.Selection).
+	Selection core.SelectionOpts
 	// Colors controls built-in file-type colors. The zero value leaves all rows plain.
 	Colors FileColorMode
 	// TitleColor optionally overrides a row's foreground. nil falls back to Colors.
@@ -157,6 +159,7 @@ func (p *FilePanel) build() *ListPanel {
 		OnPointer: p.pointer,
 		Help:      p.opts.Help,
 		Border:    p.opts.Border,
+		Selection: p.opts.Selection,
 	}
 	if p.compact {
 		return NewCompactListPanel(p.rows(), p.title(), opts).ListPanel

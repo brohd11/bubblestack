@@ -139,3 +139,19 @@ than a type the accent can safely mask. A kept row with no color of its own is d
 normal foreground, not the accent, so the list reads uniformly. Filter-dimming is
 unaffected. The underlying contract is `core.KeepColorItem`, which any list row can
 implement — `CompactDelegate` and `ColorDelegate` both honor it.
+
+### List selection
+
+`ListPanelOpts.Selection` (also on `TreePanelOpts` and `FilePanelOpts`) is a
+`core.SelectionOpts`; its zero value is the accent left border, always shown.
+
+- `Style: core.SelectBackground` draws the selected row as a bar in the theme's
+  `Selection` color (`core.SelectionColor`) across the full width, with no border glyph.
+  The text keeps the same inset, so switching styles does not shift rows.
+- `NoAccent: true` keeps the selected row's text in its normal (or `ColorItem`) color,
+  as if every row were a `core.KeepColorItem`.
+- `HideUnfocused: true` draws no selection while the host renders the panel with
+  `View(false)`; it returns on focus.
+
+The same fields sit on `core.CompactDelegate` and `core.ColorDelegate` for a bare
+`list.Model`; there the owner sets the delegate's `Hidden` flag itself.

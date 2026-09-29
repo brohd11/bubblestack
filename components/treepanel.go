@@ -31,6 +31,8 @@ type TreePanelOpts struct {
 	OnKey  func(*core.Shared, string, TreeNode) (core.Action, bool)
 	Help   []key.Binding
 	Border bool
+	// Selection styles the selected row (see ListPanelOpts.Selection).
+	Selection core.SelectionOpts
 }
 
 // TreePanel is a compact, filterable tree panel. Filtering shows every node so collapsed
@@ -60,7 +62,8 @@ func NewTreePanel(nodes []TreeNode, title string, opts TreePanelOpts) *TreePanel
 		parents: make(map[string]string),
 	}
 	p.panel = NewCompactListPanel(nil, title, ListPanelOpts{
-		Border: opts.Border,
+		Border:    opts.Border,
+		Selection: opts.Selection,
 		Help: append([]key.Binding{
 			core.Hint("fold", core.Keys.Left, core.Keys.Right),
 		}, opts.Help...),

@@ -190,14 +190,43 @@ type ColorItem interface{ TitleColor() color.Color }
 // An opted-out row without a color uses the normal title color. Dimming still applies.
 type KeepColorItem interface{ KeepColor() bool }
 
+// SelectionStyle is how a list marks its selected row.
+type SelectionStyle int
+
+const (
+	// SelectBorder is bubbles' accent bar at the row's left edge (the default).
+	SelectBorder SelectionStyle = iota
+	// SelectBackground fills the whole row with SelectionColor and draws no border glyph.
+	SelectBackground
+)
+
+// SelectionOpts configures how a list draws its selection. The zero value is the accent
+// left border with accent text, shown whether or not the list has focus.
+type SelectionOpts struct {
+	Style SelectionStyle
+	// NoAccent keeps the selected row's text in its normal (or ColorItem) color, as if
+	// every row were a KeepColorItem. The border, when drawn, stays accent-tinted.
+	NoAccent bool
+	// HideUnfocused draws no selection while the list's panel lacks focus. It is resolved
+	// by the owner (ListPanel), which knows focus, into the delegate's Hidden flag.
+	HideUnfocused bool
+}
+
+// selected reports whether a delegate draws row index as selected: the cursor row, not
+// while a filter is being typed, and not while the owner hides the selection.
+func selected(m list.Model, index int, hidden *bool) bool {
+	return index == m.Index() && m.FilterState() != list.Filtering && (hidden == nil || !*hidden)
+}
+
 // itemColor is the foreground a delegate should apply to a row, and false to leave its
-// style alone. normal is an unselected row's foreground.
-func itemColor(item list.Item, isSelected, dimmed bool, normal color.Color) (color.Color, bool) {
+// style alone. normal is an unselected row's foreground; noAccent treats every row as a
+// KeepColorItem.
+func itemColor(item list.Item, isSelected, dimmed, noAccent bool, normal color.Color) (color.Color, bool) {
 	if dimmed {
 		return nil, false
 	}
-	keep := false
-	if k, ok := item.(KeepColorItem); ok {
+	keep := noAccent
+	if k, ok := item.(KeepColorItem); ok && !keep {
 		keep = k.KeepColor()
 	}
 	if isSelected && !keep {
@@ -271,8 +300,14 @@ func newSelectList(items []list.Item, title string, delegate list.ItemDelegate, 
 // CompactDelegate renders one item per row with no spacing; the title gets width priority
 // over the suffix. A non-nil Offset marquees the selected row when it overflows, windowing
 // title and suffix as one string. The owner (ListPanel) advances the offset; Render stays
-// pure.
-type CompactDelegate struct{ Offset *int }
+// pure. Selection picks the selected row's look; Hidden, when set and true, draws the
+// selected row as a normal one (the owner flips it with focus, see
+// SelectionOpts.HideUnfocused).
+type CompactDelegate struct {
+	Offset    *int
+	Selection SelectionOpts
+	Hidden    *bool
+}
 
 func (CompactDelegate) Height() int                         { return 1 }
 func (CompactDelegate) Spacing() int                        { return 0 }
@@ -351,7 +386,8 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 	emptyFilter := m.FilterState() == list.Filtering && m.FilterValue() == ""
 	isFiltered := m.FilterState() == list.Filtering || m.FilterState() == list.FilterApplied
-	isSelected := index == m.Index() && m.FilterState() != list.Filtering
+	isSelected := selected(m, index, d.Hidden)
+	bar := isSelected && d.Selection.Style == SelectBackground
 
 	title, suffix := "", ""
 	// Marquee the overflowing selected row, but never while filtering: match highlighting
@@ -370,14 +406,18 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 
 	titleStyle := styles.NormalTitle
-	if emptyFilter {
+	switch {
+	case emptyFilter:
 		titleStyle = styles.DimmedTitle
-	} else if isSelected {
+	case bar:
+		// NormalTitle's inset instead of the border, so the text does not shift.
+		titleStyle = styles.NormalTitle.Foreground(FocusedColor).Background(SelectionColor)
+	case isSelected:
 		titleStyle = styles.SelectedTitle
 	}
 	// Recolor before the highlight pass so matched runes inherit the row's color. It is a
 	// style foreground on already-truncated text, so no width computation changes.
-	if c, ok := itemColor(item, isSelected, emptyFilter, styles.NormalTitle.GetForeground()); ok {
+	if c, ok := itemColor(item, isSelected, emptyFilter, d.Selection.NoAccent, styles.NormalTitle.GetForeground()); ok {
 		titleStyle = titleStyle.Foreground(c)
 	}
 	if isFiltered && !emptyFilter && index < len(m.VisibleItems()) {
@@ -389,25 +429,48 @@ func (d CompactDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if emptyFilter {
 		muted = styles.DimmedDesc.Inline(true)
 	}
+	if bar {
+		// Every segment ends in a reset, so each one carries the bar's background itself.
+		muted = muted.Background(SelectionColor)
+	}
 	// The mark is appended after the highlight pass (it is not part of the matched name) and
 	// inline, because titleStyle would draw a second border.
 	mark := ""
 	if raw.Mark != "" {
 		mark = titleStyle.Inline(true).Render(raw.Mark)
 	}
-	fmt.Fprint(w, titleStyle.Render(prefix+title)+muted.Render(suffix)+mark) //nolint:errcheck
+	row := titleStyle.Render(prefix+title) + muted.Render(suffix) + mark
+	if pad := m.Width() - lipgloss.Width(row); bar && pad > 0 {
+		row += lipgloss.NewStyle().Background(SelectionColor).Render(strings.Repeat(" ", pad))
+	}
+	fmt.Fprint(w, row) //nolint:errcheck
 }
 
 // ColorDelegate is the three-row delegate with per-row colors (ColorItem). A
 // KeepColorItem keeps its color under the cursor; the description line still takes the
 // accent. It wraps DefaultDelegate.Render, whose value receiver makes the style changes
-// local to one row, so row geometry and layout stay upstream's.
-type ColorDelegate struct{ list.DefaultDelegate }
+// local to one row, so row geometry and layout stay upstream's. Selection and Hidden are
+// CompactDelegate's.
+type ColorDelegate struct {
+	list.DefaultDelegate
+	Selection SelectionOpts
+	Hidden    *bool
+}
 
 func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	isSelected := index == m.Index() && m.FilterState() != list.Filtering
+	cursor := selected(m, index, nil)
+	isSelected := selected(m, index, d.Hidden)
 	dimmed := m.FilterState() == list.Filtering && m.FilterValue() == ""
-	if c, ok := itemColor(item, isSelected, dimmed, d.Styles.NormalTitle.GetForeground()); ok {
+	switch {
+	case isSelected && d.Selection.Style == SelectBackground:
+		// NormalTitle's inset instead of the border; Width spans the bar across the row.
+		d.Styles.SelectedTitle = d.Styles.NormalTitle.Foreground(FocusedColor).
+			Background(SelectionColor).Width(m.Width())
+		d.Styles.SelectedDesc = d.Styles.NormalDesc.Background(SelectionColor).Width(m.Width())
+	case isSelected && d.Selection.NoAccent:
+		d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(d.Styles.NormalDesc.GetForeground())
+	}
+	if c, ok := itemColor(item, isSelected, dimmed, d.Selection.NoAccent, d.Styles.NormalTitle.GetForeground()); ok {
 		// Recolor the selected row too, so KeepColorItem can shed the accent; the tinted border
 		// still marks the cursor.
 		if isSelected {
@@ -415,6 +478,10 @@ func (d ColorDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 		} else {
 			d.Styles.NormalTitle = d.Styles.NormalTitle.Foreground(c)
 		}
+	}
+	if cursor && !isSelected {
+		// Hidden: upstream still picks the Selected styles for the cursor row.
+		d.Styles.SelectedTitle, d.Styles.SelectedDesc = d.Styles.NormalTitle, d.Styles.NormalDesc
 	}
 	d.DefaultDelegate.Render(w, m, index, item)
 }
@@ -427,7 +494,7 @@ func NewDelegate() ColorDelegate {
 	d.Styles.DimmedDesc = d.Styles.DimmedDesc.Foreground(MutedColor)
 	d.Styles.SelectedTitle = d.Styles.SelectedTitle.Foreground(FocusedColor).BorderForeground(FocusedColor)
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.Foreground(FocusedColor).BorderForeground(FocusedColor)
-	return ColorDelegate{d}
+	return ColorDelegate{DefaultDelegate: d}
 }
 
 // styleList applies the shared list config: hide the built-in status bar and

@@ -48,6 +48,7 @@ type Theme struct {
 	Border    Color  // box/rule borders
 	Focused   Color  // selection / active accent
 	OnFocused *Color // text drawn on the accent (title bar); nil ⇒ defaultOnFocused
+	Selection *Color // background of a SelectBackground list row; nil ⇒ defaultSelection
 	// MarkdownFrom names a theme whose accent rendered markdown borrows (see MarkdownAccent);
 	// empty uses Focused. mono needs it: its accent is the terminal's own extreme, which
 	// would make headings, code and links look like body text.
@@ -57,6 +58,10 @@ type Theme struct {
 // defaultOnFocused is the title-bar text color when a theme sets no OnFocused: the
 // inverse of the accent's lightness on either background.
 var defaultOnFocused = Color{Light: 255, Dark: 232}
+
+// defaultSelection is the SelectBackground row bar when a theme sets no Selection: a
+// neutral a step off the terminal background, so row text keeps its contrast.
+var defaultSelection = Color{Light: 254, Dark: 237}
 
 // Shared neutral palette (ANSI-256): darker on light terminals, lighter on dark ones.
 var (
@@ -140,5 +145,10 @@ func applyTheme(t Theme) {
 		on = *t.OnFocused
 	}
 	OnFocusedColor = Resolve(on)
+	sel := defaultSelection
+	if t.Selection != nil {
+		sel = *t.Selection
+	}
+	SelectionColor = Resolve(sel)
 	rebuildStyles()
 }

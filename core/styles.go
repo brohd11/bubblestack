@@ -16,6 +16,7 @@ var (
 	BorderColor    color.Color
 	FocusedColor   color.Color
 	OnFocusedColor color.Color // text drawn on the accent (title bar)
+	SelectionColor color.Color // background of a SelectBackground list row
 
 	statusStyle lipgloss.Style
 	logStyle    lipgloss.Style
