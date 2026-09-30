@@ -2,6 +2,8 @@ package components
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/brohd11/bubblestack/core"
 
@@ -51,6 +53,8 @@ type MenuScreen struct {
 	hoverRow int
 	// onOutside is MenuOpts.OnPointerOutside; a child reads its root's.
 	onOutside func(*core.Shared, int, int) (core.Action, bool)
+	// onKeyOutside is MenuOpts.OnKeyOutside; a child reads its root's.
+	onKeyOutside func(*core.Shared, string) (core.Action, bool)
 
 	sel int // index into items; -1 when nothing is selectable
 	top int // first item of the visible window
@@ -82,8 +86,12 @@ var _ core.MotionWanter = (*MenuScreen)(nil)
 // its Hint defaults to "›". The child's rows own their dismissal as any Pick does — a leaf
 // one level down returns core.Pop(2) to close both.
 type MenuItem struct {
-	Label     string
-	Hint      string
+	Label string
+	Hint  string
+	// Key is the row's accelerator, a lowercase letter (0 for none): typing it picks the
+	// row — opening a Submenu — ahead of the menu's navigation keys, and its first
+	// occurrence in Label is underlined.
+	Key       rune
 	Pick      func(*core.Shared) core.Action
 	Submenu   func() []MenuItem
 	Disabled  bool
@@ -158,6 +166,11 @@ type MenuOpts struct {
 	// the whole cascade closes and the action runs after — a menu bar switching to the
 	// label under the pointer. Declined, motion does nothing and a click dismisses as usual.
 	OnPointerOutside func(sh *core.Shared, x, y int) (core.Action, bool)
+	// OnKeyOutside is offered keys the cascade has no use for: any alt chord, ← in the
+	// root menu (which otherwise closes it) and → on a row that opens nothing — a menu
+	// bar's way to its other menus. Handled, the whole cascade closes and the action runs
+	// after; declined, the key does what it always did.
+	OnKeyOutside func(sh *core.Shared, k string) (core.Action, bool)
 }
 
 // NewMenu builds a dropdown from opts, normalizes the anchor's flip edges, and puts the
@@ -186,7 +199,8 @@ func NewMenu(opts MenuOpts) *MenuScreen {
 		OnSelect: opts.OnSelect,
 		OnCancel: opts.OnCancel,
 
-		onOutside: opts.OnPointerOutside,
+		onOutside:    opts.OnPointerOutside,
+		onKeyOutside: opts.OnKeyOutside,
 	}
 	s.sel = s.firstSelectable()
 	return s
@@ -495,6 +509,38 @@ func (s *MenuScreen) hover(sh *core.Shared, m tea.Mouse) core.Action {
 	return core.Action{}
 }
 
+// accelerated is the selectable row whose Key is k (a single letter, either case), or -1.
+func (s *MenuScreen) accelerated(k string) int {
+	r := []rune(k)
+	if len(r) != 1 {
+		return -1
+	}
+	want := unicode.ToLower(r[0])
+	for i, it := range s.items {
+		if it.Key != 0 && unicode.ToLower(it.Key) == want && s.selectable(i) {
+			return i
+		}
+	}
+	return -1
+}
+
+// keyOutside offers k to the root's OnKeyOutside, closing the whole cascade first when
+// the host takes it (see outside).
+func (s *MenuScreen) keyOutside(sh *core.Shared, k string) (core.Action, bool) {
+	root, depth := s, 0
+	for root.parent != nil {
+		root, depth = root.parent, depth+1
+	}
+	if root.onKeyOutside == nil {
+		return core.Action{}, false
+	}
+	act, ok := root.onKeyOutside(sh, k)
+	if !ok {
+		return core.Action{}, false
+	}
+	return core.Seq(core.Pop(depth+1), act), true
+}
+
 // outside offers (x, y) to the root's OnPointerOutside when it lies outside every box of
 // the cascade, closing the whole cascade first when the host takes it.
 func (s *MenuScreen) outside(sh *core.Shared, x, y int) (core.Action, bool) {
@@ -526,6 +572,18 @@ func (s *MenuScreen) openSubmenu() core.Action {
 }
 
 func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
+	if i := s.accelerated(k); i >= 0 {
+		s.Select(i)
+		return s.pick(sh)
+	}
+	onSubmenu := s.sel >= 0 && s.sel < len(s.items) && s.items[s.sel].Submenu != nil
+	if strings.HasPrefix(k, "alt+") ||
+		(s.parent == nil && core.MatchKey(k, core.Keys.Left)) ||
+		(!onSubmenu && core.MatchKey(k, core.Keys.Right)) {
+		if act, ok := s.keyOutside(sh, k); ok {
+			return act
+		}
+	}
 	switch {
 	// Left is "back one level", which in a cascade is the same thing as esc.
 	case core.MatchKey(k, core.Keys.Back), core.MatchKey(k, core.Keys.Left):
@@ -534,7 +592,7 @@ func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
 		return s.pick(sh)
 	case core.MatchKey(k, core.Keys.Right):
 		// → opens a submenu; on any other row it does nothing (it is not a second enter).
-		if s.sel >= 0 && s.sel < len(s.items) && s.items[s.sel].Submenu != nil {
+		if onSubmenu {
 			return s.openSubmenu()
 		}
 	case core.MatchKey(k, core.Keys.Up):
@@ -628,10 +686,36 @@ func (s *MenuScreen) row(it MenuItem, selected bool, field int, muted, accent li
 		}
 	}
 
-	if selected && !it.Disabled && s.style.Selection.Style == core.SelectBackground {
-		return menuRowFilled(it.Label, it.Hint, field, label, hint, fill)
+	text := it.Label
+	if it.Key != 0 && !it.Disabled {
+		// Pre-styled with the accelerator underlined; the row's own style is spent here.
+		text, label = AccelLabel(it.Label, it.Key, label), lipgloss.NewStyle()
 	}
-	return menuRow(it.Label, it.Hint, field, label, hint)
+	if selected && !it.Disabled && s.style.Selection.Style == core.SelectBackground {
+		return menuRowFilled(text, it.Hint, field, label, hint, fill)
+	}
+	return menuRow(text, it.Hint, field, label, hint)
+}
+
+// AccelLabel renders label in style with the first occurrence of key (either case)
+// underlined, for a menu row or a menu bar label; without one, it is style.Render(label).
+func AccelLabel(label string, key rune, style lipgloss.Style) string {
+	want := unicode.ToLower(key)
+	for i, r := range label {
+		if unicode.ToLower(r) != want {
+			continue
+		}
+		end := i + utf8.RuneLen(r)
+		out := style.Underline(true).Render(label[i:end])
+		if i > 0 {
+			out = style.Render(label[:i]) + out
+		}
+		if end < len(label) {
+			out += style.Render(label[end:])
+		}
+		return out
+	}
+	return style.Render(label)
 }
 
 // menuRow lays out one floating-list row in exactly field cells: label left, hint right.

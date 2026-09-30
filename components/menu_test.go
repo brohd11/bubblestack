@@ -767,3 +767,86 @@ func TestMenuPointerOutside(t *testing.T) {
 		t.Fatal("a declined click outside should dismiss the menu")
 	}
 }
+
+// TestMenuAccelerators: a row's Key picks it (opening a Submenu row) ahead of navigation,
+// its letter is underlined without changing the layout, and a menu without accelerators
+// still navigates on its letter keys.
+func TestMenuAccelerators(t *testing.T) {
+	var picked string
+	pick := func(name string) func(*core.Shared) core.Action {
+		return func(*core.Shared) core.Action { picked = name; return core.Action{} }
+	}
+	items := []MenuItem{
+		{Label: "Open", Key: 'o', Pick: pick("open")},
+		{Label: "Sort", Key: 's', Submenu: func() []MenuItem { return []MenuItem{{Label: "asc"}} }},
+		{Label: "Jump", Key: 'j', Pick: pick("jump")},
+	}
+	m, sh := newMenu(t, MenuOpts{Items: items, Anchor: AnchorAt(0, 0)})
+	m.Update(sh, keyMsg("J")) // either case
+	if picked != "jump" || m.Selected() != 2 {
+		t.Fatalf("J should pick the Jump row, picked %q sel %d", picked, m.Selected())
+	}
+	if _, act := m.Update(sh, keyMsg("s")); act.Msg == nil {
+		t.Fatal("an accelerator on a submenu row should open it")
+	}
+
+	plain, psh := newMenu(t, MenuOpts{Items: []MenuItem{{Label: "Open"}, {Label: "Sort", Hint: "›"}, {Label: "Jump"}}, Anchor: AnchorAt(0, 0)})
+	if ansi.Strip(m.View(sh)) != ansi.Strip(plain.View(psh)) {
+		t.Fatal("underlining an accelerator must not change the layout")
+	}
+	underlined := lipgloss.NewStyle().Underline(true).Render("O")
+	if !strings.Contains(m.View(sh), underlined[:strings.Index(underlined, "O")]) {
+		t.Fatal("the accelerator letter should be underlined")
+	}
+	plain.Update(psh, keyMsg("j"))
+	if plain.Selected() != 1 {
+		t.Fatalf("without accelerators j still moves down, sel %d", plain.Selected())
+	}
+}
+
+// TestMenuKeyOutside: alt chords, ← at the root and → on a plain row go to the root's
+// OnKeyOutside; taken, the whole cascade closes first.
+func TestMenuKeyOutside(t *testing.T) {
+	var got []string
+	root := NewMenu(MenuOpts{
+		Anchor: AnchorAt(10, 3),
+		Items:  []MenuItem{{Label: "Sort", Submenu: func() []MenuItem { return []MenuItem{{Label: "asc"}} }}, {Label: "plain"}},
+		OnKeyOutside: func(_ *core.Shared, k string) (core.Action, bool) {
+			got = append(got, k)
+			return core.Action{}, k != "left"
+		},
+	})
+	sh := core.NewShared(nil)
+	r := core.NewRouter(sh, []core.TabEntry{{Title: "T", New: func(*core.Shared) core.Screen { return stubRootScreen{} }}})
+	var tm tea.Model = r
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	tm, _ = tm.Update(core.Push(root))
+	tm, _ = tm.Update(keyMsg("left")) // offered, declined: closes the root as always
+	if len(got) != 1 || got[0] != "left" {
+		t.Fatalf("← at the root should be offered, got %v", got)
+	}
+	if _, isMenu := tm.(core.Router).Top().(*MenuScreen); isMenu {
+		t.Fatal("a declined ← still closes the root menu")
+	}
+
+	tm, _ = tm.Update(core.Push(root))
+	tm, _ = tm.Update(keyMsg("right")) // on the Sort row: opens the submenu, not offered
+	if len(got) != 1 {
+		t.Fatalf("→ on a submenu row opens it, not offered: %v", got)
+	}
+	tm, _ = tm.Update(keyMsg("alt+x")) // from the child: offered, taken — cascade closes
+	if len(got) != 2 || got[1] != "alt+x" {
+		t.Fatalf("an alt chord in the child should reach the root's hook, got %v", got)
+	}
+	if _, isMenu := tm.(core.Router).Top().(*MenuScreen); isMenu {
+		t.Fatal("a taken key should close the whole cascade")
+	}
+
+	tm, _ = tm.Update(core.Push(root))
+	tm, _ = tm.Update(keyMsg("down"))  // plain
+	tm, _ = tm.Update(keyMsg("right")) // → on a plain row: offered
+	if len(got) != 3 || got[2] != "right" {
+		t.Fatalf("→ on a plain row should be offered, got %v", got)
+	}
+}

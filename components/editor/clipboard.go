@@ -50,9 +50,9 @@ func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 func (s *Screen) ClipboardItems() []components.MenuItem {
 	sel := s.selectionActive()
 	return []components.MenuItem{
-		{Label: "Copy", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(false) }},
-		{Label: "Cut", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
-		{Label: "Paste", Pick: func(*core.Shared) core.Action {
+		{Label: "Copy", Key: 'c', Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(false) }},
+		{Label: "Cut", Key: 't', Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
+		{Label: "Paste", Key: 'p', Pick: func(*core.Shared) core.Action {
 			return core.Seq(core.Pop(), pasteClipboardCmd(s))
 		}},
 	}
