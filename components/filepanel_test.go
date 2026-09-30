@@ -1002,3 +1002,33 @@ func TestFilePanelKeepColor(t *testing.T) {
 		}
 	}
 }
+
+// TestFilePanelOnPointerRunsFirst: a host hook sees the button before the panel's own
+// mapping, and declining falls back to it (right opens, as enter does).
+func TestFilePanelOnPointerRunsFirst(t *testing.T) {
+	root := fileTree(t)
+	var opened, pointed string
+	var right bool
+	claim := true
+	p := NewFilePanel(FilePanelOpts{
+		Dir: root, Compact: true,
+		OnSelect: func(_ *core.Shared, e FileEntry) core.Action { opened = e.Name; return core.Action{} },
+		OnPointer: func(_ *core.Shared, e FileEntry, r bool) (core.Action, bool) {
+			pointed, right = e.Name, r
+			return core.Action{}, claim && r
+		},
+	})
+	p.SetSize(30, 12)
+	p.Focus()
+	sh := core.NewShared(nil)
+
+	clickRow(t, p, sh, "alpha.txt", tea.MouseRight)
+	if pointed != "alpha.txt" || !right || opened != "" {
+		t.Fatalf("a claimed right click should reach only the hook: pointed %q right %v opened %q", pointed, right, opened)
+	}
+	claim = false
+	clickRow(t, p, sh, "alpha.txt", tea.MouseRight)
+	if opened != "alpha.txt" {
+		t.Fatal("a declined right click should fall back to opening the row")
+	}
+}

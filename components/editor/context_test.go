@@ -112,6 +112,10 @@ func TestEditorContextMenuRows(t *testing.T) {
 	if m.Items()[0].Disabled || m.Items()[1].Disabled {
 		t.Error("Copy and Cut should be live with a selection")
 	}
+	// A host's own menu gets the same rows, read at the same moment.
+	if rows := s.ClipboardItems(); len(rows) != 3 || rows[0].Label != "Copy" || rows[0].Disabled != m.Items()[0].Disabled {
+		t.Errorf("ClipboardItems should match the context menu's rows, got %+v", rows)
+	}
 
 	// A nil return adds nothing at all — no trailing separator.
 	empty, shEmpty := newEditor(Opts{

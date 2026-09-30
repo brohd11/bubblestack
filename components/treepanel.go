@@ -28,10 +28,14 @@ type TreePanelOpts struct {
 	// OnSelect. Filtering keeps branches expanded for searching.
 	ToggleBranchesOnSelect bool
 	// OnKey handles row keys after built-in folding and before the item's own keys.
-	OnKey  func(*core.Shared, string, TreeNode) (core.Action, bool)
-	Help   []key.Binding
-	Border bool
-	Frame  FrameStyle // another frame look (see ListPanelOpts.Frame); implies Border
+	OnKey func(*core.Shared, string, TreeNode) (core.Action, bool)
+	// OnPointer handles a click on a row (already selected) before the default, right
+	// reporting which button, as ListPanelOpts.OnPointer. handled=false falls back: left
+	// acts as enter (folding a branch or OnSelect), right does nothing.
+	OnPointer func(*core.Shared, TreeNode, bool) (core.Action, bool)
+	Help      []key.Binding
+	Border    bool
+	Frame     FrameStyle // another frame look (see ListPanelOpts.Frame); implies Border
 	// Selection styles the selected row (see ListPanelOpts.Selection).
 	Selection core.SelectionOpts
 }
@@ -72,6 +76,10 @@ func NewTreePanel(nodes []TreeNode, title string, opts TreePanelOpts) *TreePanel
 		OnSelect: p.selectRow,
 		OnKey:    p.keyRow,
 	})
+	if opts.OnPointer != nil {
+		// Only when set: ListPanel reads a nil hook as "default for both buttons".
+		p.panel.onPointer = p.pointerRow
+	}
 	p.SetNodes(nodes)
 	return p
 }
@@ -209,6 +217,15 @@ func (p *TreePanel) selectRow(sh *core.Shared, item list.Item) core.Action {
 		return pick(sh)
 	}
 	return core.Action{}
+}
+
+// pointerRow is the inner panel's OnPointer, typed to the node.
+func (p *TreePanel) pointerRow(sh *core.Shared, item list.Item, right bool) (core.Action, bool) {
+	row, ok := item.(treeRow)
+	if !ok {
+		return core.Action{}, false
+	}
+	return p.opts.OnPointer(sh, row.node, right)
 }
 
 func (p *TreePanel) keyRow(sh *core.Shared, k string, item list.Item) (core.Action, bool) {

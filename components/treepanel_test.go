@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/brohd11/bubblestack/core"
 
 	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -178,5 +180,30 @@ func TestTreePanelSelectUsesVisibleAncestor(t *testing.T) {
 	}
 	if node, _ := p.Selected(); node.ID != "class" {
 		t.Fatalf("hidden descendant selected %q, want deepest visible ancestor class", node.ID)
+	}
+}
+
+// TestTreePanelOnPointer: the hook gets the clicked node, already selected; declining a
+// left click keeps the default (enter).
+func TestTreePanelOnPointer(t *testing.T) {
+	var picked string
+	var got []string
+	p := NewTreePanel(treeTestNodes(&picked), "Docs", TreePanelOpts{Border: true,
+		OnPointer: func(_ *core.Shared, node TreeNode, right bool) (core.Action, bool) {
+			got = append(got, fmt.Sprintf("%s:%v", node.ID, right))
+			return core.Action{}, right
+		},
+	})
+	p.SetSize(30, 12)
+	p.Focus()
+	sh := core.NewShared(nil)
+	row, _ := p.RowY(1) // "method"
+	p.UpdatePanel(sh, tea.MouseClickMsg{X: 5, Y: row, Button: tea.MouseRight})
+	if node, _ := p.Selected(); node.ID != "method" || len(got) != 1 || got[0] != "method:true" || picked != "" {
+		t.Fatalf("right click: selected %q, hook %v, picked %q", node.ID, got, picked)
+	}
+	p.UpdatePanel(sh, tea.MouseClickMsg{X: 5, Y: row, Button: tea.MouseLeft})
+	if len(got) != 2 || got[1] != "method:false" || picked != "method" {
+		t.Fatalf("a declined left click should still pick: hook %v, picked %q", got, picked)
 	}
 }

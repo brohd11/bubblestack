@@ -103,6 +103,10 @@ type FilePanelOpts struct {
 	// OnKey claims extra row keys, exactly as ListPanelOpts.OnKey does, but typed to the
 	// entry under the cursor. It does not fire on the ".." row or on a host row.
 	OnKey func(*core.Shared, string, FileEntry) (core.Action, bool)
+	// OnPointer handles a click on a file or folder row (already selected) before the
+	// default, right reporting which button; not on ".." or a host row. handled=false falls
+	// back: right opens the entry, left enters a folder.
+	OnPointer func(*core.Shared, FileEntry, bool) (core.Action, bool)
 
 	// OnDir fires after the listed directory changed, for a breadcrumb or a status line.
 	// OnError fires when a directory cannot be read; the panel stays where it was.
@@ -430,6 +434,11 @@ func (p *FilePanel) pick(sh *core.Shared, it list.Item) core.Action {
 // button that means "menu". Files fall back to OnSelect either way. The host builds the
 // menu because only it knows the panel's origin for the anchor.
 func (p *FilePanel) pointer(sh *core.Shared, it list.Item, right bool) (core.Action, bool) {
+	if fi, ok := it.(fileItem); ok && !fi.entry.Up && p.opts.OnPointer != nil {
+		if act, handled := p.opts.OnPointer(sh, fi.entry, right); handled {
+			return act, true
+		}
+	}
 	if right {
 		return p.pick(sh, it), true
 	}

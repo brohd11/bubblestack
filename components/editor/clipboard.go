@@ -33,14 +33,7 @@ func pasteClipboardCmd(target *Screen) core.Action {
 // a rule. x, y are absolute cells. Copy and Cut are disabled without a selection; Paste is
 // always enabled, since checking the clipboard needs IO.
 func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
-	sel := s.selectionActive()
-	items := []components.MenuItem{
-		{Label: "Copy", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(false) }},
-		{Label: "Cut", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
-		{Label: "Paste", Pick: func(*core.Shared) core.Action {
-			return core.Seq(core.Pop(), pasteClipboardCmd(s))
-		}},
-	}
+	items := s.ClipboardItems()
 	if s.contextItems != nil {
 		if extra := s.contextItems(sh); len(extra) > 0 {
 			items = append(items, components.MenuItem{Separator: true})
@@ -48,6 +41,21 @@ func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 		}
 	}
 	return components.NewMenu(components.MenuOpts{Items: items, Anchor: components.AnchorBelow(x, y)})
+}
+
+// ClipboardItems are the Copy, Cut and Paste rows of the right-click menu, for a host to
+// put in a menu of its own (a menu bar's Edit). Copy and Cut are disabled without a
+// selection, read now, so build them when the menu opens. Each Pick pops one menu level
+// and then acts on this editor.
+func (s *Screen) ClipboardItems() []components.MenuItem {
+	sel := s.selectionActive()
+	return []components.MenuItem{
+		{Label: "Copy", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(false) }},
+		{Label: "Cut", Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
+		{Label: "Paste", Pick: func(*core.Shared) core.Action {
+			return core.Seq(core.Pop(), pasteClipboardCmd(s))
+		}},
+	}
 }
 
 // copySelection is the menu's Copy and Cut: copyOrCut after popping the menu.
