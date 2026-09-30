@@ -121,6 +121,7 @@ func (s *Screen) gutter() int {
 // up. When the buffer overflows, the rightmost column is the scrollbar. Only rowCount and
 // renderRow know what a row is (a line, or a wrapped chunk).
 func (s *Screen) body() string {
+	s.ensureLiveSnapshot()
 	rows := s.h
 	if s.confirmExit {
 		rows-- // the prompt takes the last body row
@@ -248,8 +249,25 @@ func (s *Screen) lineNumTextWidth(w, line int, first bool) string {
 // width and, on overflow, once more one column narrower for the bar; narrowing only adds
 // rows, so the second pass is final. Edits, resizes and toggles set wrapDirty.
 func (s *Screen) rebuildWrapRows() {
+	// Live rendering: rows that flipped between source and rendered change height, so a
+	// change in the active set rewraps, keeping the top line where it was.
+	flipped := false
+	if s.live {
+		if k := s.currentLiveKey(); k != s.liveLast {
+			s.liveLast = k
+			flipped = true
+			s.wrapDirty = true
+		}
+	}
 	if !s.wrapDirty {
 		return
+	}
+	topLine, topOff := -1, 0
+	if flipped && s.scrY < len(s.wrapRows) {
+		topLine = s.wrapRows[s.scrY].line
+		for i := s.scrY; i > 0 && s.wrapRows[i-1].line == topLine; i-- {
+			topOff++
+		}
 	}
 	s.wrapDirty = false // cleared first: nothing below may re-enter the rebuild
 	s.wrapBar = false
@@ -257,6 +275,17 @@ func (s *Screen) rebuildWrapRows() {
 	if len(s.wrapRows) > s.h {
 		s.wrapBar = true
 		s.buildWrapRows(s.w - 1 - s.leftGutterWidth())
+	}
+	if topLine >= 0 {
+		for i, r := range s.wrapRows {
+			if r.line == topLine {
+				s.scrY = i
+				for n := 0; n < topOff && s.scrY+1 < len(s.wrapRows) && s.wrapRows[s.scrY+1].line == topLine; n++ {
+					s.scrY++
+				}
+				break
+			}
+		}
 	}
 }
 
@@ -268,26 +297,44 @@ func (s *Screen) buildWrapRows(w int) {
 	w = max(w, 1)
 	s.wrapRows = s.wrapRows[:0]
 	for i, line := range s.lines {
-		disp := expandLine(line)
-		n, lastWidth := len(disp), 0
-		for start := 0; start < n; {
-			end := min(start+w, n)
-			// An exact word boundary already fits. Otherwise retreat to the last
-			// separator, moving the entire next word onto a fresh row.
-			if end < n && disp[end] != ' ' && disp[end-1] != ' ' {
-				for at := end - 1; at >= start; at-- {
-					if disp[at] == ' ' {
-						end = at + 1
-						break
-					}
+		if spans := s.liveSpans(i, w); spans != nil {
+			disp, _ := liveDisplay(spans)
+			s.appendWrapRows(i, disp, w, true)
+			continue
+		}
+		s.appendWrapRows(i, expandLine(line), w, false)
+	}
+}
+
+// appendWrapRows wraps one line's display runes at w cells.
+func (s *Screen) appendWrapRows(line int, disp []rune, w int, rendered bool) {
+	n, lastWidth := len(disp), 0
+	for start := 0; start < n; {
+		end := min(start+w, n)
+		// An exact word boundary already fits. Otherwise retreat to the last
+		// separator, moving the entire next word onto a fresh row.
+		if end < n && disp[end] != ' ' && disp[end-1] != ' ' {
+			for at := end - 1; at >= start; at-- {
+				if disp[at] == ' ' {
+					end = at + 1
+					break
 				}
 			}
-			s.wrapRows = append(s.wrapRows, wrapRow{i, start, end})
-			lastWidth, start = end-start, end
 		}
-		if n == 0 || lastWidth == w {
-			s.wrapRows = append(s.wrapRows, wrapRow{i, n, n})
-		}
+		s.wrapRows = append(s.wrapRows, wrapRow{line, start, end, rendered, w})
+		lastWidth, start = end-start, end
+	}
+	// A rendered row never holds the caret, so it needs no end-of-line row.
+	if n == 0 || lastWidth == w && !rendered {
+		s.wrapRows = append(s.wrapRows, wrapRow{line, n, n, rendered, w})
+	}
+}
+
+// settleRows brings the wrap cache up to date before a caller reads scrY: under live
+// rendering a rebuild can move it to keep the top line in place.
+func (s *Screen) settleRows() {
+	if s.wrap {
+		s.rebuildWrapRows()
 	}
 }
 
@@ -320,6 +367,11 @@ func (s *Screen) wrapRowForCursor() int {
 // is unwrapped.
 func (s *Screen) renderWrappedRow(idx int) string {
 	r := s.wrapRows[idx]
+	if r.rendered {
+		if spans := s.liveSpans(r.line, r.width); spans != nil {
+			return s.gutterText(r.line, r.start == 0) + renderLiveWindow(spans, r.start, r.end)
+		}
+	}
 	line := s.lines[r.line]
 	disp := expandLine(line)
 	start, end := min(r.start, len(disp)), min(r.end, len(disp))
@@ -346,6 +398,9 @@ func (s *Screen) lastRowOfLine(idx int) bool {
 // renders through its spans; the caret still wins. Styles never change widths.
 // Unfocused, text keeps its styling and the caret is hidden.
 func (s *Screen) renderLine(row int) string {
+	if spans := s.liveSpans(row, s.contentW()); spans != nil {
+		return s.renderLiveLine(row, spans)
+	}
 	disp := expandLine(s.lines[row])
 	w := s.contentW()
 	start := s.scrX
@@ -608,6 +663,16 @@ func (s *Screen) renderLineStyled(row, start, end int, eol bool) (string, bool) 
 		} else {
 			drunes = append(drunes, r)
 			didx = append(didx, idx[i])
+		}
+	}
+	// Live glyphs swap single cells; each gets a style slot past the highlighter's spans.
+	if gs := s.activeGlyphs(row); len(gs) > 0 {
+		spans = spans[:len(spans):len(spans)]
+		for _, g := range gs {
+			cell := cellOfCol(line, g.Col)
+			drunes[cell] = g.Text
+			didx[cell] = len(spans)
+			spans = append(spans, Span{Style: g.Style})
 		}
 	}
 	vis, vidx := drunes[start:end], didx[start:end]

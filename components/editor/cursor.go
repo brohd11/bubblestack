@@ -111,6 +111,9 @@ func (s *Screen) wrappedPosition(row, x int) (textPos, bool) {
 	if !s.lastRowOfLine(row) {
 		end-- // the boundary itself belongs to the next row
 	}
+	if r.rendered {
+		return textPos{r.line, s.liveCol(r.line, min(r.start+max(x, 0), end), r.width)}, true
+	}
 	col := colAtCell(line, min(r.start+max(x, 0), end))
 	if cellOfCol(line, col) < r.start {
 		if col < len(line) && cellOfCol(line, col+1) <= end {
@@ -158,6 +161,7 @@ func (s *Screen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, boo
 		}
 		rel = s.h - 1
 	}
+	s.settleRows() // a rewrap may move scrY, which the row below counts from
 	row, cell := s.scrY+rel, s.scrX+x
 	if s.wrap {
 		// The clicked row is a wrapped chunk: it names the line, and its start is the
@@ -167,6 +171,9 @@ func (s *Screen) positionAt(sh *core.Shared, x, y int, clamp bool) (textPos, boo
 		return p, true
 	} else if row >= len(s.lines) {
 		row = len(s.lines) - 1
+	}
+	if w := s.contentW(); s.liveSpans(row, w) != nil {
+		return textPos{row, s.liveCol(row, cell, w)}, true
 	}
 	col := colAtCell(s.lines[row], cell)
 	return textPos{row, col}, true

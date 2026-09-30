@@ -68,6 +68,7 @@ type Screen struct {
 	hlEpoch          uint64 // language identity; rejects a parse finishing after a rename
 	hlRows           []int  // current row → row in hl; -1 means text affected by an edit
 	hlPreview        map[int][]Span
+	hlPreviewGlyphs  map[int][]Glyph // the preview parse's ActiveGlyphs, beside hlPreview
 	hlPrevSeq        int
 	hlPrevFrom       int
 	hlPrevTo         int
@@ -116,6 +117,9 @@ type Screen struct {
 	wrapDirty     bool      // the wrap cache needs a rebuild: an edit, a resize or a toggle moved it
 	wrapGoal      int       // desired display column for consecutive wrapped vertical moves
 	wrapGoalValid bool
+
+	live     bool    // SetLiveRender: inactive rows show the LineRenderer's display (live.go)
+	liveLast liveKey // the active set wrapRows was built for
 
 	// The geometry SetSize last laid out, so an unchanged re-size costs nothing. See
 	// SetSize; sizeDirty is how a change that is not a dimension (SetEmbedded) forces it.
@@ -185,9 +189,14 @@ type editorHistoryEntry struct {
 }
 
 // wrapRow is one display row of a soft-wrapped line: the half-open cell range
-// [start, end) of expandLine's output. A line ending exactly on the margin gets a
-// trailing empty row so the caret has a cell at end of line.
-type wrapRow struct{ line, start, end int }
+// [start, end) of expandLine's output, or of the LineRenderer's display when rendered.
+// A line ending exactly on the margin gets a trailing empty row so the caret has a cell
+// at end of line.
+type wrapRow struct {
+	line, start, end int
+	rendered         bool
+	width            int // the width a rendered row was laid out at (its LiveContext)
+}
 
 // Opts configures a Screen.
 //
@@ -1175,7 +1184,10 @@ func (s *Screen) ToggleWrap() {
 }
 
 // TopLine is the buffer line showing at the top of the viewport, in either mode.
-func (s *Screen) TopLine() int { return s.lineAtRow(s.scrY) }
+func (s *Screen) TopLine() int {
+	s.settleRows()
+	return s.lineAtRow(s.scrY)
+}
 
 // SetTopLine scrolls so line is at the top of the viewport (the inverse of TopLine),
 // clamped to the buffer.
@@ -1190,11 +1202,15 @@ func (s *Screen) SetTopLine(line int) {
 
 // CenterLine is the buffer line at the middle of the viewport, the anchor a synced view
 // (gote's preview) centers on.
-func (s *Screen) CenterLine() int { return s.lineAtRow(s.scrY + s.h/2) }
+func (s *Screen) CenterLine() int {
+	s.settleRows()
+	return s.lineAtRow(s.scrY + s.h/2)
+}
 
 // ScrollSpan reports the vertical position in display rows: offset, maximum offset and
 // viewport height. Rows, not lines, so a host can sync its own scroll to it.
 func (s *Screen) ScrollSpan() (offset, maxOffset, height int) {
+	s.settleRows()
 	return s.scrY, max(s.rowCount()-s.h, 0), s.h
 }
 

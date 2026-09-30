@@ -37,6 +37,7 @@ func (s *Screen) signAt(sh *core.Shared, x, y int) (SignClick, bool) {
 	if column < 0 || column >= len(columns) || row < 0 || row >= s.h {
 		return SignClick{}, false
 	}
+	s.settleRows()
 	line := s.scrY + row
 	if s.wrap {
 		s.rebuildWrapRows()
