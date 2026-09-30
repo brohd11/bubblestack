@@ -313,6 +313,9 @@ func (r Router) View() tea.View {
 	v.ReportFocus = true
 	if r.mouseOn {
 		v.MouseMode = tea.MouseModeCellMotion
+		if mw, ok := r.Top().(MotionWanter); ok && mw.WantsAllMotion() {
+			v.MouseMode = tea.MouseModeAllMotion
+		}
 	}
 	return v
 }

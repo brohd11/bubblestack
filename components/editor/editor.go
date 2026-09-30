@@ -141,6 +141,7 @@ type Screen struct {
 	clickCount int       // 1 = caret, 2 = word, 3 = line; 0 ⇒ no press to build on
 
 	contextMenu  bool                                     // Opts.ContextMenu: a right press raises the edit menu
+	menuStyle    components.MenuStyle                     // Opts.MenuStyle
 	contextItems func(*core.Shared) []components.MenuItem // host rows appended to that menu below a rule
 
 	undoStack, redoStack                  []editorHistoryEntry
@@ -203,7 +204,7 @@ type wrapRow struct{ line, start, end int }
 //     Highlighters that do not reconstruct the line exactly are ignored.
 //   - Search enables ctrl+f literal search over a bar reserved at the bottom edge.
 //   - ContextMenu enables the right-click menu; ContextItems appends host rows to it,
-//     consulted per press. Rows should leave Hint empty.
+//     consulted per press. Rows should leave Hint empty. MenuStyle sets its look.
 //   - Indent/IndentWidth pick the unit block indent uses (tab always types '\t'); the
 //     zero value reads it from ResolveLanguage.
 //   - ResolveLanguage supplies pairs, structured Enter, indent unit and highlighter for a
@@ -229,6 +230,7 @@ type Opts struct {
 	ResolveLanguage LanguageResolver
 	Search          bool
 	ContextMenu     bool
+	MenuStyle       components.MenuStyle // the right-click menu's look; zero is the accent look
 	ContextItems    func(*core.Shared) []components.MenuItem
 	Indent          IndentMode
 	IndentWidth     int
@@ -477,6 +479,7 @@ func New(opts Opts) *Screen {
 		searchEnabled:   opts.Search,
 		searchSeq:       -1,
 		contextMenu:     opts.ContextMenu,
+		menuStyle:       opts.MenuStyle,
 		contextItems:    opts.ContextItems,
 		onSignClick:     opts.OnSignClick,
 

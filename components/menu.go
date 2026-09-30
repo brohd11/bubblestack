@@ -39,6 +39,16 @@ type MenuScreen struct {
 	anchor   MenuAnchor
 	title    string
 	maxWidth int
+	style    MenuStyle
+
+	// parent is the menu whose Submenu row opened this one, at parentRow; nil for a root.
+	// A child reads it to close when the pointer moves back over the parent.
+	parent    *MenuScreen
+	parentRow int
+	// hoverRow is the row the pointer last moved over, -1 when it is off the rows. A
+	// Submenu row opens when the pointer enters it — not on every twitch over it, so esc
+	// closes a submenu until the pointer leaves the row and comes back.
+	hoverRow int
 
 	sel int // index into items; -1 when nothing is selectable
 	top int // first item of the visible window
@@ -60,17 +70,34 @@ var _ core.Overlayer = (*MenuScreen)(nil)
 var _ core.OverlayPositioner = (*MenuScreen)(nil)
 var _ core.Filterer = (*MenuScreen)(nil)
 var _ core.QuitGater = (*MenuScreen)(nil)
+var _ core.MotionWanter = (*MenuScreen)(nil)
 
 // MenuItem is one row of a MenuScreen. Separator draws a muted rule and is never
 // selectable; Disabled rows are muted and skipped. Hint is right-aligned display-only text
 // (an accelerator label, or "›" for a submenu). Pick runs on enter or a click and owns the
-// dismissal; a nil Pick is an inert row.
+// dismissal; a nil Pick is an inert row. Submenu, when set, makes the row open a child menu
+// of those items beside it (enter, click, →, or hovering the row) instead of running Pick;
+// its Hint defaults to "›". The child's rows own their dismissal as any Pick does — a leaf
+// one level down returns core.Pop(2) to close both.
 type MenuItem struct {
 	Label     string
 	Hint      string
 	Pick      func(*core.Shared) core.Action
+	Submenu   func() []MenuItem
 	Disabled  bool
 	Separator bool
+}
+
+// MenuStyle is how a menu draws its selection and border. The zero value is the accent
+// look: accent text on the selected row, accent border.
+type MenuStyle struct {
+	// Selection: SelectBorder (the default) accents the selected row's text; SelectBackground
+	// fills the row with SelectionColor, its text accented unless NoAccent. HideUnfocused
+	// does not apply — a menu always has focus.
+	Selection core.SelectionOpts
+	// Focus: FocusEdges (the default) draws the border in the accent; FocusLegend keeps it
+	// BorderColor, as a pane frame's edges (the title still takes the accent).
+	Focus FrameFocus
 }
 
 // MenuAnchor is where a menu opens, in absolute cells. X, Y is the preferred top-left;
@@ -121,6 +148,7 @@ type MenuOpts struct {
 	// MaxWidth caps the content width in cells; 0 sizes to the widest row. The box is
 	// clamped to the terminal either way.
 	MaxWidth int
+	Style    MenuStyle // selection and border look; submenus inherit it
 	OnSelect func(sh *core.Shared, it MenuItem, idx int) core.Action
 	OnCancel func(sh *core.Shared) core.Action
 }
@@ -135,11 +163,19 @@ func NewMenu(opts MenuOpts) *MenuScreen {
 	if a.FlipY == 0 {
 		a.FlipY = a.Y
 	}
+	items := append([]MenuItem(nil), opts.Items...) // the › default must not write through
+	for i := range items {
+		if items[i].Submenu != nil && items[i].Hint == "" {
+			items[i].Hint = "›"
+		}
+	}
 	s := &MenuScreen{
-		items:    opts.Items,
+		items:    items,
 		anchor:   a,
 		title:    opts.Title,
 		maxWidth: opts.MaxWidth,
+		style:    opts.Style,
+		hoverRow: -1,
 		OnSelect: opts.OnSelect,
 		OnCancel: opts.OnCancel,
 	}
@@ -331,6 +367,10 @@ func (s *MenuScreen) Filtering() bool { return true }
 // which the host could make do something else.
 func (s *MenuScreen) QuitGate(*core.Shared) (core.Action, bool) { return core.Pop(), true }
 
+// WantsAllMotion asks the router for free pointer motion while the menu is on top, so the
+// highlight can follow the pointer and a submenu row can open on hover.
+func (s *MenuScreen) WantsAllMotion() bool { return true }
+
 // HelpView is empty: the background screen's help bar stays, as with every other overlay.
 func (s *MenuScreen) HelpView(*core.Shared) string { return "" }
 
@@ -343,8 +383,10 @@ func (s *MenuScreen) SetSize(sh *core.Shared, width, bodyHeight int) {
 // covering is the failure this ordering guards against.
 func (s *MenuScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Action) {
 	switch m := msg.(type) {
-	// Only presses and wheel notches act on a menu; motion and release pass through
-	// untouched, as they do everywhere else in v2.
+	// Presses and wheel notches act on a menu; motion only moves the highlight (and opens a
+	// submenu); release is ignored.
+	case tea.MouseMotionMsg:
+		return s, s.hover(m.Mouse())
 	case tea.MouseClickMsg:
 		return s, s.mouse(sh, m.Mouse())
 	case tea.MouseWheelMsg:
@@ -391,6 +433,61 @@ func (s *MenuScreen) mouse(sh *core.Shared, m tea.Mouse) core.Action {
 	return s.pick(sh)
 }
 
+// rowAt is the item index under absolute cell (x, y), -1 for none, and whether the cell
+// is inside the box at all.
+func (s *MenuScreen) rowAt(x, y int) (idx int, inBox bool) {
+	bx, by, bw, bh := s.place()
+	if x < bx || x >= bx+bw || y < by || y >= by+bh {
+		return -1, false
+	}
+	_, _, _, visible, _ := s.dims()
+	row := y - s.contentTop()
+	if row < 0 || row >= visible {
+		return -1, true
+	}
+	return s.top + row, true
+}
+
+// hover follows the pointer. Over this box it selects the row the pointer enters, opening
+// a Submenu row. Over a parent's box — anywhere but the row that
+// opened this child — the child closes, and the parent takes the next motion. Motion
+// elsewhere does nothing: only a click or esc dismisses.
+func (s *MenuScreen) hover(m tea.Mouse) core.Action {
+	idx, in := s.rowAt(m.X, m.Y)
+	if in {
+		entered := idx != s.hoverRow
+		s.hoverRow = idx
+		if !entered || !s.selectable(idx) {
+			return core.Action{}
+		}
+		s.Select(idx)
+		if s.items[idx].Submenu != nil {
+			return s.openSubmenu()
+		}
+		return core.Action{}
+	}
+	s.hoverRow = -1
+	for p, row := s.parent, s.parentRow; p != nil; p, row = p.parent, p.parentRow {
+		pidx, pin := p.rowAt(m.X, m.Y)
+		if !pin {
+			continue
+		}
+		if p == s.parent && pidx == row {
+			return core.Action{} // still on the row that opened this menu
+		}
+		return core.Pop()
+	}
+	return core.Action{}
+}
+
+// openSubmenu pushes the selected Submenu row's items beside it, in this menu's style.
+func (s *MenuScreen) openSubmenu() core.Action {
+	it := s.items[s.sel]
+	child := NewMenu(MenuOpts{Items: it.Submenu(), Anchor: s.ChildAnchor(), Style: s.style})
+	child.parent, child.parentRow = s, s.sel
+	return core.Push(child)
+}
+
 func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
 	switch {
 	// Left is "back one level", which in a cascade is the same thing as esc.
@@ -398,6 +495,11 @@ func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
 		return s.cancel(sh)
 	case core.MatchKey(k, core.Keys.Select):
 		return s.pick(sh)
+	case core.MatchKey(k, core.Keys.Right):
+		// → opens a submenu; on any other row it does nothing (it is not a second enter).
+		if s.sel >= 0 && s.sel < len(s.items) && s.items[s.sel].Submenu != nil {
+			return s.openSubmenu()
+		}
 	case core.MatchKey(k, core.Keys.Up):
 		s.move(-1, true)
 	case core.MatchKey(k, core.Keys.Down):
@@ -407,7 +509,6 @@ func (s *MenuScreen) key(sh *core.Shared, k string) core.Action {
 	case core.MatchKey(k, core.Keys.Bottom):
 		s.Select(len(s.items) - 1)
 	}
-	// Keys.Right stays unbound: a submenu is just a Pick, so → could only mean Select.
 	return core.Action{}
 }
 
@@ -417,6 +518,9 @@ func (s *MenuScreen) pick(sh *core.Shared) core.Action {
 		return core.Action{}
 	}
 	it := s.items[s.sel]
+	if it.Submenu != nil {
+		return s.openSubmenu()
+	}
 	if s.OnSelect != nil {
 		return s.OnSelect(sh, it, s.sel)
 	}
@@ -460,23 +564,36 @@ func (s *MenuScreen) View(*core.Shared) string {
 	}
 	// PopupPanel adds the chrome place() already accounts for, so the box is exactly
 	// the width place() reports.
-	return PopupPanel(strings.Join(rows, "\n"), contentW)
+	return popupPanel(strings.Join(rows, "\n"), contentW, s.style.Focus.edgeColor(true))
 }
 
-// row renders one item into field cells: label left, hint right (see menuRow).
+// row renders one item into field cells: label left, hint right (see menuRow). A
+// SelectBackground selection fills the whole field, gap included.
 func (s *MenuScreen) row(it MenuItem, selected bool, field int, muted, accent lipgloss.Style) string {
 	if it.Separator {
 		return muted.Render(strings.Repeat("─", field))
 	}
 
-	label, hint := lipgloss.NewStyle(), muted
+	label, hint, fill := lipgloss.NewStyle(), muted, lipgloss.NewStyle()
 	switch {
 	case it.Disabled:
 		label, hint = muted, muted
+	case selected && s.style.Selection.Style == core.SelectBackground:
+		fill = fill.Background(core.SelectionColor)
+		label, hint = fill, muted.Background(core.SelectionColor)
+		if !s.style.Selection.NoAccent {
+			label = accent.Background(core.SelectionColor)
+		}
 	case selected:
 		label, hint = accent, accent
+		if s.style.Selection.NoAccent {
+			label, hint = lipgloss.NewStyle().Bold(true), muted
+		}
 	}
 
+	if selected && !it.Disabled && s.style.Selection.Style == core.SelectBackground {
+		return menuRowFilled(it.Label, it.Hint, field, label, hint, fill)
+	}
 	return menuRow(it.Label, it.Hint, field, label, hint)
 }
 
@@ -492,6 +609,28 @@ func menuRow(labelText, hintText string, field int, labelStyle, hintStyle lipglo
 	}
 	text := ansi.Truncate(labelText, max(field-reserve, 1), "…")
 	out := labelStyle.Render(text) + strings.Repeat(" ", max(field-ansi.StringWidth(text)-hintW, 0))
+	if hintW > 0 {
+		out += hintStyle.Render(hintText)
+	}
+	return out
+}
+
+// menuRowFilled is menuRow for a background-filled selection: the whole field, the gap
+// between label and hint included, sits on fill. labelStyle and hintStyle carry the same
+// background.
+func menuRowFilled(labelText, hintText string, field int, labelStyle, hintStyle, fill lipgloss.Style) string {
+	hintW := ansi.StringWidth(hintText)
+	reserve := 0
+	if hintText != "" && field-menuHintGap-hintW >= 1 {
+		reserve = menuHintGap + hintW
+	} else {
+		hintW = 0
+	}
+	text := ansi.Truncate(labelText, max(field-reserve, 1), "…")
+	out := labelStyle.Render(text)
+	if gap := max(field-ansi.StringWidth(text)-hintW, 0); gap > 0 {
+		out += fill.Render(strings.Repeat(" ", gap))
+	}
 	if hintW > 0 {
 		out += hintStyle.Render(hintText)
 	}

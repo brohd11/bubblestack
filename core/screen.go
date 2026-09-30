@@ -80,6 +80,12 @@ func FullscreenMask() ChromeMask {
 	return ChromeMask{Header: true, TabStrip: true, Breadcrumb: true, Status: true, Output: true, Help: true}
 }
 
+// MotionWanter asks for free pointer motion while the screen is on top. The router
+// otherwise reports motion only while a button is held (cell motion); all-motion sends an
+// event per pointer move, so only a screen that uses hover (a menu following the pointer)
+// should want it.
+type MotionWanter interface{ WantsAllMotion() bool }
+
 // ChromeMasker lets the top screen hide chrome. The router asks each render, so popping
 // back to a screen without it restores the chrome.
 type ChromeMasker interface{ ChromeMask() ChromeMask }

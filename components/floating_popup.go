@@ -1,6 +1,7 @@
 package components
 
 import (
+	"image/color"
 	"strings"
 
 	"github.com/brohd11/bubblestack/core"
@@ -312,5 +313,10 @@ func (p *PopupList[T]) View() string {
 // the inner width. The fixed width makes the box opaque: core.Composite punches a hole
 // only as wide as each line, so ragged lines would let the background through.
 func PopupPanel(body string, width int) string {
-	return menuBox().Width(width + menuChromeW).Render(body)
+	return popupPanel(body, width, core.FocusedColor)
+}
+
+// popupPanel is PopupPanel with the border in border (a menu's MenuStyle.Focus).
+func popupPanel(body string, width int, border color.Color) string {
+	return menuBox().BorderForeground(border).Width(width + menuChromeW).Render(body)
 }

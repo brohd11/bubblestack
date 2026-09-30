@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"image/color"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // newMenu builds a menu already sized to an 80x20 body. Shared.bodyY is router-owned
@@ -594,5 +596,127 @@ func TestMenuQuitGateClosesTheMenu(t *testing.T) {
 	tm.Update(ctrlC)
 	if gated != 1 {
 		t.Errorf("with the menus gone the base gate should have answered once, ran %d times", gated)
+	}
+}
+
+// TestMenuStyle: the zero Style is the accent look; SelectBackground fills the selected
+// row with SelectionColor (text un-accented with NoAccent), and FocusLegend draws the
+// border in BorderColor.
+func TestMenuStyle(t *testing.T) {
+	items := []MenuItem{{Label: "One", Hint: "x"}, {Label: "Two"}}
+	plain, sh := newMenu(t, MenuOpts{Items: items, Anchor: AnchorAt(0, 0)})
+	styled, _ := newMenu(t, MenuOpts{Items: items, Anchor: AnchorAt(0, 0), Style: MenuStyle{
+		Selection: core.SelectionOpts{Style: core.SelectBackground, NoAccent: true},
+		Focus:     FocusLegend,
+	}})
+	pv, sv := plain.View(sh), styled.View(sh)
+	if ansi.Strip(pv) != ansi.Strip(sv) {
+		t.Fatalf("style must not change the layout:\n%s\n%s", ansi.Strip(pv), ansi.Strip(sv))
+	}
+
+	bg := lipgloss.NewStyle().Background(core.SelectionColor).Render(" ")
+	bg = bg[:strings.Index(bg, " ")] // the background's opening sequence
+	selRow := strings.Split(sv, "\n")[1]
+	if !strings.Contains(selRow, bg) {
+		t.Fatalf("SelectBackground should put SelectionColor on the selected row: %q", selRow)
+	}
+	if strings.Contains(strings.Split(sv, "\n")[2], bg) {
+		t.Fatal("only the selected row takes the background")
+	}
+	if strings.Contains(selRow, core.AccentStyle().Render("One")) {
+		t.Fatal("NoAccent should keep the selected label un-accented")
+	}
+
+	border := func(v string, c color.Color) bool {
+		want := lipgloss.NewStyle().Foreground(c).Render("╭")
+		return strings.HasPrefix(v, want[:strings.Index(want, "╭")])
+	}
+	if !border(pv, core.FocusedColor) || !border(sv, core.BorderColor) {
+		t.Fatalf("border colors: default should be the accent, FocusLegend the border color")
+	}
+}
+
+// motion is a free pointer move to (x, y), as all-motion reporting delivers it.
+func motion(x, y int) tea.MouseMotionMsg { return tea.MouseMotionMsg{X: x, Y: y} }
+
+// TestMenuHover: the highlight follows the pointer; hovering a Submenu row opens it in the
+// parent's style; moving back onto another parent row closes the child, while its own
+// parent row keeps it open.
+func TestMenuHover(t *testing.T) {
+	style := MenuStyle{Focus: FocusLegend}
+	parent := NewMenu(MenuOpts{Anchor: AnchorAt(10, 3), Style: style, Items: []MenuItem{
+		{Label: "one"},
+		{Label: "Sort", Submenu: func() []MenuItem { return []MenuItem{{Label: "asc"}, {Label: "desc"}} }},
+		{Label: "three"},
+	}})
+	if parent.items[1].Hint != "›" {
+		t.Fatalf("a Submenu row should default its hint to ›, got %q", parent.items[1].Hint)
+	}
+	sh := core.NewShared(nil)
+	r := core.NewRouter(sh, []core.TabEntry{{Title: "T", New: func(*core.Shared) core.Screen { return stubRootScreen{} }}})
+	var tm tea.Model = r
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	tm, _ = tm.Update(core.Push(parent))
+	if tm.(core.Router).View().MouseMode != tea.MouseModeAllMotion {
+		t.Fatal("a menu on top should ask for all-motion reporting")
+	}
+
+	px, _, _, _ := parent.place()
+	top := parent.contentTop()
+	tm, _ = tm.Update(motion(px+2, top+2)) // "three"
+	if parent.Selected() != 2 || tm.(core.Router).Top() != core.Screen(parent) {
+		t.Fatalf("hover should select the row under the pointer, sel %d", parent.Selected())
+	}
+	tm, _ = tm.Update(motion(px+2, top+1)) // "Sort"
+	child, ok := tm.(core.Router).Top().(*MenuScreen)
+	if !ok || child == parent || child.style != style {
+		t.Fatalf("hovering a submenu row should open it in the parent's style, top %T", tm.(core.Router).Top())
+	}
+	cx, _, _, _ := child.place()
+	ctop := child.contentTop()
+	tm, _ = tm.Update(motion(cx+2, ctop+1)) // "desc" in the child
+	if child.Selected() != 1 {
+		t.Fatal("hover inside the child should move its highlight")
+	}
+	tm, _ = tm.Update(motion(px+2, top+1)) // back on "Sort", the row that opened it
+	if tm.(core.Router).Top() != core.Screen(child) {
+		t.Fatal("the pointer on the child's own parent row must keep it open")
+	}
+	tm, _ = tm.Update(motion(px+2, top)) // "one"
+	if tm.(core.Router).Top() != core.Screen(parent) {
+		t.Fatal("moving onto another parent row should close the child")
+	}
+	tm, _ = tm.Update(motion(px+2, top))
+	if parent.Selected() != 0 {
+		t.Fatal("the parent should take the next motion")
+	}
+	tm, _ = tm.Update(motion(70, 20)) // far outside every box
+	if tm.(core.Router).Top() != core.Screen(parent) {
+		t.Fatal("motion must never dismiss a menu")
+	}
+
+	// A fresh menu's first row is already selected; entering it still opens it.
+	fresh := NewMenu(MenuOpts{Anchor: AnchorAt(10, 3), Items: []MenuItem{
+		{Label: "Sort", Submenu: func() []MenuItem { return []MenuItem{{Label: "asc"}} }},
+	}})
+	fresh.SetSize(sh, 80, 20)
+	fx, _, _, _ := fresh.place()
+	if _, act := fresh.Update(sh, motion(fx+2, fresh.contentTop())); act.Msg == nil {
+		t.Fatal("entering an already-selected submenu row should open it")
+	}
+	if _, act := fresh.Update(sh, motion(fx+3, fresh.contentTop())); act.Msg != nil {
+		t.Fatal("moving within the same row must not open it again (esc would never stick)")
+	}
+
+	// → opens a submenu from the keyboard.
+	parent.Select(1)
+	tm, _ = tm.Update(keyMsg("right"))
+	if next, ok := tm.(core.Router).Top().(*MenuScreen); !ok || next == parent {
+		t.Fatal("→ on a submenu row should open it")
+	}
+	tm, _ = tm.Update(keyMsg("esc"))
+	tm, _ = tm.Update(keyMsg("esc"))
+	if tm.(core.Router).View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("with no menu up the router should be back to cell motion")
 	}
 }

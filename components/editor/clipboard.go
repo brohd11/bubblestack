@@ -40,7 +40,7 @@ func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 			items = append(items, extra...)
 		}
 	}
-	return components.NewMenu(components.MenuOpts{Items: items, Anchor: components.AnchorBelow(x, y)})
+	return components.NewMenu(components.MenuOpts{Items: items, Anchor: components.AnchorBelow(x, y), Style: s.menuStyle})
 }
 
 // ClipboardItems are the Copy, Cut and Paste rows of the right-click menu, for a host to
