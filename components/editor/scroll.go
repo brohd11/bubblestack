@@ -1,10 +1,10 @@
 package editor
 
 import (
+	"github.com/brohd11/bubblestack/components"
 	"github.com/brohd11/bubblestack/core"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 )
 
 // Viewport scrolling for Screen: offsets, bounds clamps and the scrollbar.
@@ -20,23 +20,26 @@ func (s *Screen) scrollbarRowAt(sh *core.Shared, x, y int) (int, bool) {
 	if !s.barVisible() || x-s.insetX() != s.textW() {
 		return 0, false
 	}
+	row := s.barRow(sh, y)
+	return row, row >= 0 && row < s.h
+}
+
+// barRow is pointer row y as a track row, unbounded: a thumb drag reads it wherever the
+// pointer is, and the bar clamps.
+func (s *Screen) barRow(sh *core.Shared, y int) int {
 	row := y - s.insetY()
 	if !s.embedded {
 		row -= sh.BodyY()
 	}
-	return row, row >= 0 && row < s.h
+	return row
 }
 
-// scrollToBarRow maps the track onto the scroll range. The caret stays put, as with the
-// wheel.
-func (s *Screen) scrollToBarRow(row int) {
-	limit := max(s.rowCount()-s.h, 0)
-	if limit == 0 || s.h <= 1 {
-		s.scrY = 0
-		return
-	}
-	s.scrY = (row*limit + (s.h-1)/2) / (s.h - 1)
-	s.clampScrollBounds()
+// syncBar loads the view's current numbers into the bar and returns it. The caret never
+// moves for the bar, as with the wheel.
+func (s *Screen) syncBar() *components.Scrollbar {
+	s.bar.Total, s.bar.Height = s.rowCount(), s.h // rows, not lines: wrapped, one line can be many
+	s.bar.Offset, s.bar.Focused = s.scrY, s.focused
+	return &s.bar
 }
 
 // wheel routes one notch. Alt turns vertical scrolling sideways: terminals keep ctrl+wheel
@@ -219,23 +222,4 @@ func (s *Screen) textW() int {
 // clampScroll scrolls and buildWrapRows wraps at.
 func (s *Screen) contentW() int {
 	return max(s.textW()-s.leftGutterWidth(), 1)
-}
-
-// scrollbarCell renders one scrollbar row: a proportional thumb in the focus color on a
-// dimmed track, styles built per call.
-func (s *Screen) scrollbarCell(row int) string {
-	total := max(s.rowCount(), 1) // rows, not lines: wrapped, one line can be many
-	thumb := max(s.h*s.h/total, 1)
-	top := 0
-	if d := total - s.h; d > 0 {
-		top = min(s.scrY, d) * (s.h - thumb) / d
-	}
-	color := core.MutedColor
-	if row >= top && row < top+thumb {
-		color = core.FocusedColor
-	}
-	if !s.focused {
-		color = core.MutedColor
-	}
-	return lipgloss.NewStyle().Foreground(color).Render("│")
 }

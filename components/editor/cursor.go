@@ -306,6 +306,7 @@ func (s *Screen) startDragAt(p textPos) {
 // in-flight auto-scroll tick arrives stale.
 func (s *Screen) resetMouseGesture() {
 	s.dragging, s.dragScrolling = false, false
+	s.bar.Release()
 	s.dragSeq++
 }
 

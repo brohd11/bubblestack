@@ -2015,6 +2015,65 @@ func TestEditorScrollbarClickEmbeddedWrapped(t *testing.T) {
 	}
 }
 
+// TestEditorScrollbarDrag: a press on the thumb grabs it, and left-button motion drags the
+// view with it — anywhere on screen, the bar reads only the row — without touching the
+// caret or selection. Release ends the drag; a key does too.
+func TestEditorScrollbarDrag(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func() (*Screen, *core.Shared)
+	}{
+		{"standalone", func() (*Screen, *core.Shared) { return newEditor(Opts{}) }},
+		{"embedded", func() (*Screen, *core.Shared) { return newPaneEditor(Opts{Border: true}) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, sh := c.setup()
+			s.setContent(longDoc())
+			selectRange(s, 0, 0, 0, 1)
+			barX, y0 := s.insetX()+s.textW(), s.insetY()
+			if !s.embedded {
+				y0 += sh.BodyY()
+			}
+			limit := s.rowCount() - s.h
+			drag := func(x, y int) {
+				s.Update(sh, tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft})
+			}
+
+			s.Update(sh, tea.MouseClickMsg{X: barX, Y: y0, Button: tea.MouseLeft}) // the thumb, at the top
+			if s.scrY != 0 || !s.bar.Dragging() {
+				t.Fatalf("a thumb press should grab without scrolling: scrY %d dragging %v", s.scrY, s.bar.Dragging())
+			}
+			drag(3, y0+s.h/2) // off the column: still the bar's drag, not a text selection
+			if s.scrY <= 0 || s.scrY >= limit {
+				t.Fatalf("dragging to the middle scrolled to %d, want inside (0, %d)", s.scrY, limit)
+			}
+			drag(barX, y0+s.h+50)
+			if s.scrY != limit {
+				t.Fatalf("dragging past the bottom scrolled to %d, want %d", s.scrY, limit)
+			}
+			drag(barX, y0-50)
+			if s.scrY != 0 {
+				t.Fatalf("dragging past the top scrolled to %d, want 0", s.scrY)
+			}
+			if s.curY != 0 || s.curX != 1 || !s.selectionActive() {
+				t.Fatalf("the drag changed caret/selection: caret=(%d,%d) selected=%v", s.curY, s.curX, s.selectionActive())
+			}
+
+			s.Update(sh, tea.MouseReleaseMsg{X: barX, Y: y0, Button: tea.MouseLeft})
+			drag(barX, y0+s.h-1)
+			if s.scrY != 0 || s.bar.Dragging() {
+				t.Fatalf("motion after release scrolled to %d (dragging %v)", s.scrY, s.bar.Dragging())
+			}
+
+			s.Update(sh, tea.MouseClickMsg{X: barX, Y: y0, Button: tea.MouseLeft})
+			s.Update(sh, keyMsg("esc"))
+			if s.bar.Dragging() {
+				t.Fatal("a key should end the bar drag, as it ends a selection drag")
+			}
+		})
+	}
+}
+
 // TestEditorSaveAsAnchor: the save-as box covers the bottom of just this editor —
 // embedded, the host-pushed pane origin and the pane's own width; standalone (no
 // origin was ever pushed) it spans the terminal width at the body's bottom.

@@ -133,6 +133,8 @@ type Screen struct {
 	signOrder   []string               // outermost to innermost; registration order for unlisted columns
 	onSignClick func(*core.Shared, SignClick) (core.Action, bool)
 
+	bar components.Scrollbar // the right-edge bar; holds the thumb grab while it is dragged
+
 	dragging                  bool    // the active mouse gesture is extending a selection
 	dragAnchor, dragAnchorEnd textPos // inclusive anchor cell as [start,end)
 	dragX, dragY              int     // the last pointer cell, in the frame positionAt reads
@@ -833,7 +835,8 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 			if row, ok := s.scrollbarRowAt(sh, mm.X, mm.Y); ok {
 				s.resetMouseGesture()
 				s.clickCount = 0
-				s.scrollToBarRow(row)
+				s.scrY = s.syncBar().Press(row)
+				s.clampScrollBounds()
 				return s, core.Action{}
 			}
 			if editorExtendClick(mm) {
@@ -871,6 +874,11 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 			return s, core.Action{}
 		}
 		if s.confirmExit {
+			return s, core.Action{}
+		}
+		if s.bar.Dragging() {
+			s.scrY = s.syncBar().DragTo(s.barRow(sh, m.Mouse().Y))
+			s.clampScrollBounds()
 			return s, core.Action{}
 		}
 		if s.dragging {

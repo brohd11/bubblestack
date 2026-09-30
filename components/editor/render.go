@@ -128,6 +128,7 @@ func (s *Screen) body() string {
 	}
 	bar := s.barVisible()
 	total := s.rowCount()
+	sb := s.syncBar()
 	pad := strings.Repeat(" ", s.gutter())
 	var b strings.Builder
 	for i := 0; i < rows; i++ {
@@ -145,7 +146,7 @@ func (s *Screen) body() string {
 			b.WriteString(strings.Repeat(" ", s.textW()))
 		}
 		if bar {
-			b.WriteString(s.scrollbarCell(i))
+			b.WriteString(sb.Cell(i))
 		}
 	}
 	if s.confirmExit {
@@ -156,7 +157,7 @@ func (s *Screen) body() string {
 		b.WriteString(pad + prompt)
 		if bar {
 			b.WriteString(strings.Repeat(" ", max(s.textW()-lipgloss.Width(prompt), 0)))
-			b.WriteString(s.scrollbarCell(s.h - 1))
+			b.WriteString(sb.Cell(s.h - 1))
 		}
 	}
 	return b.String()

@@ -426,13 +426,34 @@ func TestMenuCascade(t *testing.T) {
 	if cx != px+pw-1 {
 		t.Errorf("child x = %d, want %d (its left border on the parent's right)", cx, px+pw-1)
 	}
-	if cy != parentRow {
-		t.Errorf("child y = %d, want %d (the parent row it opened from)", cy, parentRow)
+	if ct := child.contentTop(); ct != parentRow || cy != parentRow-1 {
+		t.Errorf("child y = %d, first row %d; want its first row on the parent row %d", cy, ct, parentRow)
 	}
 
 	tm, _ = tm.Update(keyMsg("esc"))
 	if top := tm.(core.Router).Top(); top != core.Screen(parent) {
 		t.Errorf("esc should close one level and reveal the parent, got %T", top)
+	}
+}
+
+// TestMenuChildAnchorFlip: a submenu with no room below flips above, its last item on the
+// parent row that opened it — the mirror of the unflipped first-item alignment.
+func TestMenuChildAnchorFlip(t *testing.T) {
+	parent, sh := newMenu(t, MenuOpts{
+		Anchor: AnchorAt(10, 14),
+		Items:  []MenuItem{{Label: "one"}, {Label: "Sort"}},
+	})
+	parent.Select(1)
+	parentRow := parent.contentTop() + 1
+	sub := make([]MenuItem, 6)
+	for i := range sub {
+		sub[i] = MenuItem{Label: fmt.Sprintf("item %d", i)}
+	}
+	child := NewMenu(MenuOpts{Anchor: parent.ChildAnchor(), Items: sub})
+	child.SetSize(sh, 80, 20)
+	_, cy, _, ch := child.place()
+	if last := child.contentTop() + len(sub) - 1; last != parentRow {
+		t.Fatalf("flipped child y = %d h = %d, last row %d; want it on the parent row %d", cy, ch, last, parentRow)
 	}
 }
 

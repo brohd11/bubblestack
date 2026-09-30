@@ -293,14 +293,16 @@ func (s *MenuScreen) clampWindow() {
 }
 
 // ChildAnchor is the anchor for a submenu off the selected row: overlapping this box's
-// right border by one cell, flipping to the left or above when there is no room.
+// right border by one cell, flipping to the left or above when there is no room. The
+// child's top border sits one row up, so its first item lines up with the selected row;
+// flipped above, its last item does.
 func (s *MenuScreen) ChildAnchor() MenuAnchor {
 	x, _, w, _ := s.place()
 	rowY := s.contentTop()
 	if s.sel >= s.top {
 		rowY += s.sel - s.top
 	}
-	return MenuAnchor{X: x + w - 1, Y: rowY, FlipX: x, FlipY: rowY + 1}
+	return MenuAnchor{X: x + w - 1, Y: rowY - 1, FlipX: x, FlipY: rowY + 2}
 }
 
 // ---------- cursor ----------
