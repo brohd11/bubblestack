@@ -56,10 +56,11 @@ type FileEntry struct {
 // FilePanelOpts configures a FilePanel. Every hook is optional; nil means the panel's own
 // default, which for a directory is "walk into it" and for everything else is "do nothing".
 type FilePanelOpts struct {
-	Dir    string // starting directory; "" is the working directory
-	Root   string // navigation floor; "" leaves the panel free to walk to the filesystem root
-	Title  string // fixed border legend; "" tracks the current directory's base name
-	Border bool   // draw the shared frame (the instancer's call, never the embedder's)
+	Dir    string     // starting directory; "" is the working directory
+	Root   string     // navigation floor; "" leaves the panel free to walk to the filesystem root
+	Title  string     // fixed border legend; "" tracks the current directory's base name
+	Border bool       // draw the shared frame (the instancer's call, never the embedder's)
+	Frame  FrameStyle // another frame look (see ListPanelOpts.Frame); implies Border
 	// Selection styles the selected row (see ListPanelOpts.Selection).
 	Selection core.SelectionOpts
 	// Colors controls built-in file-type colors. The zero value leaves all rows plain.
@@ -159,6 +160,7 @@ func (p *FilePanel) build() *ListPanel {
 		OnPointer: p.pointer,
 		Help:      p.opts.Help,
 		Border:    p.opts.Border,
+		Frame:     p.opts.Frame,
 		Selection: p.opts.Selection,
 	}
 	if p.compact {
@@ -183,7 +185,7 @@ func (p *FilePanel) title() string {
 func (p *FilePanel) setTitle() {
 	t := p.title()
 	p.panel.title = t
-	if !p.opts.Border {
+	if p.panel.frame == nil {
 		p.panel.list.Title = t
 	}
 }
@@ -583,6 +585,12 @@ func (p *FilePanel) SetSize(width, height int) {
 }
 
 func (p *FilePanel) View(focused bool) string { return p.panel.View(focused) }
+
+// SetFrame swaps the frame, keeping it across density rebuilds (see ListPanel.SetFrame).
+func (p *FilePanel) SetFrame(f FrameStyle) {
+	p.opts.Frame, p.opts.Border = f, f != nil
+	p.panel.SetFrame(f)
+}
 
 func (p *FilePanel) Focus()        { p.panel.Focus() }
 func (p *FilePanel) Blur()         { p.panel.Blur() }

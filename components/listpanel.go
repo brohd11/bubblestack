@@ -25,11 +25,11 @@ type ListPanel struct {
 	onPointer func(*core.Shared, list.Item, bool) (core.Action, bool)
 	help      []key.Binding
 
-	title    string // kept for the border legend (the list's own title bar is off when bordered)
-	bordered bool   // ListPanelOpts.Border: draw the shared frame
-	width    int    // outer cell width, for the frame's inner run
-	height   int    // outer cell height, so the list can be re-sized when the filter line appears
-	itemRows int    // delegate height + spacing; drives mouse and overlay geometry
+	title    string     // kept for the frame legend (the list's own title bar is off when framed)
+	frame    FrameStyle // ListPanelOpts.Frame, or BoxFrame for Border; nil draws none
+	width    int        // outer cell width, for the frame's inner run
+	height   int        // outer cell height, so the list can be re-sized when the filter line appears
+	itemRows int        // delegate height + spacing; drives mouse and overlay geometry
 
 	// selection is ListPanelOpts.Selection; selHidden is its HideUnfocused resolved against
 	// the focus View was last drawn with. The delegate holds a pointer to it.
@@ -60,12 +60,14 @@ var _ FocusNotifier = (*ListPanel)(nil)
 
 // ListPanelOpts mirrors the PickerOpts hooks a sidebar needs: OnSelect on enter (default:
 // a self-dispatching Item), OnKey for extra row keys before WrapNav, and Help for the bar
-// while focused. Border draws the shared frame with the title as its focus-tinted legend.
+// while focused. Border draws the shared frame with the title as its focus-tinted legend;
+// Frame picks another look (see FrameStyle) and implies Border.
 type ListPanelOpts struct {
 	OnSelect func(*core.Shared, list.Item) core.Action
 	OnKey    func(*core.Shared, string, list.Item) (core.Action, bool)
 	Help     []key.Binding
 	Border   bool
+	Frame    FrameStyle
 
 	// Selection styles the selected row; the zero value is the accent left border, always
 	// shown.
@@ -107,8 +109,12 @@ func NewCompactListPanel(items []list.Item, title string, opts ListPanelOpts) *C
 }
 
 func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, items []list.Item, title string, opts ListPanelOpts, itemRows int) *ListPanel {
+	frame := opts.Frame
+	if frame == nil && opts.Border {
+		frame = BoxFrame{}
+	}
 	listTitle := title
-	if opts.Border {
+	if frame != nil {
 		listTitle = "" // the title moves to the border legend; an empty one hides the bar
 	}
 	p := &ListPanel{
@@ -118,14 +124,14 @@ func newListPanel(build func([]list.Item, string, ...key.Binding) list.Model, it
 		onPointer: opts.OnPointer,
 		help:      opts.Help,
 		title:     title,
-		bordered:  opts.Border,
+		frame:     frame,
 		itemRows:  itemRows,
 		selection: opts.Selection,
 	}
 	p.applyDelegate()
-	// A bordered panel has no title bar, but bubbles would still draw an empty header row.
+	// A framed panel has no title bar, but bubbles would still draw an empty header row.
 	// Drawing the filter ourselves means that row appears only while a filter is live.
-	if opts.Border {
+	if frame != nil {
 		p.ownFilter = true
 		p.list.SetShowFilter(false)
 	}
@@ -371,10 +377,25 @@ const filterIndent = 2
 
 // listWidth is the cell width the list itself renders at: the panel's, net of the frame.
 func (p *ListPanel) listWidth() int {
-	if p.bordered {
+	if p.frame != nil {
 		return p.innerWidth()
 	}
 	return p.width
+}
+
+// insets is the frame's cost on each side; zero without one.
+func (p *ListPanel) insets() Insets {
+	if p.frame == nil {
+		return Insets{}
+	}
+	return p.frame.Insets()
+}
+
+// SetFrame swaps the frame (nil for none) and re-fits the list to what it leaves. A host
+// that changes a pane's surroundings, like which sibling sits above it, calls it on rebuild.
+func (p *ListPanel) SetFrame(f FrameStyle) {
+	p.frame = f
+	p.sizeList()
 }
 
 // filterRows is filterLine's height: the row the list body loses while a filter is live.
@@ -395,14 +416,10 @@ func (p *ListPanel) RowY(idx int) (int, bool) {
 	return row + p.chromeRows(), true
 }
 
-// chromeRows is what sits above the list in the panel (frame edge, filter line). Click
+// chromeRows is what sits above the list in the panel (frame rows, filter line). Click
 // math and RowY both use it.
 func (p *ListPanel) chromeRows() int {
-	rows := p.filterRows()
-	if p.bordered {
-		rows++
-	}
-	return rows
+	return p.filterRows() + p.insets().Top
 }
 
 // View renders the list under its filter line, framed and focus-tinted when Border is set.
@@ -412,14 +429,14 @@ func (p *ListPanel) View(focused bool) string {
 	if line := p.filterLine(); line != "" {
 		body = line + "\n" + body
 	}
-	if p.bordered {
-		body = Frame(p.title, body, p.innerWidth(), focused)
+	if p.frame != nil {
+		body = p.frame.Render(p.title, body, p.innerWidth(), focused)
 	}
 	// Clip to the allocation: the rendered footprint is also the host's hit-test geometry.
 	return lipgloss.NewStyle().MaxHeight(p.height).Render(body)
 }
 
-// SetSize takes outer dims; the frame (when bordered) and the filter line come off before
+// SetSize takes outer dims; the frame's insets and the filter line come off before
 // the list sees them.
 func (p *ListPanel) SetSize(width, height int) {
 	p.width, p.height = width, height
@@ -429,20 +446,18 @@ func (p *ListPanel) SetSize(width, height int) {
 // sizeList sizes the list to the stored dims minus the panel's chrome. It runs again when
 // the filter line comes or goes, or the list's PerPage would clip the last row.
 func (p *ListPanel) sizeList() {
-	w, h := p.listWidth(), p.height
-	if p.bordered {
-		h -= 2 // the frame's top and bottom edges
-	}
+	in := p.insets()
+	w, h := p.listWidth(), p.height-in.Top-in.Bottom
 	if h -= p.filterRows(); h < 1 {
 		h = 1
 	}
 	FitList(&p.list, w, h)
 }
 
-// innerWidth is the run between the frame's corners: the outer width minus the two
-// side borders.
+// innerWidth is the run between the frame's sides: the outer width minus the side insets.
 func (p *ListPanel) innerWidth() int {
-	if w := p.width - 2; w > 1 {
+	in := p.insets()
+	if w := p.width - in.Left - in.Right; w > 1 {
 		return w
 	}
 	return 1

@@ -31,6 +31,7 @@ type TreePanelOpts struct {
 	OnKey  func(*core.Shared, string, TreeNode) (core.Action, bool)
 	Help   []key.Binding
 	Border bool
+	Frame  FrameStyle // another frame look (see ListPanelOpts.Frame); implies Border
 	// Selection styles the selected row (see ListPanelOpts.Selection).
 	Selection core.SelectionOpts
 }
@@ -63,6 +64,7 @@ func NewTreePanel(nodes []TreeNode, title string, opts TreePanelOpts) *TreePanel
 	}
 	p.panel = NewCompactListPanel(nil, title, ListPanelOpts{
 		Border:    opts.Border,
+		Frame:     opts.Frame,
 		Selection: opts.Selection,
 		Help: append([]key.Binding{
 			core.Hint("fold", core.Keys.Left, core.Keys.Right),
@@ -290,6 +292,7 @@ func (p *TreePanel) UpdatePanel(sh *core.Shared, msg tea.Msg) (core.Action, bool
 
 func (p *TreePanel) SetSize(width, height int)    { p.panel.SetSize(width, height) }
 func (p *TreePanel) View(focused bool) string     { return p.panel.View(focused) }
+func (p *TreePanel) SetFrame(f FrameStyle)        { p.panel.SetFrame(f) }
 func (p *TreePanel) Focus()                       { p.panel.Focus() }
 func (p *TreePanel) Blur()                        { p.panel.Blur() }
 func (p *TreePanel) Focused() bool                { return p.panel.Focused() }

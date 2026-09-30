@@ -13,7 +13,7 @@ import (
 // TestFrameTopLegend: the hand-drawn top edge is exactly innerWidth wide between the
 // corners, with the legend interrupting the rule after the first dash.
 func TestFrameTopLegend(t *testing.T) {
-	top := frameTop("files", 20, false)
+	top := edgesTop("files", 20, false)
 	if !strings.HasPrefix(ansi.Strip(top), "┌─ files ") {
 		t.Fatalf("legend should interrupt the rule, got %q", top)
 	}
@@ -32,7 +32,7 @@ func TestFrameTopLegend(t *testing.T) {
 // TestFrameTopNoLegend: without a legend the edge is a plain rule of the same width
 // (the shape a framed element with no title draws).
 func TestFrameTopNoLegend(t *testing.T) {
-	top := frameTop("", 6, false)
+	top := edgesTop("", 6, false)
 	if ansi.Strip(top) != "┌"+strings.Repeat("─", 6)+"┐" {
 		t.Fatalf("empty legend should give a plain rule, got %q", top)
 	}
@@ -41,7 +41,7 @@ func TestFrameTopNoLegend(t *testing.T) {
 // TestFrameTopOverlongLegend: a legend wider than the run pushes the corner out
 // rather than being truncated — the fill clamps at zero.
 func TestFrameTopOverlongLegend(t *testing.T) {
-	top := frameTop("a very long pane title", 4, false)
+	top := edgesTop("a very long pane title", 4, false)
 	if !strings.HasPrefix(ansi.Strip(top), "┌─ a very long pane title ┐") {
 		t.Fatalf("overlong legend should not be truncated, got %q", top)
 	}
@@ -56,7 +56,7 @@ func TestFrameColorTracksFocus(t *testing.T) {
 	if frameColor(false) != core.BorderColor {
 		t.Error("an unfocused frame should wear the muted border color")
 	}
-	if frameTop("files", 20, true) == frameTop("files", 20, false) {
+	if edgesTop("files", 20, true) == edgesTop("files", 20, false) {
 		t.Fatal("focused and unfocused frames must render differently")
 	}
 }
@@ -74,4 +74,9 @@ func TestFrameBoxSizing(t *testing.T) {
 			t.Fatalf("line %d width = %d, want 14 (%q)", i, w, l)
 		}
 	}
+}
+
+// edgesTop is frameTop as the FocusEdges box draws it.
+func edgesTop(legend string, innerWidth int, focused bool) string {
+	return frameTop(legend, innerWidth, frameColor(focused), FocusEdges.legendStyle(focused))
 }
