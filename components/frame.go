@@ -121,6 +121,37 @@ const (
 	TopTee                 // ├──┤: continues the sides of a box above
 )
 
+// SideFrame is sides without a legend: an optional top edge (TopBox is a plain ┌──┐ a
+// host may redraw, joining it to its neighbors) and an optional └──┘ bottom. It never
+// reacts to focus — the pane shows that in its content, or its host elsewhere.
+type SideFrame struct {
+	Top    TopEdge
+	Bottom bool
+}
+
+func (f SideFrame) Insets() Insets {
+	in := Insets{Right: 1, Left: 1}
+	if f.Top != TopNone {
+		in.Top = 1
+	}
+	if f.Bottom {
+		in.Bottom = 1
+	}
+	return in
+}
+
+func (f SideFrame) Render(_, body string, innerWidth int, _ bool) string {
+	edge := lipgloss.NewStyle().Foreground(core.BorderColor)
+	sides := frameBox(innerWidth, core.BorderColor).BorderBottom(f.Bottom).Render(body)
+	switch f.Top {
+	case TopBox:
+		return edge.Render("┌"+strings.Repeat("─", innerWidth)+"┐") + "\n" + sides
+	case TopTee:
+		return edge.Render("├"+strings.Repeat("─", innerWidth)+"┤") + "\n" + sides
+	}
+	return sides
+}
+
 // TitledFrame gives the legend its own row, ruled off from the body:
 //
 //	│ legend │

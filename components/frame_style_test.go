@@ -128,3 +128,68 @@ func TestFrameFocusModes(t *testing.T) {
 		}
 	}
 }
+
+func TestSideFrameRender(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		frame SideFrame
+		want  string
+	}{
+		{"sides only", SideFrame{}, "│ab    │"},
+		{"box top, closed", SideFrame{Top: TopBox, Bottom: true}, "┌──────┐\n│ab    │\n└──────┘"},
+		{"tee top", SideFrame{Top: TopTee}, "├──────┤\n│ab    │"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			on := tc.frame.Render("ignored", "ab", 6, true)
+			if got := ansi.Strip(on); got != tc.want {
+				t.Fatalf("got\n%s\nwant\n%s", got, tc.want)
+			}
+			if on != tc.frame.Render("ignored", "ab", 6, false) {
+				t.Fatal("a SideFrame must not react to focus")
+			}
+		})
+	}
+}
+
+// TestScrollContainerFrames: unset, the pane draws the padded box as it always has; with a
+// frame it fills its allocation from the frame's insets and clicks still find links.
+func TestScrollContainerFrames(t *testing.T) {
+	plain := NewScrollContainer("preview")
+	plain.SetSize(30, 6)
+	plain.SetLines([]string{"one", "two"})
+	if got, want := plain.View(true), paddedFrame(plain.title+" · "+core.Legend(core.Hint("scroll", core.Keys.Up, core.Keys.Down)), 26, true, plain.vp.View()); got != want {
+		t.Fatalf("the default frame changed:\n%s\nwant\n%s", got, want)
+	}
+
+	for _, f := range []FrameStyle{SideFrame{Top: TopBox, Bottom: true}, TitledFrame{Bottom: true}, SideFrame{}} {
+		p := NewScrollContainer("preview")
+		p.SetFrame(f)
+		p.SetSize(40, 10)
+		in := f.Insets()
+		if got, want := p.VisibleRows(), 10-in.Top-in.Bottom; got != want {
+			t.Fatalf("%T: %d visible rows, want %d", f, got, want)
+		}
+		out := RenderMarkdown("see the [manual](x.md) now\n", p.TextWidth())
+		links := ScanLinks(out)
+		p.SetLines(strings.Split(out, "\n"))
+		p.SetLinks(links)
+		v := p.View(false)
+		if w, h := lipgloss.Width(v), lipgloss.Height(v); w != 40 || h != 10 {
+			t.Fatalf("%T: view is %dx%d, want 40x10", f, w, h)
+		}
+		got := ""
+		p.OnLink = func(_ *core.Shared, l Link) core.Action { got = l.Target; return core.Action{} }
+		p.Focus()
+		p.UpdatePanel(core.NewShared(nil), tea.MouseClickMsg{
+			X: links[0].Col + in.Left + 1, Y: links[0].Row + in.Top, Button: tea.MouseLeft,
+		})
+		if got != "x.md" {
+			t.Fatalf("%T: a click on the link fired %q", f, got)
+		}
+		// The rendered row holds the link text where the click was measured.
+		row := ansi.Strip(strings.Split(v, "\n")[links[0].Row+in.Top])
+		if col := links[0].Col + in.Left + 1; !strings.HasPrefix(string([]rune(row)[col:]), "manual") {
+			t.Fatalf("%T: link not at column %d of %q", f, col, row)
+		}
+	}
+}

@@ -21,8 +21,9 @@ type ScrollContainer struct {
 	links      LinkMap
 	title      string
 	focused    bool
-	pinned     bool // content has been set once (the first set opens at the top)
-	noKeyHints bool // the focused border carries the title alone (SetKeyHints)
+	pinned     bool       // content has been set once (the first set opens at the top)
+	noKeyHints bool       // the focused border carries the title alone (SetKeyHints)
+	frame      FrameStyle // SetFrame; nil is the padded box (paddedFrame)
 	width      int
 	height     int
 }
@@ -40,6 +41,29 @@ func NewScrollContainer(title string) *ScrollContainer {
 // SetKeyHints turns the focused border's key legend on (the default) or off, e.g. to
 // match a quiet ListPanel legend beside it. The keys stay in the help bar either way.
 func (p *ScrollContainer) SetKeyHints(show bool) { p.noKeyHints = !show }
+
+// SetFrame swaps the frame (see FrameStyle) and re-fits the viewport to what it leaves;
+// nil restores the default box. The one-column padding inside the sides stays either way.
+func (p *ScrollContainer) SetFrame(f FrameStyle) {
+	p.frame = f
+	p.SetSize(p.width, p.height)
+}
+
+// insets is the frame's cost on each side: the default box's one cell when unset.
+func (p *ScrollContainer) insets() Insets {
+	if p.frame == nil {
+		return BoxFrame{}.Insets()
+	}
+	return p.frame.Insets()
+}
+
+// ContentRect is where the content sits inside the pane, pane-relative: past the frame's
+// top and left insets and the padding column. A host hit-testing rows uses it rather than
+// assuming the default box.
+func (p *ScrollContainer) ContentRect() (x, y, w, h int) {
+	in := p.insets()
+	return in.Left + 1, in.Top, p.innerWidth(), p.contentHeight()
+}
 
 // SetTitle replaces the top-border legend. A pane whose content changes shape — a
 // count, a warning — says so on its own edge rather than spending a content row on it.
@@ -78,7 +102,8 @@ func (p *ScrollContainer) clickLink(sh *core.Shared, x, y int) (core.Action, boo
 	if len(p.links) == 0 || p.OnLink == nil {
 		return core.Action{}, false
 	}
-	l, ok := p.links.At(y-1+p.vp.YOffset(), x-2)
+	in := p.insets()
+	l, ok := p.links.At(y-in.Top+p.vp.YOffset(), x-in.Left-1) // 1: the padding column
 	if !ok {
 		return core.Action{}, false
 	}
@@ -170,13 +195,19 @@ func (p *ScrollContainer) MaxScrollOffset() int { return max(p.LineCount()-p.vp.
 // in it has to know.
 func (p *ScrollContainer) VisibleRows() int { return p.vp.Height() }
 
-// innerWidth is the text width inside the box (cell width minus side borders and
+// innerWidth is the text width inside the frame (cell width minus the side insets and
 // the 1-col padding on each side).
-func (p *ScrollContainer) innerWidth() int { return max(p.width-2-2, 10) }
+func (p *ScrollContainer) innerWidth() int {
+	in := p.insets()
+	return max(p.width-in.Left-in.Right-2, 10)
+}
 
-// contentHeight is the viewport height inside the box (cell height minus the
-// hand-drawn top border row and the bottom border row).
-func (p *ScrollContainer) contentHeight() int { return max(p.height-2, 1) }
+// contentHeight is the viewport height inside the frame (cell height minus the top and
+// bottom insets).
+func (p *ScrollContainer) contentHeight() int {
+	in := p.insets()
+	return max(p.height-in.Top-in.Bottom, 1)
+}
 
 // View draws the content in a bordered box with the title (and, focused, a scroll hint)
 // in its top edge, like LogPane.
@@ -188,5 +219,13 @@ func (p *ScrollContainer) View(focused bool) string {
 			core.Hint("scroll", core.Keys.Up, core.Keys.Down),
 		)
 	}
-	return paddedFrame(label, p.innerWidth(), focused, p.vp.View())
+	if p.frame == nil {
+		return paddedFrame(label, p.innerWidth(), focused, p.vp.View())
+	}
+	// The frame pads the right side out to its run; the left column is added here.
+	lines := strings.Split(p.vp.View(), "\n")
+	for i, line := range lines {
+		lines[i] = " " + line
+	}
+	return p.frame.Render(label, strings.Join(lines, "\n"), p.innerWidth()+2, focused)
 }
