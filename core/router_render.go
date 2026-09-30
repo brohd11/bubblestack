@@ -60,8 +60,13 @@ func (r Router) maskOf(s Screen) ChromeMask {
 	return ChromeMask{}
 }
 
-// currentMask is the mask of the active (top) screen.
-func (r Router) currentMask() ChromeMask { return r.maskOf(r.Top()) }
+// currentMask is the mask of the frame on screen: the overlay base's while overlays are
+// up, since View frames that screen and only composites the overlays over it. Geometry
+// (BodyY, overlay sizing, chrome hit-tests) must follow what is drawn, not the top.
+func (r Router) currentMask() ChromeMask {
+	base, _ := r.overlayBase()
+	return r.maskOf(base)
+}
 
 // outputVisible reports whether an output pane currently occupies layout space
 // (present and shown). It does not account for the per-screen mask.
@@ -240,11 +245,13 @@ func (r Router) resize() {
 		}
 	}
 	// While overlays are up, the base screen below them is still drawn as the
-	// background, so it must be kept sized too — otherwise it goes stale on resize.
-	if base, bi := r.overlayBase(); bi != len(r.stack)-1 {
+	// background, so it must be kept sized too — otherwise it goes stale on resize. The
+	// overlay gets the base's body height too: it is composited into that frame.
+	base, bi := r.overlayBase()
+	if bi != len(r.stack)-1 {
 		base.SetSize(r.sh, r.sh.width, r.bodyHeightFor(base))
 	}
-	r.Top().SetSize(r.sh, r.sh.width, r.bodyHeightFor(r.Top()))
+	r.Top().SetSize(r.sh, r.sh.width, r.bodyHeightFor(base))
 }
 
 // frame composes the chrome around screen s's body: the full layout, and the background

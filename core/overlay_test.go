@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -140,5 +142,44 @@ func TestOverlayPositioned(t *testing.T) {
 	}
 	if got := ansi.Strip(lines[23]); !strings.HasSuffix(got, "AB") {
 		t.Errorf("last row = %q, want the box clamped to the bottom-right corner", got)
+	}
+}
+
+// sizeRecorder is an overlay that records the body height the router sizes it to.
+type sizeRecorder struct {
+	stubScreen
+	bodyH *int
+}
+
+func (s sizeRecorder) IsOverlay() bool                     { return true }
+func (s sizeRecorder) SetSize(_ *Shared, _ int, bodyH int) { *s.bodyH = bodyH }
+
+// crumbedMaskScreen names itself in the breadcrumb, so the bar has rows to hide.
+type crumbedMaskScreen struct{ chromeMaskScreen }
+
+func (crumbedMaskScreen) CrumbLabel(bool) string { return "home" }
+
+// TestOverlayGeometryFollowsTheFrame: the frame on screen is the overlay base's, so BodyY
+// and the overlay's body height come from the base's mask, not the overlay's own. A base
+// that hides the breadcrumb must keep BodyY 0 with an unmasked overlay on top — else an
+// overlay clamping to BodyY can't reach the rows the base draws there.
+func TestOverlayGeometryFollowsTheFrame(t *testing.T) {
+	sh := NewShared(nil)
+	sh.Chrome = &Chrome{Breadcrumb: NewBreadcrumbPane()}
+	base := crumbedMaskScreen{chromeMaskScreen{mask: ChromeMask{Breadcrumb: true}}}
+	tm := sized(NewRouter(sh, []TabEntry{{Title: "One", New: func(*Shared) Screen { return base }}}))
+	baseY := sh.BodyY()
+	if unmasked := vheight(tm.(Router).topChrome(ChromeMask{})); unmasked == baseY {
+		t.Fatal("fixture: the breadcrumb must take rows when shown, or the test proves nothing")
+	}
+
+	var overlayH int
+	tm, _ = tm.Update(pushMsg{s: sizeRecorder{bodyH: &overlayH}})
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if got := sh.BodyY(); got != baseY {
+		t.Fatalf("BodyY with an overlay up = %d, want the base frame's %d", got, baseY)
+	}
+	if want := tm.(Router).bodyHeightFor(base); overlayH != want {
+		t.Fatalf("overlay body height = %d, want the base frame's %d", overlayH, want)
 	}
 }
