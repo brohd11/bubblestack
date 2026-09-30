@@ -49,6 +49,8 @@ type MenuScreen struct {
 	// Submenu row opens when the pointer enters it — not on every twitch over it, so esc
 	// closes a submenu until the pointer leaves the row and comes back.
 	hoverRow int
+	// onOutside is MenuOpts.OnPointerOutside; a child reads its root's.
+	onOutside func(*core.Shared, int, int) (core.Action, bool)
 
 	sel int // index into items; -1 when nothing is selectable
 	top int // first item of the visible window
@@ -151,6 +153,11 @@ type MenuOpts struct {
 	Style    MenuStyle // selection and border look; submenus inherit it
 	OnSelect func(sh *core.Shared, it MenuItem, idx int) core.Action
 	OnCancel func(sh *core.Shared) core.Action
+	// OnPointerOutside is offered pointer motion and left clicks that land outside every
+	// box of the cascade (this menu and any submenus it opened), in absolute cells. Handled,
+	// the whole cascade closes and the action runs after — a menu bar switching to the
+	// label under the pointer. Declined, motion does nothing and a click dismisses as usual.
+	OnPointerOutside func(sh *core.Shared, x, y int) (core.Action, bool)
 }
 
 // NewMenu builds a dropdown from opts, normalizes the anchor's flip edges, and puts the
@@ -178,6 +185,8 @@ func NewMenu(opts MenuOpts) *MenuScreen {
 		hoverRow: -1,
 		OnSelect: opts.OnSelect,
 		OnCancel: opts.OnCancel,
+
+		onOutside: opts.OnPointerOutside,
 	}
 	s.sel = s.firstSelectable()
 	return s
@@ -386,7 +395,7 @@ func (s *MenuScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.Act
 	// Presses and wheel notches act on a menu; motion only moves the highlight (and opens a
 	// submenu); release is ignored.
 	case tea.MouseMotionMsg:
-		return s, s.hover(m.Mouse())
+		return s, s.hover(sh, m.Mouse())
 	case tea.MouseClickMsg:
 		return s, s.mouse(sh, m.Mouse())
 	case tea.MouseWheelMsg:
@@ -416,6 +425,9 @@ func (s *MenuScreen) mouse(sh *core.Shared, m tea.Mouse) core.Action {
 	// its own chrome), so the box hit-tests in absolute cells against its own placement.
 	x, y, w, h := s.place()
 	if m.X < x || m.X >= x+w || m.Y < y || m.Y >= y+h {
+		if act, ok := s.outside(sh, m.X, m.Y); ok {
+			return act
+		}
 		return s.cancel(sh)
 	}
 	_, _, _, visible, _ := s.dims()
@@ -452,7 +464,7 @@ func (s *MenuScreen) rowAt(x, y int) (idx int, inBox bool) {
 // a Submenu row. Over a parent's box — anywhere but the row that
 // opened this child — the child closes, and the parent takes the next motion. Motion
 // elsewhere does nothing: only a click or esc dismisses.
-func (s *MenuScreen) hover(m tea.Mouse) core.Action {
+func (s *MenuScreen) hover(sh *core.Shared, m tea.Mouse) core.Action {
 	idx, in := s.rowAt(m.X, m.Y)
 	if in {
 		entered := idx != s.hoverRow
@@ -477,7 +489,32 @@ func (s *MenuScreen) hover(m tea.Mouse) core.Action {
 		}
 		return core.Pop()
 	}
+	if act, ok := s.outside(sh, m.X, m.Y); ok {
+		return act
+	}
 	return core.Action{}
+}
+
+// outside offers (x, y) to the root's OnPointerOutside when it lies outside every box of
+// the cascade, closing the whole cascade first when the host takes it.
+func (s *MenuScreen) outside(sh *core.Shared, x, y int) (core.Action, bool) {
+	root, depth := s, 0
+	for ; ; root, depth = root.parent, depth+1 {
+		if _, in := root.rowAt(x, y); in {
+			return core.Action{}, false
+		}
+		if root.parent == nil {
+			break
+		}
+	}
+	if root.onOutside == nil {
+		return core.Action{}, false
+	}
+	act, ok := root.onOutside(sh, x, y)
+	if !ok {
+		return core.Action{}, false
+	}
+	return core.Seq(core.Pop(depth+1), act), true
 }
 
 // openSubmenu pushes the selected Submenu row's items beside it, in this menu's style.

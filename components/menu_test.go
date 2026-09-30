@@ -720,3 +720,50 @@ func TestMenuHover(t *testing.T) {
 		t.Fatal("with no menu up the router should be back to cell motion")
 	}
 }
+
+// TestMenuPointerOutside: positions outside every box of the cascade go to the root's
+// OnPointerOutside. Taken, the whole cascade closes before the host's action runs (a menu
+// bar switching menus); declined, motion does nothing and a click dismisses.
+func TestMenuPointerOutside(t *testing.T) {
+	var take bool
+	other := NewMenu(MenuOpts{Anchor: AnchorAt(40, 3), Items: []MenuItem{{Label: "other"}}})
+	root := NewMenu(MenuOpts{
+		Anchor: AnchorAt(10, 3),
+		Items:  []MenuItem{{Label: "Sort", Submenu: func() []MenuItem { return []MenuItem{{Label: "asc"}} }}},
+		OnPointerOutside: func(_ *core.Shared, x, y int) (core.Action, bool) {
+			return core.Push(other), take && y == 0
+		},
+	})
+	sh := core.NewShared(nil)
+	r := core.NewRouter(sh, []core.TabEntry{{Title: "T", New: func(*core.Shared) core.Screen { return stubRootScreen{} }}})
+	var tm tea.Model = r
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	tm, _ = tm.Update(core.Push(root))
+	tm, _ = tm.Update(keyMsg("right")) // open the submenu: the hook must reach through it
+	child, _ := tm.(core.Router).Top().(*MenuScreen)
+	if child == root || child == nil {
+		t.Fatal("setup: the submenu should be open")
+	}
+
+	tm, _ = tm.Update(motion(60, 0)) // declined
+	if tm.(core.Router).Top() != core.Screen(child) {
+		t.Fatal("declined motion outside must leave the cascade alone")
+	}
+	take = true
+	tm, _ = tm.Update(motion(60, 0))
+	if top := tm.(core.Router).Top(); top != core.Screen(other) {
+		t.Fatalf("taken motion should close the cascade and run the host action, top %T", top)
+	}
+	tm, _ = tm.Update(core.Pop())
+	if _, isMenu := tm.(core.Router).Top().(*MenuScreen); isMenu {
+		t.Fatal("the old cascade must be gone, not buried under the new menu")
+	}
+
+	// Declined clicks still dismiss.
+	take = false
+	tm, _ = tm.Update(core.Push(root))
+	tm, _ = tm.Update(press(60, 0, tea.MouseLeft))
+	if _, isMenu := tm.(core.Router).Top().(*MenuScreen); isMenu {
+		t.Fatal("a declined click outside should dismiss the menu")
+	}
+}
