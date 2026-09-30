@@ -42,10 +42,10 @@ var themeBreak = regexp.MustCompile(`^(-{3,}|\*{3,}|_{3,})$`)
 var subheading = regexp.MustCompile(`^#{3,6} `)
 
 const (
-	bulletMark = "• "
+	bulletMark = MarkdownBullet + " "
 	indent     = "  "
 	// quoteBar prefixes every row of a blockquote (see quoteBlock).
-	quoteBar = "│ "
+	quoteBar = MarkdownQuoteBar + " "
 	// wrapBreaks are extra wrap points beyond whitespace, so a long path or URL folds
 	// at a separator rather than mid-name.
 	wrapBreaks = "/_"
@@ -537,6 +537,32 @@ func plain(s string) string {
 		return p.prefix + p.text + p.suffix
 	})
 }
+
+// MarkdownStyles is the previewer's palette, resolved from the current theme. Other
+// markdown views (gote's live preview) read it so the two stay alike; it is a snapshot,
+// so take a fresh one after a theme or background change.
+type MarkdownStyles struct {
+	Heading, H1, Subheading lipgloss.Style
+	Bold, Italic, Link      lipgloss.Style
+	Code, CodeSpan          lipgloss.Style // a fenced block's text; an inline span's chip
+	Rule, QuoteText         lipgloss.Style // rules, bars and table lines; a quote's prose
+}
+
+// CurrentMarkdownStyles is RenderMarkdown's palette as it stands now.
+func CurrentMarkdownStyles() MarkdownStyles {
+	return MarkdownStyles{
+		Heading: headingStyle(), H1: h1Style(), Subheading: subheadingStyle(),
+		Bold: boldStyle(), Italic: italicStyle(), Link: linkStyle(),
+		Code: codeStyle(), CodeSpan: codeSpanStyle(),
+		Rule: ruleStyle(), QuoteText: quoteTextStyle(),
+	}
+}
+
+// The previewer's glyphs, for views that draw the same constructs.
+const (
+	MarkdownBullet   = "•"
+	MarkdownQuoteBar = "│"
+)
 
 // h1Style is the top-level heading: the accent heading underlined, so a page's "#"
 // still outranks the "##" sections under it in a terminal with no type sizes.

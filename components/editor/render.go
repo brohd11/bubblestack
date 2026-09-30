@@ -624,6 +624,9 @@ func (s *Screen) hlSpans(row int) []Span {
 	} else if s.hlFactory == nil && s.hl != nil {
 		spans = s.hl.HighlightLine(row)
 	}
+	if src := s.liveSourceSpans(row); src != nil && spansMatchLine(src, s.lines[row]) {
+		spans = src
+	}
 	spans = s.applyHighlightOverlay(row, spans)
 	if !spansMatchLine(spans, s.lines[row]) {
 		return nil

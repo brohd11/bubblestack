@@ -15,7 +15,7 @@ import (
 
 func (s *Screen) resetHighlightRows() {
 	s.hlRows = nil
-	s.hlPreview, s.hlPreviewGlyphs = nil, nil
+	s.hlPreview, s.hlPreviewGlyphs, s.hlPreviewSource = nil, nil, nil
 	s.hlPrevSeq = -1
 	s.hlPrevFrom, s.hlPrevTo = -1, -1
 	s.hlDirty, s.hlAnchor, s.hlAnchorSnapshot, s.hlFar = 0, 0, -1, false
@@ -31,7 +31,7 @@ func (s *Screen) acceptHighlight(h Highlighter, seq int) {
 	for i := range s.hlRows {
 		s.hlRows[i] = i
 	}
-	s.hlPreview, s.hlPreviewGlyphs = nil, nil
+	s.hlPreview, s.hlPreviewGlyphs, s.hlPreviewSource = nil, nil, nil
 	s.hlPrevSeq = -1
 	s.hlPrevFrom, s.hlPrevTo = -1, -1
 	s.hlDirty, s.hlAnchor, s.hlAnchorSnapshot, s.hlFar = -1, -1, -1, false
@@ -82,7 +82,7 @@ func (s *Screen) rebaseHighlightRows(start, end textPos, inserted string) {
 		s.hlAnchorSnapshot = snapshotAnchor
 	}
 	s.hlFar = s.hlFar || far
-	s.hlPreview, s.hlPreviewGlyphs = nil, nil
+	s.hlPreview, s.hlPreviewGlyphs, s.hlPreviewSource = nil, nil, nil
 	s.hlPrevSeq = -1
 	s.hlPrevFrom, s.hlPrevTo = -1, -1
 
@@ -141,7 +141,7 @@ func (s *Screen) refreshHighlightPreview() {
 	from := max(s.hlDirty, visibleFrom)
 	anchor := min(max(s.hlAnchor, 0), s.hlDirty)
 	s.hlPreview = make(map[int][]Span, max(visibleTo-from+1, 0))
-	s.hlPreviewGlyphs = nil
+	s.hlPreviewGlyphs, s.hlPreviewSource = nil, nil
 	s.hlPrevSeq, s.hlPrevFrom, s.hlPrevTo = s.editSeq, from, visibleTo
 	if s.hlFar || visibleTo-anchor+1 > editorHighlightPreviewLines {
 		return // the covered rows deliberately render plain until the exact result
@@ -169,6 +169,10 @@ func (s *Screen) refreshHighlightPreview() {
 	if glyphs {
 		s.hlPreviewGlyphs = make(map[int][]Glyph)
 	}
+	source := glyphs && s.live // SourceSpans can be costly (a language highlighter)
+	if source {
+		s.hlPreviewSource = make(map[int][]Span)
+	}
 	for row := from; row <= visibleTo; row++ {
 		spans := preview.HighlightLine(row - anchor)
 		if spansMatchLine(spans, s.lines[row]) {
@@ -176,6 +180,9 @@ func (s *Screen) refreshHighlightPreview() {
 		}
 		if glyphs {
 			s.hlPreviewGlyphs[row] = lr.ActiveGlyphs(row - anchor)
+		}
+		if source {
+			s.hlPreviewSource[row] = lr.SourceSpans(row - anchor)
 		}
 	}
 }

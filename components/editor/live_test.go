@@ -36,6 +36,16 @@ func (h *headingHL) RenderLine(row int, ctx LiveContext) []Span {
 	return []Span{{Text: strings.TrimPrefix(h.lines[row], "# "), Style: &testHighlightStyle}}
 }
 
+var testSourceStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+
+// SourceSpans colors "code" rows distinctly: the live-only source highlighting.
+func (h *headingHL) SourceSpans(row int) []Span {
+	if row < 0 || row >= len(h.lines) || !strings.HasPrefix(h.lines[row], "code") {
+		return nil
+	}
+	return []Span{{Text: h.lines[row], Style: &testSourceStyle}}
+}
+
 func (h *headingHL) ActiveGlyphs(row int) []Glyph {
 	if row < 0 || row >= len(h.lines) || !strings.HasPrefix(h.lines[row], "- ") {
 		return nil
@@ -227,5 +237,36 @@ func TestLiveRenderGlyphsSurviveTypingOnTheRow(t *testing.T) {
 	}
 	if got := plainRow(s, 0); !strings.HasPrefix(got, "• items") {
 		t.Fatalf("typed row = %q, want the bullet kept from the preview parse", got)
+	}
+}
+
+func TestLiveRenderSourceSpansOnlyWhileLive(t *testing.T) {
+	s, sh := liveEditor(t, "code one\ncode two\nx", Opts{})
+	s.curY = 0
+	// The caret row (its first cell is the caret), and a source row with no rendered form.
+	for row, want := range []string{testSourceStyle.Render("ode one"), testSourceStyle.Render("code two")} {
+		if got := s.renderRow(row); !strings.Contains(got, want) {
+			t.Fatalf("live row %d = %q, want the SourceSpans style", row, got)
+		}
+	}
+	s.SetLiveRender(false)
+	if got := s.renderRow(1); strings.Contains(got, testSourceStyle.Render("code two")) {
+		t.Fatalf("live off, row 1 = %q, want HighlightLine's spans", got)
+	}
+	s.SetLiveRender(true)
+
+	// A typed row has no snapshot row until the reparse; the preview parse supplies them.
+	var ed *Screen
+	ed, sh = newEditor(Opts{Path: "x.md", ResolveLanguage: func(string) *LanguageConfig {
+		return &LanguageConfig{NewHighlighter: func() Highlighter { return &headingHL{} }}
+	}})
+	ed.setContent("code\nx")
+	ed.acceptHighlight(ed.hlFactory(), ed.editSeq)
+	ed.SetLiveRender(true)
+	ed.curY, ed.curX = 0, 4
+	ed.Update(sh, keyMsg("s"))
+	ed.curY = 1 // off the row, so no caret cell splits it
+	if got := ed.renderRow(0); !strings.Contains(got, testSourceStyle.Render("codes")) {
+		t.Fatalf("typed row = %q, want SourceSpans from the preview parse", got)
 	}
 }

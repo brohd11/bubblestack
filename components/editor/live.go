@@ -30,6 +30,10 @@ type LineRenderer interface {
 	// bullet for its marker). They never change widths, so the caret and selection are
 	// unaffected; the editor drops any the caret or selection touches.
 	ActiveGlyphs(row int) []Glyph
+	// SourceSpans are richer spans for a row shown as its source while live rendering is
+	// on (a fenced block's language colors), so plain editing stays light. nil keeps
+	// HighlightLine's; like those, they must concatenate to the row's text.
+	SourceSpans(row int) []Span
 }
 
 // LiveContext is what the editor knows about the row RenderLine is drawing.
@@ -159,6 +163,22 @@ func (s *Screen) liveCol(row, cell, width int) int {
 		}
 	}
 	return min(max(lr.SourceCol(snap, i), 0), len(s.lines[row]))
+}
+
+// liveSourceSpans are the renderer's SourceSpans for a row showing its source, from the
+// preview parse on an edited row (so a code line being typed keeps its colors), or nil.
+func (s *Screen) liveSourceSpans(row int) []Span {
+	lr, ok := s.liveRenderer()
+	if !ok {
+		return nil
+	}
+	if s.previewCovers(row) {
+		return s.hlPreviewSource[row]
+	}
+	if snap, ok := s.snapshotRow(row); ok {
+		return lr.SourceSpans(snap)
+	}
+	return nil
 }
 
 // activeGlyphs are row's glyphs while it shows its source, minus any the caret or the

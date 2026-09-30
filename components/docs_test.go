@@ -959,3 +959,22 @@ func TestRenderMarkdownWrapsStyledSpansToWidth(t *testing.T) {
 		t.Fatal("no row carried a style: the test cannot see the bug it exists for")
 	}
 }
+
+// TestCurrentMarkdownStyles: the exported palette is the previewer's own, not a copy that
+// could drift.
+func TestCurrentMarkdownStyles(t *testing.T) {
+	st := CurrentMarkdownStyles()
+	for _, c := range []struct {
+		name      string
+		got, want lipgloss.Style
+	}{
+		{"Heading", st.Heading, headingStyle()}, {"H1", st.H1, h1Style()},
+		{"Subheading", st.Subheading, subheadingStyle()}, {"Link", st.Link, linkStyle()},
+		{"CodeSpan", st.CodeSpan, codeSpanStyle()}, {"Rule", st.Rule, ruleStyle()},
+		{"QuoteText", st.QuoteText, quoteTextStyle()}, {"Code", st.Code, codeStyle()},
+	} {
+		if c.got.Render("Xy") != c.want.Render("Xy") {
+			t.Errorf("%s differs from the previewer's style", c.name)
+		}
+	}
+}

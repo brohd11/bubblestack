@@ -69,6 +69,7 @@ type Screen struct {
 	hlRows           []int  // current row → row in hl; -1 means text affected by an edit
 	hlPreview        map[int][]Span
 	hlPreviewGlyphs  map[int][]Glyph // the preview parse's ActiveGlyphs, beside hlPreview
+	hlPreviewSource  map[int][]Span  // its SourceSpans, collected only while live
 	hlPrevSeq        int
 	hlPrevFrom       int
 	hlPrevTo         int
