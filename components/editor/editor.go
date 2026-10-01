@@ -47,7 +47,7 @@ type Screen struct {
 
 	onExit    func(*core.Shared) core.Action         // embedded mode: replaces Pop on exit (nil ⇒ Pop)
 	onRelease func(*core.Shared) core.Action         // esc: hand the keys back to the host (nil ⇒ esc ignored)
-	onSaved   func(*core.Shared, string) core.Action // ctrl+s landed: the path written (nil ⇒ nothing)
+	onSaved   func(*core.Shared, string) core.Action // a save or save-as landed: the path written (nil ⇒ nothing)
 
 	lines      [][]rune // the buffer; always at least one (possibly empty) line
 	curY, curX int      // cursor: line index and rune column within it
@@ -209,7 +209,7 @@ type wrapRow struct {
 //     dismiss the host layout.
 //   - OnRelease binds esc to "keys go elsewhere, buffer stays" (a pane host's focus move).
 //     Nil leaves esc unbound.
-//   - OnSaved is called with the path written after a ctrl+s save (not the exit
+//   - OnSaved is called with the path written after a Save or SaveAs (not the exit
 //     prompt's), so a host can follow a save-as rename.
 //   - Border draws the shared frame with the title as its legend.
 //   - Highlighter overrides ResolveLanguage's highlighter and survives save-as.
@@ -763,7 +763,7 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		s.savedRevision = m.revision
 		s.dirty = s.revision != s.savedRevision
 		s.confirmExit = false
-		// An exit-prompt save ends the session; a ctrl+s save keeps the buffer, caret and scroll.
+		// An exit-prompt save ends the session; any other keeps the buffer, caret and scroll.
 		if s.saveExits {
 			return s, s.exit(sh)
 		}
@@ -954,7 +954,7 @@ func (s *Screen) exitPromptKey(sh *core.Shared, k string) core.Action {
 	switch k {
 	case "y", "Y":
 		s.saveExits = true
-		return core.Push(s.saveAsEdit(sh))
+		return s.saveInPlace(sh)
 	case "n", "N":
 		s.confirmExit = false
 		return s.exit(sh)
@@ -1046,10 +1046,10 @@ func (s *Screen) selectionKey(k string, m tea.KeyPressMsg) bool {
 func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core.Action, settle bool) {
 	switch k {
 	case "ctrl+s":
-		// A plain save on the prefilled path, or a save-as when edited; offered on a clean
-		// buffer too, as the way to fork a doc to a new name.
-		s.saveExits = false
-		return core.Push(s.saveAsEdit(sh)), false
+		return s.Save(sh), false
+	case "ctrl+shift+s":
+		// Offered on a clean buffer too, as the way to fork a doc to a new name.
+		return s.SaveAs(sh), false
 	case "esc":
 		if s.onRelease != nil {
 			return s.onRelease(sh), false
@@ -1144,6 +1144,7 @@ func (s *Screen) HelpView(sh *core.Shared) string {
 func (s *Screen) HelpBindings() []key.Binding {
 	hints := []key.Binding{
 		key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save")),
+		key.NewBinding(key.WithKeys("ctrl+shift+s"), key.WithHelp("ctrl+shift+s", "save as")),
 		key.NewBinding(key.WithKeys("alt+w"), key.WithHelp("alt+w", "close")),
 	}
 	if s.searchEnabled {

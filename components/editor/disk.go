@@ -34,7 +34,7 @@ type diskCheckMsg struct {
 
 type diskSaveIntent struct {
 	valid func() bool
-	write func(int) core.Action // number of overlays to pop
+	write func(int) core.Action // the overlays the check itself pushed (0, or 1 for its dialog)
 }
 
 // DiskStateChangedMsg tells hosts to refresh views and language-server content after
@@ -136,12 +136,12 @@ func (s *Screen) applyDiskCheck(m diskCheckMsg) core.Action {
 	s.disk.changed = !s.disk.known || m.fingerprint != s.disk.baseline
 	if m.save != nil {
 		if !s.disk.changed {
-			return m.save.write(1)
+			return m.save.write(0)
 		}
 		return core.Seq(core.PropagateAll(DiskStateChangedMsg{Editor: s}), core.Push(&components.DialogScreen{
 			Title: "file changed on disk", Overlay: true, Help: components.DefaultHelpKeys,
 			Render: func(*core.Shared) string { return "The source file has changed on disk. Save anyway?" },
-			OnYes:  func(*core.Shared) core.Action { return m.save.write(2) },
+			OnYes:  func(*core.Shared) core.Action { return m.save.write(1) },
 		}))
 	}
 	reloaded := false

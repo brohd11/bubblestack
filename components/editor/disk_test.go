@@ -170,18 +170,22 @@ func TestDiskSaveAcknowledgementAndCancellation(t *testing.T) {
 		if exit {
 			name = "save before close"
 		}
+		// A pathed buffer saves in place, with no name box, from either key.
+		save := func(model tea.Model) tea.Model {
+			var cmd tea.Cmd
+			if exit {
+				model, _ = model.Update(keyMsg("alt+w"))
+				model, cmd = model.Update(keyMsg("y"))
+			} else {
+				model, cmd = model.Update(keyMsg("ctrl+s"))
+			}
+			return diskPump(model, cmd)
+		}
 		t.Run(name, func(t *testing.T) {
 			ed, _, model := diskFixture(t, "original")
 			model, _ = model.Update(keyMsg("!"))
 			diskWrite(t, ed.path, "external")
-			if exit {
-				model, _ = model.Update(keyMsg("alt+w"))
-				model, _ = model.Update(keyMsg("y"))
-			} else {
-				model, _ = model.Update(keyMsg("ctrl+s"))
-			}
-			model, cmd := model.Update(keyMsg("enter"))
-			model = diskPump(model, cmd)
+			model = save(model)
 			if _, ok := model.(core.Router).Top().(*components.DialogScreen); !ok {
 				t.Fatalf("expected warning, got %T", model.(core.Router).Top())
 			}
@@ -190,12 +194,11 @@ func TestDiskSaveAcknowledgementAndCancellation(t *testing.T) {
 				t.Fatal("wrote before acknowledgement")
 			}
 			model, _ = model.Update(keyMsg("esc"))
-			if ed.ChangeMark() != " (!*)" {
-				t.Fatal("cancel cleared conflict")
+			if model.(core.Router).Top() != ed || ed.ChangeMark() != " (!*)" {
+				t.Fatalf("cancel should return to the buffer with the conflict kept, top %T", model.(core.Router).Top())
 			}
-			model, cmd = model.Update(keyMsg("enter"))
-			model = diskPump(model, cmd)
-			model, cmd = model.Update(keyMsg("y"))
+			model = save(model)
+			model, cmd := model.Update(keyMsg("y"))
 			model = diskPump(model, cmd)
 			b, _ = os.ReadFile(ed.path)
 			if string(b) != "!original" || ed.Dirty() || ed.DiskChanged() {
@@ -208,7 +211,7 @@ func TestDiskSaveAcknowledgementAndCancellation(t *testing.T) {
 func TestDiskSaveCheckCancelledWhileReading(t *testing.T) {
 	ed, _, model := diskFixture(t, "original")
 	model, _ = model.Update(keyMsg("!"))
-	model, _ = model.Update(keyMsg("ctrl+s"))
+	model, _ = model.Update(keyMsg("ctrl+shift+s"))
 	model, cmd := model.Update(keyMsg("enter"))
 	result := cmd()
 	model, _ = model.Update(keyMsg("esc"))
@@ -279,11 +282,10 @@ func TestDiskReadFailurePreservesBufferAndStopsSave(t *testing.T) {
 	if ed.Text() != before || !ed.Dirty() {
 		t.Fatal("read error destroyed buffer")
 	}
-	model, _ = model.Update(keyMsg("ctrl+s"))
-	model, cmd := model.Update(keyMsg("enter"))
+	model, cmd := model.Update(keyMsg("ctrl+s"))
 	model, _ = model.Update(cmd())
-	if _, ok := model.(core.Router).Top().(*components.LineEditScreen); !ok {
-		t.Fatal("failed pre-save check continued save flow")
+	if model.(core.Router).Top() != ed {
+		t.Fatalf("failed pre-save check continued save flow, top %T", model.(core.Router).Top())
 	}
 	if ed.disk.writing {
 		t.Fatal("failed check started a write")
@@ -295,8 +297,7 @@ func TestDiskDeletedFileSaveRequiresAcknowledgement(t *testing.T) {
 	if err := os.Remove(ed.path); err != nil {
 		t.Fatal(err)
 	}
-	model, _ = model.Update(keyMsg("ctrl+s"))
-	model, cmd := model.Update(keyMsg("enter"))
+	model, cmd := model.Update(keyMsg("ctrl+s"))
 	model = diskPump(model, cmd)
 	if _, ok := model.(core.Router).Top().(*components.DialogScreen); !ok {
 		t.Fatal("deletion did not require acknowledgement")
@@ -318,7 +319,7 @@ func TestDiskSaveAsLeavesChangedSourceAlone(t *testing.T) {
 	diskWrite(t, oldPath, "external")
 	model = diskPump(model, ed.CheckDiskChanges())
 	model, _ = model.Update(keyMsg("!"))
-	model, _ = model.Update(keyMsg("ctrl+s"))
+	model, _ = model.Update(keyMsg("ctrl+shift+s"))
 	newPath := filepath.Join(t.TempDir(), "copy.txt")
 	model.(core.Router).Top().(*components.LineEditScreen).SetValue(newPath)
 	model, _ = model.Update(keyMsg("enter"))

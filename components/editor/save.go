@@ -18,8 +18,43 @@ import (
 
 // ---------- save ----------
 
-// saveAsEdit builds the filename prompt both save keys push (the exit prompt's "y" and
-// ctrl+s): a floating line edit seeded with the full path, over the prompt row. Enter
+// Save writes the buffer to its file without asking (ctrl+s), after the same on-disk check
+// the save-as box makes; a buffer with no file asks for a name instead (SaveAs). Exported
+// so a host's menu runs the same path as the key.
+func (s *Screen) Save(sh *core.Shared) core.Action {
+	s.saveExits = false
+	return s.saveInPlace(sh)
+}
+
+// SaveAs asks for a name (ctrl+shift+s), seeded with the buffer's path: unchanged, it
+// re-saves in place; a new name moves the buffer there.
+func (s *Screen) SaveAs(sh *core.Shared) core.Action {
+	s.saveExits = false
+	return core.Push(s.saveAsEdit(sh))
+}
+
+// saveInPlace is Save under whatever saveExits the caller set: the exit prompt's "y"
+// saves and then exits.
+func (s *Screen) saveInPlace(sh *core.Shared) core.Action {
+	if s.path == "" {
+		return core.Push(s.saveAsEdit(sh))
+	}
+	if s.disk.writing || s.disk.saveCheck {
+		return core.SetStatus("save already in progress")
+	}
+	write := func(pop int) core.Action {
+		return core.Seq(core.Pop(pop), core.Async(s.saveCmd()))
+	}
+	if !s.disk.enabled {
+		return write(0)
+	}
+	s.disk.saveCheck = true
+	return core.Async(s.diskCheck(&diskSaveIntent{valid: func() bool { return true }, write: write}))
+}
+
+// saveAsEdit builds the filename prompt (ctrl+shift+s, and ctrl+s or the exit prompt's
+// "y" on a buffer with no file): a floating line edit seeded with the full path, over the
+// prompt row. Enter
 // saves under the typed name (a new name is a save-as); blank or esc pops back to
 // whatever raised it. saveExits, set by the caller, decides where the save leads.
 //
@@ -58,17 +93,18 @@ func (s *Screen) saveAsEdit(sh *core.Shared) *components.LineEditScreen {
 			if s.path != "" && path != s.path {
 				return core.Push(s.saveAsConfirm(path))
 			}
+			// pop is what the disk check pushed over the box; the box goes too.
 			write := func(pop int) core.Action {
 				cancelCheck()
 				highlight := s.applySaveName(path)
-				return core.Seq(core.Pop(pop), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
+				return core.Seq(core.Pop(pop+1), core.Action{Cmd: tea.Batch(s.saveCmd(), highlight)})
 			}
 			if s.disk.enabled && path == s.path {
 				s.disk.saveCheck = true
 				token := attempt
 				return core.Async(s.diskCheck(&diskSaveIntent{valid: func() bool { return token == attempt }, write: write}))
 			}
-			return write(1)
+			return write(0)
 		}, func(*core.Shared) core.Action { cancelCheck(); return core.Pop() })
 	edit.OnChange = func(*core.Shared, string) core.Action { cancelCheck(); return core.Action{} }
 	if s.path != "" {

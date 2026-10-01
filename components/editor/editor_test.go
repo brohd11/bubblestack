@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brohd11/bubblestack/components"
 	"github.com/brohd11/bubblestack/core"
 
 	tea "charm.land/bubbletea/v2"
@@ -1308,7 +1309,6 @@ func TestEditorSaveKey(t *testing.T) {
 		if s.confirmExit {
 			t.Fatal("ctrl+s must not raise the exit prompt")
 		}
-		s.saveAsEdit(sh).OnDone(sh, path)
 		s.Update(sh, s.saveCmd()())
 		if exited != 0 {
 			t.Fatalf("ctrl+s must not exit (hook fired %d)", exited)
@@ -1331,7 +1331,7 @@ func TestEditorSaveKey(t *testing.T) {
 			OnSaved: func(_ *core.Shared, p string) core.Action { saved = p; return core.Action{} },
 		})
 		typeRunes(s, 'x')
-		s.key(sh, keyMsg("ctrl+s"))
+		s.key(sh, keyMsg("ctrl+shift+s"))
 		after := filepath.Join(dir, "nested", "after.txt") // a dir that does not exist yet
 		s.saveAsEdit(sh).OnDone(sh, after)                 // raises the confirm; nothing has moved yet
 		if s.path == after {
@@ -1355,10 +1355,42 @@ func TestEditorSaveKey(t *testing.T) {
 		s.setContent(longDoc())
 		s.curY, s.curX, s.scrY = 60, 1, 55
 		s.key(sh, keyMsg("ctrl+s"))
-		s.saveAsEdit(sh).OnDone(sh, s.path)
 		s.Update(sh, s.saveCmd()())
 		if s.curY != 60 || s.curX != 1 || s.scrY != 55 {
 			t.Fatalf("a save must not move the caret or the view, got %d/%d scroll %d", s.curY, s.curX, s.scrY)
+		}
+	})
+
+	// ctrl+s writes a buffer that has a file without asking; one with no file, and
+	// ctrl+shift+s always, ask for a name seeded with the path.
+	t.Run("ctrl+s asks only without a file", func(t *testing.T) {
+		route := func(s *Screen, sh *core.Shared) tea.Model {
+			r := core.NewRouter(sh, []core.TabEntry{{New: func(*core.Shared) core.Screen { return s }}})
+			r.Init()
+			return r
+		}
+		path := filepath.Join(dir, "direct.txt")
+		s, sh := newEditor(Opts{Path: path})
+		model := route(s, sh)
+		typeRunes(s, 'o', 'k')
+		model, cmd := model.Update(keyMsg("ctrl+s"))
+		model = diskPump(model, cmd)
+		if model.(core.Router).Top() != s {
+			t.Fatalf("ctrl+s on a file should not ask, top %T", model.(core.Router).Top())
+		}
+		if b, err := os.ReadFile(path); err != nil || string(b) != "ok" || s.Dirty() {
+			t.Fatalf("ctrl+s should write in place: %q, err = %v, dirty %v", b, err, s.Dirty())
+		}
+		model, _ = model.Update(keyMsg("ctrl+shift+s"))
+		if box, ok := model.(core.Router).Top().(*components.LineEditScreen); !ok || box.Value() != path {
+			t.Fatalf("ctrl+shift+s should ask, seeded with the path, top %T", model.(core.Router).Top())
+		}
+
+		pathless, psh := newEditor(Opts{})
+		model = route(pathless, psh)
+		model, _ = model.Update(keyMsg("ctrl+s"))
+		if _, ok := model.(core.Router).Top().(*components.LineEditScreen); !ok {
+			t.Fatalf("ctrl+s without a file should ask for a name, top %T", model.(core.Router).Top())
 		}
 	})
 
@@ -1458,7 +1490,7 @@ func TestEditorSaveBaseDir(t *testing.T) {
 		path := filepath.Join(base, "same.txt")
 		s, sh := newEditor(Opts{BaseDir: base, Path: path})
 		typeRunes(s, 'y')
-		s.key(sh, keyMsg("ctrl+s"))
+		s.key(sh, keyMsg("ctrl+shift+s"))
 		act := s.saveAsEdit(sh).OnDone(sh, "same.txt")
 		s.Update(sh, s.saveCmd()())
 		if s.path != path {
