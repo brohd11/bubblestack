@@ -71,9 +71,9 @@ func RenderTitleBar(text string) string {
 	return listStyles.TitleBar.Render(listStyles.Title.Render(text))
 }
 
-// renderTitleBarMuted is RenderTitleBar for an unfocused element. Only colors change, so
+// RenderTitleBarMuted is RenderTitleBar for an unfocused element. Only colors change, so
 // a focus flip cannot shift the body.
-func renderTitleBarMuted(text string) string {
+func RenderTitleBarMuted(text string) string {
 	muted := listStyles.Title.UnsetBackground().Foreground(MutedColor)
 	return listStyles.TitleBar.Render(muted.Render(text))
 }
@@ -95,7 +95,7 @@ func WithTitleFocused(title, body string, focused bool) string {
 	if focused {
 		return WithTitle(title, body)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, renderTitleBarMuted(title), body)
+	return lipgloss.JoinVertical(lipgloss.Left, RenderTitleBarMuted(title), body)
 }
 
 // ---------- confirm/summary box ----------
