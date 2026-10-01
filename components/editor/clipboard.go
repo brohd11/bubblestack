@@ -58,6 +58,32 @@ func (s *Screen) ClipboardItems() []components.MenuItem {
 	}
 }
 
+// EditItems are the editor's history, search, indent and comment commands as menu rows,
+// for a host's menu bar; built per open like ClipboardItems. Each pick pops the menu, then
+// replays its chord through the key path, so history grouping and status match the key.
+func (s *Screen) EditItems() []components.MenuItem {
+	row := func(label string, accel rune, hint string, chord tea.KeyPressMsg, disabled bool) components.MenuItem {
+		return components.MenuItem{Label: label, Key: accel, Hint: hint, Disabled: disabled,
+			Pick: func(sh *core.Shared) core.Action {
+				_, act := s.key(sh, chord)
+				return core.Seq(core.Pop(), act)
+			}}
+	}
+	items := []components.MenuItem{
+		row("Undo", 'u', "ctrl+z", tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}, len(s.undoStack) == 0),
+		row("Redo", 'r', "ctrl+y", tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}, len(s.redoStack) == 0),
+	}
+	if s.searchEnabled {
+		items = append(items, row("Search", 's', "ctrl+f", tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl}, false))
+	}
+	return append(items,
+		row("Indent", 'i', "alt+.", tea.KeyPressMsg{Code: '.', Mod: tea.ModAlt}, false),
+		row("Dedent", 'd', "alt+,", tea.KeyPressMsg{Code: ',', Mod: tea.ModAlt}, false),
+		// alt+/ is the form of ctrl+/ that always arrives.
+		row("Toggle comment", 'm', "ctrl+/", tea.KeyPressMsg{Code: '/', Mod: tea.ModAlt}, false),
+	)
+}
+
 // copySelection is the menu's Copy and Cut: copyOrCut after popping the menu.
 func (s *Screen) copySelection(cut bool) core.Action {
 	return core.Seq(core.Pop(), s.copyOrCut(cut))

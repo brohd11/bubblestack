@@ -949,6 +949,16 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	return s, act
 }
 
+// Close is alt+w, exported for a host's menu: a clean buffer exits, a dirty one asks to
+// save first (the exit prompt).
+func (s *Screen) Close(sh *core.Shared) core.Action {
+	if !s.dirty {
+		return s.exit(sh)
+	}
+	s.confirmExit = true
+	return core.Action{}
+}
+
 // exitPromptKey answers the "save before exit?" prompt.
 func (s *Screen) exitPromptKey(sh *core.Shared, k string) core.Action {
 	switch k {
@@ -989,11 +999,7 @@ func (s *Screen) commandKey(sh *core.Shared, k string, m tea.KeyPressMsg) (core.
 		return pasteClipboardCmd(s), true
 	// alt+w closes, here rather than in editKey so the selection pre-pass never sees it.
 	case k == "alt+w":
-		if !s.dirty {
-			return s.exit(sh), true
-		}
-		s.confirmExit = true
-		return core.Action{}, true
+		return s.Close(sh), true
 	}
 	if move := s.selectMove(k); move != nil {
 		s.extendSelection(move) // selectFrom does its own clampScroll

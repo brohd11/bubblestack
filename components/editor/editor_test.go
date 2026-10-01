@@ -2485,3 +2485,66 @@ func TestEditorOverflowMarkKeepsCaret(t *testing.T) {
 	}
 	assertRowGeometry(t, s, "caret walk")
 }
+
+// TestEditorEditItems: the menu rows replay their chords, so an Indent pick is one undo
+// step like alt+., and Undo/Redo are enabled only with history to walk. Close is alt+w.
+func TestEditorEditItems(t *testing.T) {
+	s, sh := newEditor(Opts{Search: true})
+	s.setContent("line")
+	pick := func(label string) core.Action {
+		t.Helper()
+		for _, it := range s.EditItems() {
+			if it.Label == label {
+				if it.Disabled {
+					t.Fatalf("%s is disabled", label)
+				}
+				return it.Pick(sh)
+			}
+		}
+		t.Fatalf("no row %q", label)
+		return core.Action{}
+	}
+	disabled := func(label string) bool {
+		for _, it := range s.EditItems() {
+			if it.Label == label {
+				return it.Disabled
+			}
+		}
+		t.Fatalf("no row %q", label)
+		return false
+	}
+	if !disabled("Undo") || !disabled("Redo") {
+		t.Fatal("Undo and Redo need history")
+	}
+	pick("Indent")
+	if buffer(s) == "line" {
+		t.Fatal("Indent should indent the line")
+	}
+	if disabled("Undo") {
+		t.Fatal("an indent should be undoable")
+	}
+	pick("Undo")
+	if buffer(s) != "line" || disabled("Redo") {
+		t.Fatalf("one Undo should revert the indent, got %q", buffer(s))
+	}
+	pick("Redo")
+	if buffer(s) == "line" {
+		t.Fatal("Redo should reapply the indent")
+	}
+	if act := pick("Search"); act.Msg == nil {
+		t.Fatal("Search should pop the menu and push the search box")
+	}
+
+	fired := 0
+	c, _ := newEditor(Opts{OnExit: func(*core.Shared) core.Action { fired++; return core.Action{} }})
+	typeRunes(c, 'x')
+	c.Close(nil)
+	if fired != 0 || !c.confirmExit {
+		t.Fatal("Close on a dirty buffer should ask first")
+	}
+	c.confirmExit, c.dirty = false, false
+	c.Close(nil)
+	if fired != 1 {
+		t.Fatal("Close on a clean buffer should exit")
+	}
+}
