@@ -1114,8 +1114,8 @@ func TestEditorWordNav(t *testing.T) {
 }
 
 // TestEditorCtrlAliases: the readline-style aliases textinput also honors — ctrl+h
-// backspaces (0x08-sending terminals), ctrl+d forward-deletes, ctrl+a/ctrl+e are
-// home/end.
+// backspaces (0x08-sending terminals), ctrl+d forward-deletes, ctrl+e is end. ctrl+a is
+// Select All, not home.
 func TestEditorCtrlAliases(t *testing.T) {
 	s, _ := newEditor(Opts{})
 	s.setContent("abc")
@@ -1133,9 +1133,9 @@ func TestEditorCtrlAliases(t *testing.T) {
 	if s.curX != 1 {
 		t.Fatalf("ctrl+e: curX = %d, want 1", s.curX)
 	}
-	s.key(nil, keyMsg("ctrl+a"))
+	s.key(nil, keyMsg("home"))
 	if s.curX != 0 {
-		t.Fatalf("ctrl+a: curX = %d, want 0", s.curX)
+		t.Fatalf("home: curX = %d, want 0", s.curX)
 	}
 }
 
@@ -2216,7 +2216,7 @@ func TestEditorWrapCaret(t *testing.T) {
 
 	for _, at := range []string{"home", "end"} {
 		if at == "home" {
-			s.key(nil, keyMsg("ctrl+a"))
+			s.key(nil, keyMsg("home"))
 		} else {
 			s.key(nil, keyMsg("ctrl+e"))
 		}

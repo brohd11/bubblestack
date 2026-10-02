@@ -97,8 +97,8 @@ func TestEditorContextMenuRows(t *testing.T) {
 	s.setContent("abcdef")
 
 	m := s.editMenu(sh, 0, 0)
-	if len(m.Items()) != 3 {
-		t.Fatalf("a menu with no host extras has %d rows, want 3", len(m.Items()))
+	if len(m.Items()) != 4 {
+		t.Fatalf("a menu with no host extras has %d rows, want 4", len(m.Items()))
 	}
 	if !m.Items()[0].Disabled || !m.Items()[1].Disabled {
 		t.Error("Copy and Cut should be disabled without a selection")
@@ -113,7 +113,7 @@ func TestEditorContextMenuRows(t *testing.T) {
 		t.Error("Copy and Cut should be live with a selection")
 	}
 	// A host's own menu gets the same rows, read at the same moment.
-	if rows := s.ClipboardItems(); len(rows) != 3 || rows[0].Label != "Copy" || rows[0].Disabled != m.Items()[0].Disabled {
+	if rows := s.ClipboardItems(); len(rows) != 4 || rows[0].Label != "Copy" || rows[0].Disabled != m.Items()[0].Disabled {
 		t.Errorf("ClipboardItems should match the context menu's rows, got %+v", rows)
 	}
 
@@ -122,8 +122,8 @@ func TestEditorContextMenuRows(t *testing.T) {
 		ContextMenu:  true,
 		ContextItems: func(*core.Shared) []components.MenuItem { return nil },
 	})
-	if got := len(empty.editMenu(shEmpty, 0, 0).Items()); got != 3 {
-		t.Errorf("nil extras produced %d rows, want 3 with no dangling separator", got)
+	if got := len(empty.editMenu(shEmpty, 0, 0).Items()); got != 4 {
+		t.Errorf("nil extras produced %d rows, want 4 with no dangling separator", got)
 	}
 
 	extra, shExtra := newEditor(Opts{
@@ -131,7 +131,7 @@ func TestEditorContextMenuRows(t *testing.T) {
 		ContextItems: func(*core.Shared) []components.MenuItem { return []components.MenuItem{{Label: "Toggle wrap"}} },
 	})
 	rows := extra.editMenu(shExtra, 0, 0).Items()
-	if len(rows) != 5 || !rows[3].Separator || rows[4].Label != "Toggle wrap" {
+	if len(rows) != 6 || !rows[4].Separator || rows[5].Label != "Toggle wrap" {
 		t.Errorf("host extras should land below a rule, got %+v", rows)
 	}
 }
@@ -410,5 +410,29 @@ func TestEditorContextMenuThroughRouter(t *testing.T) {
 	tm, _ = tm.Update(rightPress(x+2, y+1))
 	if _, still := tm.(core.Router).Top().(*components.MenuScreen); still {
 		t.Error("a right click over the open menu should dismiss it")
+	}
+}
+
+// TestEditorSelectAllRow: the Select All row spans the whole buffer, parks the caret at
+// the end, and pops the menu; Copy and Cut come alive on the next open.
+func TestEditorSelectAllRow(t *testing.T) {
+	s, sh := newEditor(Opts{ContextMenu: true})
+	s.setContent("abc\ndef\nghi")
+
+	rows := s.ClipboardItems()
+	if rows[3].Label != "Select All" || rows[3].Disabled {
+		t.Fatalf("row 4 should be a live Select All, got %+v", rows[3])
+	}
+	if act := rows[3].Pick(sh); act.Msg == nil {
+		t.Error("Select All should pop the menu")
+	}
+	if got := s.selectedText(); got != "abc\ndef\nghi" {
+		t.Errorf("Select All selected %q, want the whole buffer", got)
+	}
+	if s.curY != 2 || s.curX != 3 {
+		t.Errorf("caret at %d,%d, want the buffer's end 2,3", s.curY, s.curX)
+	}
+	if m := s.editMenu(sh, 0, 0); m.Items()[0].Disabled || m.Items()[1].Disabled {
+		t.Error("Copy and Cut should be live after Select All")
 	}
 }

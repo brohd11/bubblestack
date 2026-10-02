@@ -23,10 +23,11 @@ import (
 
 // Screen is a nano-like editor. alt+w closes, prompting to save a dirty buffer (y opens
 // a save-as box seeded with the current name, n discards, esc/c cancels). ctrl+z/ctrl+y
-// undo and redo; ctrl+c/x/v copy, cut and paste (the whole line with no selection); tab
-// over a multi-line selection indents it (alt+, / alt+. / alt+i: see indent.go). The
-// left mouse button places the caret and selects (drag, double, triple click); the
-// right one raises a copy/cut/paste menu when Opts.ContextMenu is set. The wheel
+// undo and redo; ctrl+c/x/v copy, cut and paste (the whole line with no selection) and
+// ctrl+a selects all; tab over a multi-line selection indents it (alt+, / alt+. / alt+i:
+// see indent.go). The left mouse button places the caret and selects (drag, double,
+// triple click); the right one raises a copy/cut/paste menu when Opts.ContextMenu is
+// set. The wheel
 // scrolls without moving the caret.
 //
 // It reports Filtering at all times so the router's single-key shortcuts never steal
@@ -997,6 +998,9 @@ func (s *Screen) commandKey(sh *core.Shared, k string, m tea.KeyPressMsg) (core.
 		return s.copyOrCut(true), true
 	case k == "ctrl+v":
 		return pasteClipboardCmd(s), true
+	case k == "ctrl+a":
+		s.selectAll()
+		return core.Action{}, true
 	// alt+w closes, here rather than in editKey so the selection pre-pass never sees it.
 	case k == "alt+w":
 		return s.Close(sh), true
@@ -1037,7 +1041,7 @@ func (s *Screen) selectionKey(k string, m tea.KeyPressMsg) bool {
 	case "shift+tab", "enter":
 		s.deleteSelection()
 	case "up", "down", "left", "right", "alt+left", "ctrl+left", "alt+b",
-		"alt+right", "ctrl+right", "alt+f", "home", "ctrl+a", "end", "ctrl+e":
+		"alt+right", "ctrl+right", "alt+f", "home", "end", "ctrl+e":
 		s.clearSelection()
 	default:
 		if m.Text != "" {
@@ -1108,7 +1112,7 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 		s.moveWordBack()
 	case "alt+right", "ctrl+right", "alt+f":
 		s.moveWordForward()
-	case "home", "ctrl+a":
+	case "home":
 		s.moveHome()
 	case "end", "ctrl+e":
 		s.moveEnd()
@@ -1182,6 +1186,7 @@ func (s *Screen) HelpBindings() []key.Binding {
 		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "copy")),
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "cut")),
 		key.NewBinding(key.WithKeys("ctrl+v"), key.WithHelp("ctrl+v", "paste")),
+		key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "select all")),
 	)
 }
 

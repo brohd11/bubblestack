@@ -228,3 +228,24 @@ func TestEditorUnknownAltRunesDoNotType(t *testing.T) {
 		t.Fatal("ignored Alt input must not create an edit or undo step")
 	}
 }
+
+// TestEditorSelectAllChord: ctrl+a selects the whole buffer with the caret at its end,
+// and a following ctrl+c copies all of it.
+func TestEditorSelectAllChord(t *testing.T) {
+	wrote := stubClipboard(t, "")
+	s, sh := newEditor(Opts{})
+	s.setContent("abc\ndef\nghi")
+	s.curY, s.curX = 1, 1
+
+	s.Update(sh, ctrlKey('a'))
+	if got := s.selectedText(); got != "abc\ndef\nghi" {
+		t.Fatalf("ctrl+a selected %q, want the whole buffer", got)
+	}
+	if s.curY != 2 || s.curX != 3 {
+		t.Errorf("caret at %d,%d, want the buffer's end 2,3", s.curY, s.curX)
+	}
+	chord(t, s, sh, 'c')
+	if *wrote != "abc\ndef\nghi" {
+		t.Errorf("clipboard got %q, want the whole buffer", *wrote)
+	}
+}

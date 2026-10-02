@@ -29,9 +29,9 @@ func pasteClipboardCmd(target *Screen) core.Action {
 	})
 }
 
-// editMenu builds the right-click menu: the clipboard verbs, then Opts.ContextItems below
-// a rule. x, y are absolute cells. Copy and Cut are disabled without a selection; Paste is
-// always enabled, since checking the clipboard needs IO.
+// editMenu builds the right-click menu: the clipboard verbs and Select All, then
+// Opts.ContextItems below a rule. x, y are absolute cells. Copy and Cut are disabled
+// without a selection; Paste is always enabled, since checking the clipboard needs IO.
 func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 	items := s.ClipboardItems()
 	if s.contextItems != nil {
@@ -43,10 +43,10 @@ func (s *Screen) editMenu(sh *core.Shared, x, y int) *components.MenuScreen {
 	return components.NewMenu(components.MenuOpts{Items: items, Anchor: components.AnchorBelow(x, y), Style: s.menuStyle})
 }
 
-// ClipboardItems are the Copy, Cut and Paste rows of the right-click menu, for a host to
-// put in a menu of its own (a menu bar's Edit). Copy and Cut are disabled without a
-// selection, read now, so build them when the menu opens. Each Pick pops one menu level
-// and then acts on this editor.
+// ClipboardItems are the Copy, Cut, Paste and Select All rows of the right-click menu,
+// for a host to put in a menu of its own (a menu bar's Edit). Copy and Cut are disabled
+// without a selection, read now, so build them when the menu opens. Each Pick pops one
+// menu level and then acts on this editor.
 func (s *Screen) ClipboardItems() []components.MenuItem {
 	sel := s.selectionActive()
 	return []components.MenuItem{
@@ -54,6 +54,10 @@ func (s *Screen) ClipboardItems() []components.MenuItem {
 		{Label: "Cut", Key: 't', Disabled: !sel, Pick: func(*core.Shared) core.Action { return s.copySelection(true) }},
 		{Label: "Paste", Key: 'p', Pick: func(*core.Shared) core.Action {
 			return core.Seq(core.Pop(), pasteClipboardCmd(s))
+		}},
+		{Label: "Select All", Key: 'a', Pick: func(*core.Shared) core.Action {
+			s.selectAll()
+			return core.Pop()
 		}},
 	}
 }

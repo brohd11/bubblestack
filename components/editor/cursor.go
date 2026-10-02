@@ -285,6 +285,15 @@ func (s *Screen) selectLineAt(p textPos) {
 	s.curY, s.curX, s.wantX = end.y, end.x, end.x
 }
 
+// selectAll selects the whole buffer, caret at the end. An empty buffer selects nothing.
+func (s *Screen) selectAll() {
+	last := len(s.lines) - 1
+	end := textPos{last, len(s.lines[last])}
+	s.selStart, s.selEnd = textPos{}, end
+	s.curY, s.curX, s.wantX = end.y, end.x, end.x
+	s.clampScroll()
+}
+
 func (s *Screen) startDrag(sh *core.Shared, x, y int) {
 	p, ok := s.positionAt(sh, x, y, false)
 	if !ok {
