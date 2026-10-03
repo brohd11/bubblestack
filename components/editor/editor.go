@@ -163,6 +163,7 @@ type Screen struct {
 	searchSeq     int           // editSeq represented by searchMatches (-1 means stale)
 	searchCached  string        // query represented by searchMatches
 	searchMatches [][]textRange // per-line, non-overlapping display-cell ranges
+	searchHits    []searchHit   // the same matches in rune columns, in document order
 }
 
 // textPos is an insertion position in the rune buffer. Selection ranges are stored as
@@ -171,6 +172,9 @@ type textPos struct{ y, x int }
 
 // textRange is a half-open range of display cells within one buffer line.
 type textRange struct{ from, to int }
+
+// searchHit is one match as a rune-column span on row, the shape prev/next selects.
+type searchHit struct{ row, from, to int }
 
 // editorState is the small non-text state restored at one side of a history entry.
 // Viewport browsing position is deliberately not restored.
@@ -652,19 +656,82 @@ func (s *Screen) buildSearchEdit(sh *core.Shared, seedSelection bool) *component
 		s.searchQuery = query
 		return core.Action{}
 	}
+	// up/down mirror the trailer's ↑/↓ buttons while the field has focus.
+	edit.OnKey = func(_ *core.Shared, k string) (core.Action, bool) {
+		switch k {
+		case "up":
+			s.searchStep(-1)
+		case "down":
+			s.searchStep(1)
+		default:
+			return core.Action{}, false
+		}
+		return core.Action{}, true
+	}
+	edit.Trailer = func(*core.Shared) string { return s.searchTrailer() }
+	edit.OnTrailerClick = func(_ *core.Shared, offset int) core.Action {
+		s.searchStep(s.searchButtonAt(offset))
+		return core.Action{}
+	}
 	return edit
 }
 
 // searchBarHit reports whether an incoming pane-relative (embedded) or absolute
-// (standalone) mouse cell lies in the retained three-row search box.
-func (s *Screen) searchBarHit(sh *core.Shared, x, y int) bool {
+// (standalone) mouse cell lies in the retained three-row search box, and which
+// prev/next button it hits there (0 for none).
+func (s *Screen) searchBarHit(sh *core.Shared, x, y int) (button int, hit bool) {
 	if !s.searchBarVisible() || s.searchEditing {
-		return false
+		return 0, false
 	}
 	ax, ay := s.absCell(sh, x, y)
 	px, py, w, h := s.paneGeometry(sh)
 	top := py + max(h-editorSearchBarH, 0)
-	return ax >= px && ax < px+w && ay >= top && ay < py+h
+	if ax < px || ax >= px+w || ay < top || ay >= py+h {
+		return 0, false
+	}
+	// The trailer ends at the content's right edge (border + padding) on the middle row.
+	contentW := max(w-4, 1)
+	trailerW := s.searchTrailerFit(contentW)
+	right := px + 2 + contentW
+	if ay == top+1 && trailerW > 0 && ax >= right-trailerW && ax < right {
+		return s.searchButtonAt(ax - (right - trailerW)), true
+	}
+	return 0, true
+}
+
+// searchStep selects the next (dir > 0) or previous (dir < 0) match relative to the
+// caret, wrapping at either end; dir 0 does nothing.
+func (s *Screen) searchStep(dir int) {
+	s.rebuildSearchMatches()
+	if dir == 0 || len(s.searchHits) == 0 {
+		return
+	}
+	caret := textPos{y: s.curY, x: s.curX}
+	pick := -1
+	if dir > 0 {
+		for i, h := range s.searchHits {
+			if posLess(caret, textPos{y: h.row, x: h.from}) {
+				pick = i
+				break
+			}
+		}
+		if pick < 0 {
+			pick = 0
+		}
+	} else {
+		for i := len(s.searchHits) - 1; i >= 0; i-- {
+			h := s.searchHits[i]
+			if posLess(textPos{y: h.row, x: h.from}, caret) {
+				pick = i
+				break
+			}
+		}
+		if pick < 0 {
+			pick = len(s.searchHits) - 1
+		}
+	}
+	h := s.searchHits[pick]
+	s.SelectRange(Range{Start: Position{Line: h.row, Column: h.from}, End: Position{Line: h.row, Column: h.to}})
 }
 
 func (s *Screen) highlightDelay() time.Duration {
@@ -828,9 +895,13 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 					}
 				}
 			}
-			if s.searchBarHit(sh, mm.X, mm.Y) {
+			if button, ok := s.searchBarHit(sh, mm.X, mm.Y); ok {
 				s.resetMouseGesture()
 				s.clickCount = 0
+				if button != 0 {
+					s.searchStep(button)
+					return s, core.Action{}
+				}
 				return s, core.Push(s.buildSearchEdit(sh, false))
 			}
 			if row, ok := s.scrollbarRowAt(sh, mm.X, mm.Y); ok {
@@ -1137,13 +1208,19 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 }
 
 // HelpView shows the editing hints, swapped for the prompt's y/n/c answers while the
-// exit prompt is up.
+// exit prompt is up and for the search keys while the search field is open.
 func (s *Screen) HelpView(sh *core.Shared) string {
 	if s.confirmExit {
 		return sh.BindingHelp([]key.Binding{
 			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save as… & exit")),
 			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "discard & exit")),
 			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
+		})
+	}
+	if s.searchEditing {
+		return sh.BindingHelp([]key.Binding{
+			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑/↓", "prev/next match")),
+			key.NewBinding(key.WithKeys("enter", "esc"), key.WithHelp("enter/esc", "done")),
 		})
 	}
 	hints := s.HelpBindings()

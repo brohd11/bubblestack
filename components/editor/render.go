@@ -71,8 +71,80 @@ func (s *Screen) searchBarVisible() bool {
 func (s *Screen) searchBar() string {
 	w := s.paneW()
 	contentW := max(w-4, 1) // two border cells and one padding cell on each side
-	content := ansi.Truncate("find: "+s.searchQuery, contentW, "…")
+	queryW := contentW
+	trailer := ""
+	if fit := s.searchTrailerFit(contentW); fit > 0 {
+		queryW -= fit + 1
+		trailer = s.searchTrailer()
+	}
+	content := ansi.Truncate("find: "+s.searchQuery, queryW, "…")
+	if trailer != "" {
+		content += strings.Repeat(" ", max(queryW-lipgloss.Width(content), 0)+1) + trailer
+	}
 	return retainedSearchBox().Width(contentW + 4).Render(content)
+}
+
+// searchButtons trails the count: ↑ (previous) and ↓ (next), one cell apart.
+const searchButtons = "↑ ↓"
+
+// searchTrailer is the bar's right side: the hit count, then the prev/next buttons. The
+// count is k/N while the selection is exactly match k.
+func (s *Screen) searchTrailer() string {
+	s.rebuildSearchMatches()
+	muted := lipgloss.NewStyle().Foreground(core.MutedColor)
+	n := len(s.searchHits)
+	var count string
+	switch cur := s.searchCurrent(); {
+	case n == 0:
+		count = muted.Render("no matches")
+	case cur >= 0:
+		count = fmt.Sprintf("%d/%d", cur+1, n)
+	case n == 1:
+		count = "1 match"
+	default:
+		count = fmt.Sprintf("%d matches", n)
+	}
+	return count + "  " + searchButtons
+}
+
+// searchTrailerFit is the trailer's width when it fits beside a minimal "find: " field
+// in contentW cells, else 0 (the bar drops it).
+func (s *Screen) searchTrailerFit(contentW int) int {
+	if !s.searchEnabled || s.searchQuery == "" && !s.searchEditing {
+		return 0
+	}
+	w := lipgloss.Width(s.searchTrailer())
+	if contentW-w-1 < len("find: ")+2 {
+		return 0
+	}
+	return w
+}
+
+// searchButtonAt maps a cell offset into the trailer to -1 (↑, previous), 1 (↓, next)
+// or 0. Each button also claims the gap cell before it.
+func (s *Screen) searchButtonAt(offset int) int {
+	w := lipgloss.Width(s.searchTrailer())
+	switch {
+	case offset >= w-2 && offset < w:
+		return 1
+	case offset >= w-4 && offset < w-2:
+		return -1
+	}
+	return 0
+}
+
+// searchCurrent is the index of the match the selection covers exactly, or -1.
+func (s *Screen) searchCurrent() int {
+	if !s.selectionActive() || s.selStart.y != s.selEnd.y {
+		return -1
+	}
+	s.rebuildSearchMatches()
+	for i, h := range s.searchHits {
+		if h.row == s.selStart.y && h.from == s.selStart.x && h.to == s.selEnd.x {
+			return i
+		}
+	}
+	return -1
 }
 
 // retainedSearchBox is the unfocused counterpart to components.LineEditBox: same geometry, but
@@ -555,6 +627,7 @@ func (s *Screen) rebuildSearchMatches() {
 	}
 	s.searchSeq, s.searchCached = s.editSeq, s.searchQuery
 	s.searchMatches = make([][]textRange, len(s.lines))
+	s.searchHits = nil
 	query := []rune(s.searchQuery)
 	if !s.searchEnabled || len(query) == 0 {
 		return
@@ -567,6 +640,7 @@ func (s *Screen) rebuildSearchMatches() {
 					from: cellOfCol(line, from),
 					to:   cellOfCol(line, to),
 				})
+				s.searchHits = append(s.searchHits, searchHit{row: row, from: from, to: to})
 				from = to
 				continue
 			}

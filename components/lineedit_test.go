@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newLineEdit(width int) (*LineEditScreen, *core.Shared) {
@@ -117,5 +118,55 @@ func TestLineEditHelpToggle(t *testing.T) {
 		if got := strings.Contains(v, "done"); got != tc.help {
 			t.Errorf("help=%v: hint shown = %v:\n%s", tc.help, got, v)
 		}
+	}
+}
+
+// TestLineEditOnKeyAndTrailer: a claimed key never reaches the input, the trailer sits
+// right-aligned on the one input row, and a left click on it reports the cell offset.
+func TestLineEditOnKeyAndTrailer(t *testing.T) {
+	s, sh := newLineEdit(30)
+	var keys []string
+	s.OnKey = func(_ *core.Shared, k string) (core.Action, bool) {
+		keys = append(keys, k)
+		return core.Action{}, k == "up"
+	}
+	s.Trailer = func(*core.Shared) string { return "2/5 ↑ ↓" }
+	clicked := -1
+	s.OnTrailerClick = func(_ *core.Shared, off int) core.Action { clicked = off; return core.Action{} }
+
+	lineEditKey(s, sh, keyMsg("up"))
+	lineEditKey(s, sh, keyMsg("x"))
+	if s.Value() != "x" || len(keys) != 2 {
+		t.Fatalf("value = %q keys = %v, want the claimed up to stay out of the input", s.Value(), keys)
+	}
+
+	view := s.View(sh)
+	if lipgloss.Width(view) != 30 || lipgloss.Height(view) != 3 {
+		t.Fatalf("box = %dx%d, want 30x3", lipgloss.Width(view), lipgloss.Height(view))
+	}
+	row := strings.Split(view, "\n")[1]
+	if !strings.HasSuffix(strings.TrimRight(ansi.Strip(row), " │"), "2/5 ↑ ↓") {
+		t.Fatalf("input row %q should end with the trailer", ansi.Strip(row))
+	}
+
+	// Content spans cells 2..27; the 7-cell trailer starts at 21. The ↓ is offset 6.
+	s.Update(sh, tea.MouseClickMsg{X: 27, Y: 1, Button: tea.MouseLeft})
+	if clicked != 6 {
+		t.Fatalf("trailer click offset = %d, want 6", clicked)
+	}
+	clicked = -1
+	s.Update(sh, tea.MouseClickMsg{X: 5, Y: 1, Button: tea.MouseLeft})
+	if clicked != -1 {
+		t.Fatal("a click on the input reached OnTrailerClick")
+	}
+}
+
+// TestLineEditTrailerDroppedWhenNarrow keeps the box one row when the trailer can't fit.
+func TestLineEditTrailerDroppedWhenNarrow(t *testing.T) {
+	s, sh := newLineEdit(12)
+	s.Trailer = func(*core.Shared) string { return "12 matches ↑ ↓" }
+	view := s.View(sh)
+	if lipgloss.Height(view) != 3 || strings.Contains(view, "↓") {
+		t.Fatalf("narrow box should drop the trailer and stay one row:\n%s", view)
 	}
 }

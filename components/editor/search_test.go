@@ -381,3 +381,90 @@ func TestEditorRetainedSearchBarNonLeftEventsDoNotFocus(t *testing.T) {
 		}
 	}
 }
+
+// TestEditorSearchStepAndCount: up/down in the open field select the previous/next match
+// from the caret, wrapping both ways, without touching the query; the trailer counts.
+func TestEditorSearchStepAndCount(t *testing.T) {
+	s, sh := newEditor(Opts{Search: true})
+	s.setContent("one foo\nfoo foo\nbar")
+	s.SetSize(sh, 60, 12)
+	edit := s.searchEdit(sh)
+	lineEditKey(edit, sh, keyMsg("foo"))
+	s.curY, s.curX = 0, 0
+	if got := ansi.Strip(s.searchTrailer()); got != "3 matches  ↑ ↓" {
+		t.Fatalf("trailer = %q", got)
+	}
+
+	want := []struct{ row, col int }{{0, 4}, {1, 0}, {1, 4}, {0, 4}}
+	for i, w := range want {
+		lineEditKey(edit, sh, keyMsg("down"))
+		if s.curY != w.row || s.curX != w.col || s.selectedText() != "foo" {
+			t.Fatalf("down #%d: caret (%d,%d) selection %q, want (%d,%d) foo", i+1, s.curY, s.curX, s.selectedText(), w.row, w.col)
+		}
+	}
+	if got := ansi.Strip(s.searchTrailer()); got != "1/3  ↑ ↓" {
+		t.Fatalf("trailer on first match = %q", got)
+	}
+	lineEditKey(edit, sh, keyMsg("up"))
+	if s.curY != 1 || s.curX != 4 {
+		t.Fatalf("up from the first match should wrap to the last, caret (%d,%d)", s.curY, s.curX)
+	}
+	if edit.Value() != "foo" || s.searchQuery != "foo" {
+		t.Fatalf("arrows changed the query: field %q, query %q", edit.Value(), s.searchQuery)
+	}
+
+	setSearchQuery(s, "zzz")
+	if got := ansi.Strip(s.searchTrailer()); got != "no matches  ↑ ↓" {
+		t.Fatalf("trailer = %q", got)
+	}
+	s.searchStep(1) // nothing to select
+}
+
+// TestEditorRetainedSearchBarButtons: ↓/↑ on the retained bar step through matches and
+// keep the bar unfocused; the query side still reopens the field.
+func TestEditorRetainedSearchBarButtons(t *testing.T) {
+	s, sh := newEditor(Opts{Search: true})
+	s.setContent("foo\nfoo")
+	setSearchQuery(s, "foo")
+	s.SetPaneOrigin(0, 0)
+	s.SetSize(sh, 40, 10)
+	if got := ansi.Strip(strings.Split(s.searchBar(), "\n")[1]); !strings.HasSuffix(strings.TrimRight(got, " │"), "2 matches  ↑ ↓") {
+		t.Fatalf("retained bar row %q", got)
+	}
+	y := 10 - editorSearchBarH + 1
+	right := 2 + 40 - 4 // content's right edge
+	click := func(x int) core.Action {
+		_, act := s.Update(sh, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+		return act
+	}
+	if act := click(right - 1); act.Msg != nil || s.searchEditing {
+		t.Fatal("↓ should not open the search field")
+	}
+	if s.curY != 1 || s.selectedText() != "foo" {
+		t.Fatalf("↓ from caret (0,0) should select row 1, caret (%d,%d)", s.curY, s.curX)
+	}
+	click(right - 3)
+	if s.curY != 0 || s.selectedText() != "foo" {
+		t.Fatalf("↑ should select row 0, caret (%d,%d)", s.curY, s.curX)
+	}
+	if act := click(4); act.Msg == nil || !s.searchEditing {
+		t.Fatal("a click on the query should reopen the field")
+	}
+}
+
+// TestEditorSearchOverlayTrailerClick drives the focused field's ↓ button.
+func TestEditorSearchOverlayTrailerClick(t *testing.T) {
+	s, sh := newEditor(Opts{Search: true})
+	s.setContent("a foo")
+	s.SetPaneOrigin(0, 0)
+	s.SetSize(sh, 40, 10)
+	edit := s.searchEdit(sh)
+	edit.SetSize(sh, 80, 24)
+	lineEditKey(edit, sh, keyMsg("foo"))
+	edit.View(sh)
+	x, y, w := edit.Anchor()
+	edit.Update(sh, tea.MouseClickMsg{X: x + w - 3, Y: y + 1, Button: tea.MouseLeft})
+	if s.selectedText() != "foo" {
+		t.Fatalf("overlay ↓ click selected %q", s.selectedText())
+	}
+}
