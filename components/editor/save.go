@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Saving for Screen: the close prompt's save path and the save-as line edit that
+// Saving for Screen: the close popup's save path and the save-as line edit that
 // seeds it with the current name.
 
 // ---------- save ----------
@@ -33,7 +33,7 @@ func (s *Screen) SaveAs(sh *core.Shared) core.Action {
 	return core.Push(s.saveAsEdit(sh))
 }
 
-// saveInPlace is Save under whatever saveExits the caller set: the exit prompt's "y"
+// saveInPlace is Save under whatever saveExits the caller set: the close popup's "y"
 // saves and then exits.
 func (s *Screen) saveInPlace(sh *core.Shared) core.Action {
 	if s.path == "" {
@@ -52,10 +52,9 @@ func (s *Screen) saveInPlace(sh *core.Shared) core.Action {
 	return core.Async(s.diskCheck(&diskSaveIntent{valid: func() bool { return true }, write: write}))
 }
 
-// saveAsEdit builds the filename prompt (ctrl+shift+s, and ctrl+s or the exit prompt's
+// saveAsEdit builds the filename prompt (ctrl+shift+s, and ctrl+s or the close popup's
 // "y" on a buffer with no file): a floating line edit seeded with the full path, over the
-// prompt row. Enter
-// saves under the typed name (a new name is a save-as); blank or esc pops back to
+// pane's bottom rows. Enter saves under the typed name (a new name is a save-as); blank or esc pops back to
 // whatever raised it. saveExits, set by the caller, decides where the save leads.
 //
 // A name different from the buffer's goes through saveAsConfirm first, since the seeded

@@ -21,8 +21,9 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// Screen is a nano-like editor. alt+w closes, prompting to save a dirty buffer (y opens
-// a save-as box seeded with the current name, n discards, esc/c cancels). ctrl+z/ctrl+y
+// Screen is a nano-like editor. alt+w closes, asking about a dirty buffer in a modal
+// popup (y saves — a buffer with no file asks for a name first — n discards, esc/c
+// cancels). ctrl+z/ctrl+y
 // undo and redo; ctrl+c/x/v copy, cut and paste (the whole line with no selection) and
 // ctrl+a selects all; tab over a multi-line selection indents it (alt+, / alt+. / alt+i:
 // see indent.go). The left mouse button places the caret and selects (drag, double,
@@ -56,10 +57,9 @@ type Screen struct {
 	scrY       int      // topmost visible buffer line
 	scrX       int      // leftmost visible DISPLAY cell (tabs expand, so cells ≠ runes)
 
-	loaded      bool // the one-time file read has been dispatched; a re-Init must not re-read
-	dirty       bool // buffer differs from what was loaded/last saved
-	confirmExit bool // the nano-style save/discard/cancel prompt is showing
-	saveExits   bool // the save in flight came from the exit prompt, so it ends in exit
+	loaded    bool // the one-time file read has been dispatched; a re-Init must not re-read
+	dirty     bool // buffer differs from what was loaded/last saved
+	saveExits bool // the save in flight came from the close popup, so it ends in exit
 
 	hl               Highlighter // latest exact syntax snapshot; nil ⇒ plain render
 	hlFactory        func() Highlighter
@@ -214,8 +214,8 @@ type wrapRow struct {
 //     dismiss the host layout.
 //   - OnRelease binds esc to "keys go elsewhere, buffer stays" (a pane host's focus move).
 //     Nil leaves esc unbound.
-//   - OnSaved is called with the path written after a Save or SaveAs (not the exit
-//     prompt's), so a host can follow a save-as rename.
+//   - OnSaved is called with the path written after a Save or SaveAs (not the close
+//     popup's), so a host can follow a save-as rename.
 //   - Border draws the shared frame with the title as its legend.
 //   - Highlighter overrides ResolveLanguage's highlighter and survives save-as.
 //     Highlighters that do not reconstruct the line exactly are ignored.
@@ -329,7 +329,6 @@ var readEditorClipboard = clipboard.ReadAll
 
 var (
 	editorCursorStyle = lipgloss.NewStyle().Reverse(true)
-	editorPromptStyle = lipgloss.NewStyle().Bold(true)
 )
 
 // editorTabWidth is the display width of a tab. Raw '\t' must never reach View: the
@@ -756,8 +755,7 @@ func (s *Screen) parseHighlight() {
 	s.acceptHighlight(s.hl, s.editSeq)
 }
 
-// Update handles load/save results, mouse and keys (only y/n/esc/c while the exit prompt
-// is up). An edit schedules a repaint after the highlighter's quiet window.
+// Update handles load/save results, mouse and keys. An edit schedules a repaint after the highlighter's quiet window.
 func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, action core.Action) {
 	wasDirty := s.dirty
 	seq := s.editSeq
@@ -820,7 +818,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 			return s, core.Action{}
 		}
 		if m.err != nil {
-			s.confirmExit = false
 			sh.Log("editor: save failed: " + m.err.Error())
 			return s, core.SetStatus("save failed: " + m.err.Error())
 		}
@@ -830,8 +827,7 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		}
 		s.savedRevision = m.revision
 		s.dirty = s.revision != s.savedRevision
-		s.confirmExit = false
-		// An exit-prompt save ends the session; any other keeps the buffer, caret and scroll.
+		// A close-popup save ends the session; any other keeps the buffer, caret and scroll.
 		if s.saveExits {
 			return s, s.exit(sh)
 		}
@@ -866,7 +862,7 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 	// A bracketed paste shares the clipboard paste's insert: one undo step, selection
 	// replaced, no auto-pairing, no structured Enter.
 	case tea.PasteMsg:
-		if s.confirmExit || m.Content == "" {
+		if m.Content == "" {
 			return s, core.Action{}
 		}
 		s.resetMouseGesture()
@@ -879,9 +875,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 	case tea.KeyPressMsg:
 		return s.key(sh, m)
 	case tea.MouseClickMsg:
-		if s.confirmExit {
-			return s, core.Action{}
-		}
 		s.cancelCompletionSession()
 		mm := m.Mouse()
 		switch mm.Button {
@@ -923,9 +916,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		}
 		return s, core.Action{}
 	case tea.MouseWheelMsg:
-		if s.confirmExit {
-			return s, core.Action{}
-		}
 		// The wheel is browse-only and only while focused: mouse msgs are
 		// broadcast to every pane, so an unfocused editor must not roll.
 		if s.focused {
@@ -945,9 +935,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 			s.resetMouseGesture() // the release was lost; the button is no longer held
 			return s, core.Action{}
 		}
-		if s.confirmExit {
-			return s, core.Action{}
-		}
 		if s.bar.Dragging() {
 			s.scrY = s.syncBar().DragTo(s.barRow(sh, m.Mouse().Y))
 			s.clampScrollBounds()
@@ -959,9 +946,6 @@ func (s *Screen) Update(sh *core.Shared, msg tea.Msg) (screen core.Screen, actio
 		}
 		return s, core.Action{}
 	case tea.MouseReleaseMsg:
-		if s.confirmExit {
-			return s, core.Action{}
-		}
 		if s.dragging {
 			mm := m.Mouse()
 			s.extendDrag(sh, mm.X, mm.Y)
@@ -998,9 +982,6 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	}
 	s.resetMouseGesture()
 	s.clickCount = 0 // typing between two clicks makes the second one a fresh first click
-	if s.confirmExit {
-		return s, s.exitPromptKey(sh, k)
-	}
 	if act, ok := s.commandKey(sh, k, m); ok {
 		return s, act
 	}
@@ -1021,29 +1002,36 @@ func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Acti
 	return s, act
 }
 
-// Close is alt+w, exported for a host's menu: a clean buffer exits, a dirty one asks to
-// save first (the exit prompt).
+// Close is alt+w, exported for a host's menu: a clean buffer exits, a dirty one asks
+// first (closePopup). The popup holds the editor itself, so it answers even while the
+// host shows something else in the editor's place.
 func (s *Screen) Close(sh *core.Shared) core.Action {
 	if !s.dirty {
 		return s.exit(sh)
 	}
-	s.confirmExit = true
-	return core.Action{}
+	return core.Push(s.closePopup())
 }
 
-// exitPromptKey answers the "save before exit?" prompt.
-func (s *Screen) exitPromptKey(sh *core.Shared, k string) core.Action {
-	switch k {
-	case "y", "Y":
-		s.saveExits = true
-		return s.saveInPlace(sh)
-	case "n", "N":
-		s.confirmExit = false
-		return s.exit(sh)
-	case "esc", "c":
-		s.confirmExit = false
+// closePopup is the save/discard/cancel modal over a dirty close: y saves (via the save-as
+// box for a buffer with no file) and exits once the write lands, n exits without saving,
+// esc/c pops back to the buffer.
+func (s *Screen) closePopup() *components.DialogScreen {
+	body := "save changes to " + s.title + " before closing?"
+	return &components.DialogScreen{
+		Title:  "unsaved changes",
+		Render: func(*core.Shared) string { return body },
+		OnYes: func(sh *core.Shared) core.Action {
+			s.saveExits = true
+			return core.Seq(core.Pop(), s.saveInPlace(sh))
+		},
+		OnNo: func(sh *core.Shared) core.Action { return core.Seq(core.Pop(), s.exit(sh)) },
+		Help: []key.Binding{
+			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save & close")),
+			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "discard & close")),
+			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
+		},
+		Overlay: true,
 	}
-	return core.Action{}
 }
 
 // commandKey handles keys that run before the selection pre-pass and outside the edit
@@ -1207,16 +1195,9 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 	return core.Action{}, true
 }
 
-// HelpView shows the editing hints, swapped for the prompt's y/n/c answers while the
-// exit prompt is up and for the search keys while the search field is open.
+// HelpView shows the editing hints, swapped for the search keys while the search field
+// is open.
 func (s *Screen) HelpView(sh *core.Shared) string {
-	if s.confirmExit {
-		return sh.BindingHelp([]key.Binding{
-			key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "save as… & exit")),
-			key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "discard & exit")),
-			key.NewBinding(key.WithKeys("esc", "c"), key.WithHelp("esc", "cancel")),
-		})
-	}
 	if s.searchEditing {
 		return sh.BindingHelp([]key.Binding{
 			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑/↓", "prev/next match")),

@@ -277,6 +277,31 @@ func TestDialogNoPops(t *testing.T) {
 	}
 }
 
+// TestDialogOnNo: with OnNo set, n runs it (discard) while esc and c still pop (cancel).
+func TestDialogOnNo(t *testing.T) {
+	ran := 0
+	d := &DialogScreen{
+		Render: func(*core.Shared) string { return "" },
+		OnNo:   func(*core.Shared) core.Action { ran++; return core.Action{} },
+	}
+	for _, k := range []string{"n", "N"} {
+		if _, act := d.Update(core.NewShared(nil), keyMsg(k)); reflect.DeepEqual(act, core.Pop()) {
+			t.Errorf("%s with OnNo should run it, not pop", k)
+		}
+	}
+	if ran != 2 {
+		t.Errorf("n/N should run OnNo, ran %d", ran)
+	}
+	for _, k := range []string{"esc", "c"} {
+		if _, act := d.Update(core.NewShared(nil), keyMsg(k)); !reflect.DeepEqual(act, core.Pop()) {
+			t.Errorf("%s should still cancel (pop), got %+v", k, act)
+		}
+	}
+	if ran != 2 {
+		t.Errorf("cancel keys must not run OnNo, ran %d", ran)
+	}
+}
+
 func TestDialogOnKey(t *testing.T) {
 	handled := false
 	d := &DialogScreen{

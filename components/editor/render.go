@@ -189,21 +189,16 @@ func (s *Screen) gutter() int {
 }
 
 // body is the viewport: exactly s.h rows of exactly s.w cells (a wider row would wrap in
-// the terminal and shift every later frame), plus the exit prompt as the last row when
-// up. When the buffer overflows, the rightmost column is the scrollbar. Only rowCount and
-// renderRow know what a row is (a line, or a wrapped chunk).
+// the terminal and shift every later frame). When the buffer overflows, the rightmost
+// column is the scrollbar. Only rowCount and renderRow know what a row is (a line, or a wrapped chunk).
 func (s *Screen) body() string {
 	s.ensureLiveSnapshot()
-	rows := s.h
-	if s.confirmExit {
-		rows-- // the prompt takes the last body row
-	}
 	bar := s.barVisible()
 	total := s.rowCount()
 	sb := s.syncBar()
 	pad := strings.Repeat(" ", s.gutter())
 	var b strings.Builder
-	for i := 0; i < rows; i++ {
+	for i := 0; i < s.h; i++ {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
@@ -219,17 +214,6 @@ func (s *Screen) body() string {
 		}
 		if bar {
 			b.WriteString(sb.Cell(i))
-		}
-	}
-	if s.confirmExit {
-		if rows > 0 {
-			b.WriteByte('\n')
-		}
-		prompt := editorPromptStyle.Render("Save modified buffer? (y)es (n)o (c)ancel")
-		b.WriteString(pad + prompt)
-		if bar {
-			b.WriteString(strings.Repeat(" ", max(s.textW()-lipgloss.Width(prompt), 0)))
-			b.WriteString(sb.Cell(s.h - 1))
 		}
 	}
 	return b.String()

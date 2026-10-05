@@ -12,8 +12,8 @@ import (
 //   - true: a centered popup over the screen below (core.Overlayer) with its hints inside
 //     the box; the background's help bar and breadcrumb stay.
 //
-// Its body comes from a closure. OnYes runs on y/enter, esc/n pops, and other keys go to
-// OnKey.
+// Its body comes from a closure. OnYes runs on y/enter, esc/n pops (n runs OnNo instead
+// when set), and other keys go to OnKey.
 type DialogScreen struct {
 	Title      string // in-body title bar (confirm) / accent line (overlay); omitted ⇒ none
 	Crumb      string // CONFIRM ONLY: breadcrumb segment (CrumbLabel); omitted ⇒ "Conf"
@@ -21,6 +21,9 @@ type DialogScreen struct {
 	Render     func(*core.Shared) string
 	OnYes      func(*core.Shared) core.Action
 	OnKey      func(*core.Shared, string) core.Action // handles keys other than the reserved confirm/cancel keys
+	// OnNo, when set, makes n/N run it instead of cancelling (a save/discard/cancel
+	// dialog); esc and c still cancel.
+	OnNo func(*core.Shared) core.Action
 	// OnQuit, when set, answers the quit gate while the dialog is on top, so a quit confirm
 	// keeps Quit/ForceQuit as force-quit rather than stacking another popup. nil abstains.
 	OnQuit  func(*core.Shared) (core.Action, bool)
@@ -82,6 +85,8 @@ func (s *DialogScreen) Update(sh *core.Shared, msg tea.Msg) (core.Screen, core.A
 			return s, s.OnYes(sh)
 		}
 		return s, core.Pop()
+	case s.OnNo != nil && (k == "n" || k == "N"):
+		return s, s.OnNo(sh)
 	case core.MatchKey(k, core.Keys.No):
 		return s, core.Pop()
 	}

@@ -1208,54 +1208,46 @@ func TestEditorExitCleanPops(t *testing.T) {
 	if act.Msg == nil {
 		t.Fatal("alt+w on a clean buffer should pop (non-nil nav msg)")
 	}
-	if s.confirmExit {
-		t.Fatal("no prompt for a clean buffer")
-	}
 }
 
-// TestEditorExitPrompt covers the dirty alt+w flow: the prompt shows, c cancels,
-// n discards and pops, y saves and pops after the async write lands.
-func TestEditorExitPrompt(t *testing.T) {
+// TestEditorClosePopup covers the dirty alt+w flow: a modal popup naming the buffer is
+// pushed (the buffer stays as it was), c/esc cancel without exiting, and y saves and
+// exits after the async write lands.
+func TestEditorClosePopup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "saved.txt")
-	s, sh := newEditor(Opts{Path: path})
+	exited := 0
+	s, sh := newEditor(Opts{Path: path, OnExit: func(*core.Shared) core.Action { exited++; return core.Action{} }})
 	typeRunes(s, 'h', 'i')
 	s.key(nil, keyMsg("enter"))
 	typeRunes(s, 'y', 'o')
 
-	s.key(nil, keyMsg("alt+w"))
-	if !s.confirmExit {
-		t.Fatal("alt+w on a dirty buffer should show the save prompt")
+	_, act := s.key(nil, keyMsg("alt+w"))
+	if act.Msg == nil || exited != 0 {
+		t.Fatal("alt+w on a dirty buffer should push the popup, not exit")
 	}
-
-	// While the prompt is up, other keys are swallowed.
-	typeRunes(s, 'z')
 	if got := buffer(s); got != "hi\nyo" {
-		t.Fatalf("prompt mode must swallow typing, buffer = %q", got)
+		t.Fatalf("raising the popup must not touch the buffer, got %q", got)
+	}
+	popup := s.closePopup()
+	if !popup.Overlay || !strings.Contains(ansi.Strip(popup.View(sh)), "saved.txt") {
+		t.Fatalf("the popup should be a modal naming the buffer, got:\n%s", ansi.Strip(popup.View(sh)))
 	}
 
-	// c cancels back to editing.
-	s.key(nil, keyMsg("c"))
-	if s.confirmExit {
-		t.Fatal("c should cancel the prompt")
+	for _, k := range []string{"c", "esc"} {
+		popup.Update(sh, keyMsg(k))
+		if exited != 0 || !s.dirty {
+			t.Fatalf("%s should cancel without exiting", k)
+		}
 	}
 
-	// y pushes the filename prompt (nano's "File Name to Write"), seeded with the
-	// buffer's name; enter saves, and the async result pops the screen.
-	s.key(nil, keyMsg("alt+w"))
-	_, act := s.Update(sh, keyMsg("y"))
-	if act.Msg == nil || act.Cmd != nil {
-		t.Fatal("y should push the filename prompt (nav msg, no cmd)")
-	}
-	edit := s.saveAsEdit(sh)
-	if got := edit.Value(); got != path {
-		t.Fatalf("the filename prompt should seed the full path, got %q", got)
-	}
-	if act := edit.OnDone(sh, path); act.Msg == nil {
-		t.Fatal("enter on the filename prompt should navigate (pop + save)")
+	// y saves in place (the buffer has a file) and the async result exits.
+	_, act = popup.Update(sh, keyMsg("y"))
+	if act.Msg == nil || exited != 0 {
+		t.Fatal("y should pop the popup and start the save, not exit yet")
 	}
 	_, act = s.Update(sh, s.saveCmd()())
-	if act.Msg == nil {
-		t.Fatal("a successful save should pop (non-nil nav msg)")
+	if exited != 1 {
+		t.Fatalf("a successful close-popup save should exit (hook fired %d)", exited)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -1267,23 +1259,31 @@ func TestEditorExitPrompt(t *testing.T) {
 	if s.dirty {
 		t.Fatal("buffer should be clean after a successful save")
 	}
-	if s.confirmExit {
-		t.Fatal("a completed save must clear the prompt")
+}
+
+// TestEditorClosePopupNoFile: y on a buffer with no file asks for a name (nano's "File
+// Name to Write") rather than writing anywhere.
+func TestEditorClosePopupNoFile(t *testing.T) {
+	s, sh := newEditor(Opts{})
+	typeRunes(s, 'x')
+	_, act := s.closePopup().Update(sh, keyMsg("y"))
+	if act.Msg == nil || act.Cmd != nil {
+		t.Fatal("y should pop and push the filename prompt (nav msg, no cmd)")
+	}
+	if !s.saveExits {
+		t.Fatal("the filename prompt's save should end in exit")
 	}
 }
 
-// TestEditorDiscardExit: n on the prompt pops without writing, prompt cleared.
+// TestEditorDiscardExit: n on the popup exits without writing.
 func TestEditorDiscardExit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "discarded.txt")
-	s, _ := newEditor(Opts{Path: path})
+	exited := 0
+	s, sh := newEditor(Opts{Path: path, OnExit: func(*core.Shared) core.Action { exited++; return core.Action{} }})
 	typeRunes(s, 'x')
-	s.key(nil, keyMsg("alt+w"))
-	_, act := s.key(nil, keyMsg("n"))
-	if act.Msg == nil {
-		t.Fatal("n should pop (non-nil nav msg)")
-	}
-	if s.confirmExit {
-		t.Fatal("n must clear the prompt")
+	_, act := s.closePopup().Update(sh, keyMsg("n"))
+	if act.Msg == nil || exited != 1 {
+		t.Fatal("n should pop the popup and exit")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("n must not write the file")
@@ -1306,9 +1306,6 @@ func TestEditorSaveKey(t *testing.T) {
 		})
 		typeRunes(s, 'h', 'i')
 		s.key(sh, keyMsg("ctrl+s"))
-		if s.confirmExit {
-			t.Fatal("ctrl+s must not raise the exit prompt")
-		}
 		s.Update(sh, s.saveCmd()())
 		if exited != 0 {
 			t.Fatalf("ctrl+s must not exit (hook fired %d)", exited)
@@ -1524,12 +1521,11 @@ func TestEditorOnExitHook(t *testing.T) {
 		fired := 0
 		hook := func(*core.Shared) core.Action { fired++; return core.Action{} }
 		path := filepath.Join(t.TempDir(), "discarded.txt")
-		s, _ := newEditor(Opts{Path: path, OnExit: hook})
+		s, sh := newEditor(Opts{Path: path, OnExit: hook})
 		typeRunes(s, 'x')
-		s.key(nil, keyMsg("alt+w"))
-		_, act := s.key(nil, keyMsg("n"))
-		if fired != 1 || act.Msg != nil {
-			t.Fatalf("n should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
+		s.closePopup().Update(sh, keyMsg("n"))
+		if fired != 1 {
+			t.Fatalf("n should run the hook (fired %d)", fired)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatal("n must not write the file")
@@ -1542,14 +1538,9 @@ func TestEditorOnExitHook(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "saved.txt")
 		s, sh := newEditor(Opts{Path: path, OnExit: hook})
 		typeRunes(s, 'h', 'i')
-		s.key(nil, keyMsg("alt+w"))
-		// Through the real "y": it is what marks this save as the exit path's, and
-		// so what makes the write end in the hook rather than in a plain save. It
-		// needs the real Shared — the prompt it pushes anchors off the body.
-		s.key(sh, keyMsg("y"))
-		if act := s.saveAsEdit(sh).OnDone(sh, path); act.Msg == nil {
-			t.Fatal("enter on the filename prompt should navigate (pop + save)")
-		}
+		// Through the popup's real "y": it is what marks this save as the exit path's,
+		// and so what makes the write end in the hook rather than in a plain save.
+		s.closePopup().Update(sh, keyMsg("y"))
 		_, act := s.Update(sh, s.saveCmd()())
 		if fired != 1 || act.Msg != nil {
 			t.Fatalf("a successful save should run the hook (fired %d) and not pop (msg %v)", fired, act.Msg)
@@ -1574,8 +1565,6 @@ func TestEditorSaveAs(t *testing.T) {
 	s.Update(sh, s.Init(sh)())
 	typeRunes(s, '!')
 
-	s.key(nil, keyMsg("alt+w"))
-	s.key(sh, keyMsg("y"))
 	edit := s.saveAsEdit(sh)
 	if got := edit.Value(); got != old {
 		t.Fatalf("the prompt should seed the full path, got %q", got)
@@ -1600,8 +1589,7 @@ func TestEditorSaveAs(t *testing.T) {
 
 	scratch, sh2 := newEditor(Opts{})
 	typeRunes(scratch, 'n', 'o')
-	scratch.key(nil, keyMsg("alt+w"))
-	scratch.key(sh2, keyMsg("y"))
+	scratch.closePopup().Update(sh2, keyMsg("y"))
 	edit2 := scratch.saveAsEdit(sh2)
 	if got := edit2.Value(); got != "" {
 		t.Fatalf("a scratch buffer's prompt starts empty, got %q", got)
@@ -1795,17 +1783,6 @@ func TestEditorWheelFocus(t *testing.T) {
 	wheel(s, sh, tea.MouseWheelDown)
 	if s.scrY != editorWheelStep {
 		t.Fatalf("focused wheel down → scrY %d, want %d", s.scrY, editorWheelStep)
-	}
-
-	s.dirty = true
-	s.key(nil, keyMsg("alt+w"))
-	if !s.confirmExit {
-		t.Fatal("dirty alt+w should raise the exit prompt")
-	}
-	before := s.scrY // raising the prompt re-clamps the view to the caret
-	wheel(s, sh, tea.MouseWheelDown)
-	if s.scrY != before {
-		t.Fatalf("the prompt suspends the wheel: scrY %d, want %d", s.scrY, before)
 	}
 }
 
@@ -2538,11 +2515,10 @@ func TestEditorEditItems(t *testing.T) {
 	fired := 0
 	c, _ := newEditor(Opts{OnExit: func(*core.Shared) core.Action { fired++; return core.Action{} }})
 	typeRunes(c, 'x')
-	c.Close(nil)
-	if fired != 0 || !c.confirmExit {
+	if act := c.Close(nil); fired != 0 || act.Msg == nil {
 		t.Fatal("Close on a dirty buffer should ask first")
 	}
-	c.confirmExit, c.dirty = false, false
+	c.dirty = false
 	c.Close(nil)
 	if fired != 1 {
 		t.Fatal("Close on a clean buffer should exit")
