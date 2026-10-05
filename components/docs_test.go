@@ -168,6 +168,60 @@ func TestRenderMarkdownInlineNesting(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdownTasks: a task box is drawn as a check glyph, replacing a bullet but
+// following an ordered number; a box glued to text is left alone.
+func TestRenderMarkdownTasks(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"open", "- [ ] todo", MarkdownTaskOpen + " todo"},
+		{"done", "- [x] done", MarkdownTaskDone + " done"},
+		{"done upper", "- [X] done", MarkdownTaskDone + " done"},
+		{"empty", "- [ ]", MarkdownTaskOpen + " "},
+		{"ordered", "1. [ ] x", "1. " + MarkdownTaskOpen + " x"},
+		{"glued", "- [x]y", bulletMark + "[x]y"},
+	} {
+		if got := strings.Split(render(tc.src+"\n", 40), "\n")[0]; strings.TrimRight(got, " ") != strings.TrimRight(tc.want, " ") {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// A wrapped task hangs its continuation under the check's two columns.
+	rows := strings.Split(render("- [ ] aaaa bbbb cccc dddd eeee ffff", 20), "\n")
+	if len(rows) < 2 {
+		t.Fatalf("expected the item to wrap, got %q", rows)
+	}
+	if !strings.HasPrefix(rows[1], "  ") || strings.HasPrefix(rows[1], "   ") {
+		t.Errorf("continuation should hang two columns, got %q", rows[1])
+	}
+}
+
+// TestRenderMarkdownNestedLists: "*" and "+" are bullets too, nested items indent two
+// columns per level with that level's glyph, and unindented prose closes the list.
+func TestRenderMarkdownNestedLists(t *testing.T) {
+	b0, b1, b2 := MarkdownBullets[0], MarkdownBullets[1], MarkdownBullets[2]
+	src := "* a\n  + b\n    - c\n  - [x] d\n1. e\n   1. f\n- g\n\ntext\n\n  - h\n"
+	want := []string{
+		b0 + " a", "  " + b1 + " b", "    " + b2 + " c", "  " + MarkdownTaskDone + " d",
+		"1. e", "  1. f", b0 + " g", "", "text", "", b0 + " h",
+	}
+	got := strings.Split(render(src, 40), "\n")
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+
+	// Spaced rules are rules, not bullets.
+	for _, rule := range []string{"* * *", "- - -", "_ _ _"} {
+		if out := render(rule+"\n", 20); out != strings.Repeat("─", 20) {
+			t.Errorf("%q should be a rule, got %q", rule, out)
+		}
+	}
+
+	// A wrapped nested item hangs under its own text, past the nesting indent.
+	rows := strings.Split(render("- a\n  - aaaa bbbb cccc dddd eeee ffff", 20), "\n")
+	if len(rows) < 3 || !strings.HasPrefix(rows[2], "    ") || strings.HasPrefix(rows[2], "     ") {
+		t.Errorf("continuation should hang four columns, got %q", rows)
+	}
+}
+
 // TestRenderMarkdownLists: bullets get the bullet mark, ordered items keep the
 // author's own number, and continuation rows hang under the marker's width.
 func TestRenderMarkdownLists(t *testing.T) {

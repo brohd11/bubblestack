@@ -34,8 +34,9 @@ var inlineAny = regexp.MustCompile(
 // marker, which is kept verbatim rather than renumbered.
 var orderedItem = regexp.MustCompile(`^(\d+[.)])\s+`)
 
-// themeBreak matches a thematic break line: three or more of one of "-", "*", "_".
-var themeBreak = regexp.MustCompile(`^(-{3,}|\*{3,}|_{3,})$`)
+// themeBreak matches a thematic break line: three or more of one of "-", "*", "_",
+// optionally spaced ("* * *"). It is tested before bullets, which share the characters.
+var themeBreak = regexp.MustCompile(`^(-( *-){2,}|\*( *\*){2,}|_( *_){2,})$`)
 
 // subheading matches headings below "##". They share one style: a terminal has no type
 // sizes to tell six levels apart.
@@ -62,7 +63,9 @@ const (
 //
 //	# / ## / ###+   headings (accent; ### and deeper dimmed one step)
 //	--- *** ___     a full-width rule
-//	- item, 1. item bullets and numbered items with a hanging indent
+//	- * + item, 1.  bullets and numbered items with a hanging indent, nested two
+//	                columns per level, bullets cycling • ◦ ▪ by depth
+//	- [ ], - [x]    task items: the box drawn as ☐/☑ in place of the bullet
 //	```, ~~~        fenced code: muted, hard-wrapped, never re-flowed
 //	> quote         muted paragraph with a bar down every row
 //	| a | b |       GFM table; the delimiter row is required and sets alignment
@@ -142,6 +145,7 @@ type docRenderer struct {
 	fence   string   // the marker that opened the current code fence; "" ⇒ not in one
 	lang    string   // the current fence's language tag ("go" in "```go"); "" ⇒ none
 	code    []string // the fenced lines accumulated for CodeBlockRenderer (nil ⇒ streamed)
+	lists   []int    // marker columns of the open list items, outermost first (see listDepth)
 
 	// The source→row map (see RenderMarkdownMapped, the one place a docRenderer is
 	// built). marks is indexed by source line, -1 until that line's row is known.
@@ -193,6 +197,13 @@ func (r *docRenderer) line(line, next string) {
 		return
 	}
 
+	// Unindented text that is not an item ends any list, so the next one starts at the top
+	// level again.
+	if trimmed != "" && line == trimmed && (themeBreak.MatchString(trimmed) ||
+		!bulletItem(trimmed) && !orderedItem.MatchString(trimmed)) {
+		r.lists = nil
+	}
+
 	switch {
 	case trimmed == "":
 		r.flush()
@@ -222,13 +233,13 @@ func (r *docRenderer) line(line, next string) {
 		r.flush()
 		r.table = true
 		r.pending = append(r.pending, trimmed)
-	case strings.HasPrefix(trimmed, "- "):
-		r.item(bulletMark, strings.TrimPrefix(trimmed, "- "))
+	case bulletItem(trimmed):
+		r.item(line, "", trimmed[2:])
 	case orderedItem.MatchString(trimmed):
 		// The author's own number is kept rather than renumbered: the source is
 		// what they'll compare the preview against.
 		m := orderedItem.FindStringSubmatch(trimmed)
-		r.item(m[1]+" ", trimmed[len(m[0]):])
+		r.item(line, m[1]+" ", trimmed[len(m[0]):])
 	case r.marker != "" && line != trimmed:
 		// An indented line under a list item continues it rather than starting a paragraph.
 		r.pending = append(r.pending, trimmed)
@@ -237,12 +248,74 @@ func (r *docRenderer) line(line, next string) {
 	}
 }
 
-// item starts a list block: marker is the hanging prefix (already spaced), text its
-// first line.
-func (r *docRenderer) item(marker, text string) {
+// bulletItem reports whether a trimmed line opens a "-", "*" or "+" bullet item.
+func bulletItem(trimmed string) bool {
+	return len(trimmed) >= 2 && strings.ContainsRune("-*+", rune(trimmed[0])) && trimmed[1] == ' '
+}
+
+// item starts a list block from its source line: marker is an ordered item's number
+// (already spaced) or "" for a bullet, text the item's first line. The item is indented
+// two columns per level of nesting, and a bullet takes its level's glyph.
+func (r *docRenderer) item(line, marker, text string) {
 	r.flush()
-	r.marker = marker
+	depth, bullet := r.listDepth(leadCols(line)), marker == ""
+	if bullet {
+		marker = MarkdownBullets[depth%len(MarkdownBullets)] + " "
+	}
+	if glyph, rest := taskBox(text); glyph != "" {
+		// A bulleted task drops its bullet for the check alone; an ordered one keeps its number.
+		if bullet {
+			marker = ""
+		}
+		marker, text = marker+glyph+" ", rest
+	}
+	r.marker = strings.Repeat(indent, depth) + marker
 	r.pending = []string{text}
+}
+
+// listDepth is the nesting level of a list item whose marker sits at column col, and
+// records it as the innermost open item. An item at least two columns right of the open
+// one nests under it; anything less is its sibling or closes it.
+func (r *docRenderer) listDepth(col int) int {
+	for len(r.lists) > 0 && col < r.lists[len(r.lists)-1]+2 {
+		r.lists = r.lists[:len(r.lists)-1]
+	}
+	r.lists = append(r.lists, col)
+	return len(r.lists) - 1
+}
+
+// leadCols is the width of a line's leading whitespace, a tab counting four columns.
+func leadCols(line string) int {
+	n := 0
+	for _, c := range line {
+		switch c {
+		case ' ':
+			n++
+		case '\t':
+			n += 4
+		default:
+			return n
+		}
+	}
+	return n
+}
+
+// taskBox reads a leading "[ ]"/"[x]" checkbox off a list item's text: its glyph and the
+// text after it, or "" when there is none. The box has to be followed by a space or end
+// the text — "[x]y" is text.
+func taskBox(text string) (glyph, rest string) {
+	if len(text) < 3 || (len(text) > 3 && text[3] != ' ') {
+		return "", text
+	}
+	switch text[:3] {
+	case "[ ]":
+		glyph = MarkdownTaskOpen
+	case "[x]", "[X]":
+		glyph = MarkdownTaskDone
+	default:
+		return "", text
+	}
+	return glyph, strings.TrimLeft(text[3:], " ")
 }
 
 // fenceMarker is the fence run ("```" or "~~~") opening or closing a code block on this
@@ -562,7 +635,12 @@ func CurrentMarkdownStyles() MarkdownStyles {
 const (
 	MarkdownBullet   = "•"
 	MarkdownQuoteBar = "│"
+	MarkdownTaskOpen = "☐"
+	MarkdownTaskDone = "☑"
 )
+
+// MarkdownBullets are the bullet glyphs by list depth, repeating past the last.
+var MarkdownBullets = []string{MarkdownBullet, "◦", "▪"}
 
 // h1Style is the top-level heading: the accent heading underlined, so a page's "#"
 // still outranks the "##" sections under it in a terminal with no type sizes.
