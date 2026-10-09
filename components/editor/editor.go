@@ -100,6 +100,7 @@ type Screen struct {
 	indentWidthExplicit bool       // that width came from Opts: a rename must not replace it
 	autoIndentSpaces    int        // what the resolved profile asks for; 0 ⇒ a literal tab
 	indentGuides        bool       // render leading indent levels without changing buffer geometry
+	kittyKeyboard       bool       // key names are exact; see KeyName
 
 	bordered  bool // Opts.Border: draw the frame instead of the title bar
 	hideTitle bool // host supplies the document label (for example, in a tab bar)
@@ -252,8 +253,12 @@ type Opts struct {
 	Indent          IndentMode
 	IndentWidth     int
 	IndentGuides    bool
-	Wrap            bool
-	LineNumbers     bool
+	// KittyKeyboard says the terminal reports keys through the Kitty protocol, so key names
+	// are exact. False reads legacy bytes the way they were most likely meant: ctrl+h (0x08)
+	// is what ctrl+backspace sends there. See KeyName.
+	KittyKeyboard bool
+	Wrap          bool
+	LineNumbers   bool
 	// OnSignClick handles an unmodified left press on a visible sign. Returning true
 	// consumes the press without moving the caret or changing the selection.
 	OnSignClick func(*core.Shared, SignClick) (core.Action, bool)
@@ -503,6 +508,7 @@ func New(opts Opts) *Screen {
 		indentWidth:         opts.IndentWidth,
 		indentWidthExplicit: opts.IndentWidth > 0,
 		indentGuides:        opts.IndentGuides,
+		kittyKeyboard:       opts.KittyKeyboard,
 	}
 	ed.applyLanguage(opts.Path)
 	return ed
@@ -971,12 +977,32 @@ func editorTypedRune(m tea.KeyPressMsg) (rune, bool) {
 // gesture to alt is a one-line change here.
 func editorExtendClick(m tea.Mouse) bool { return m.Mod.Contains(tea.ModShift) }
 
+// KeyName is the name the editor matches m by, exported so a host classifies keys the
+// same way. Without the Kitty protocol ctrl+backspace arrives as 0x08, decoded as ctrl+h,
+// so ctrl+h is read as ctrl+backspace; with it, ctrl+h is the readline backspace alias.
+// Some terminals (macOS ones among them) drop ctrl from backspace entirely, so
+// alt+shift+backspace is the fallback: legacy terminals send it (and ctrl+alt+backspace)
+// as ESC 0x08, decoded as ctrl+alt+h, whatever kittyKeyboard says.
+func (s *Screen) KeyName(m tea.KeyPressMsg) string {
+	switch k := m.String(); k {
+	case "ctrl+h":
+		if s.kittyKeyboard {
+			return "backspace"
+		}
+		return "ctrl+backspace"
+	case "ctrl+alt+h", "alt+shift+backspace", "ctrl+alt+backspace":
+		return "ctrl+backspace"
+	default:
+		return k
+	}
+}
+
 // key routes one keystroke. Editor-local keys are matched as raw strings (arrows match
 // only the arrow keycodes so k/j/h/l stay typable); the word and line chords mirror
 // bubbles' textinput. shift+tab aliases tab only on a standalone editor: in a pane it is
 // the host's pane key.
 func (s *Screen) key(sh *core.Shared, m tea.KeyPressMsg) (core.Screen, core.Action) {
-	k := m.String()
+	k := s.KeyName(m)
 	if k != "up" && k != "down" && k != "shift+up" && k != "shift+down" {
 		s.wrapGoalValid = false
 	}
@@ -1085,8 +1111,8 @@ func (s *Screen) selectionKey(k string, m tea.KeyPressMsg) bool {
 		}
 	}
 	switch k {
-	case "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
-		"alt+delete", "alt+d", "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h", "ctrl+k":
+	case "backspace", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
+		"alt+delete", "alt+d", "ctrl+u", "ctrl+backspace", "ctrl+k":
 		s.deleteSelection()
 		return true
 	case "tab":
@@ -1136,7 +1162,7 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 		s.insertRunes('\t')
 	case "enter":
 		s.newline()
-	case "backspace", "ctrl+h":
+	case "backspace":
 		if !s.deleteEmptyAutoPair() {
 			s.backspace()
 		}
@@ -1147,8 +1173,8 @@ func (s *Screen) editKey(sh *core.Shared, k string, m tea.KeyPressMsg) (act core
 	case "alt+delete", "alt+d":
 		s.deleteWordForward()
 	// Clear the line up to the caret (cmd+backspace); at column 0 it joins like backspace.
-	// ctrl+alt+h is ctrl+alt+backspace on terminals that send BS; ctrl+u works everywhere.
-	case "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h":
+	// ctrl+u works everywhere; KeyName folds the alt+shift fallback into ctrl+backspace.
+	case "ctrl+u", "ctrl+backspace":
 		if s.curX == 0 {
 			s.backspace()
 		} else {
@@ -1237,10 +1263,10 @@ func (s *Screen) HelpBindings() []key.Binding {
 		// "alt+" rather than "⌥", matching how every other modifier is spelled.
 		key.NewBinding(key.WithKeys("alt+left", "alt+right", "alt+b", "alt+f"), key.WithHelp("alt+←→", "word")),
 		key.NewBinding(key.WithKeys("alt+backspace"), key.WithHelp("alt+backspace", "del word")),
-		// Labelled as pressed: ctrl+alt+h is how the chord decodes on terminals without the
-		// Kitty protocol, and ctrl+u also arrives where no modified backspace does.
-		key.NewBinding(key.WithKeys("ctrl+alt+backspace", "ctrl+alt+h", "ctrl+u"),
-			key.WithHelp("ctrl+alt+backspace", "clear to line start")),
+		// Labelled with alt+shift+backspace, the chord every terminal delivers; KeyName folds
+		// it and ctrl+backspace's legacy forms together, and ctrl+u arrives everywhere too.
+		key.NewBinding(key.WithKeys("alt+shift+backspace", "ctrl+backspace", "ctrl+u"),
+			key.WithHelp("alt+shift+backspace", "clear to line start")),
 		key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "copy")),
 		key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "cut")),
 		key.NewBinding(key.WithKeys("ctrl+v"), key.WithHelp("ctrl+v", "paste")),

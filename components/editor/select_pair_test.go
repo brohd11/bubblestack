@@ -462,7 +462,9 @@ func TestEditorBackspaceDeletesEmptyAutoPairs(t *testing.T) {
 }
 
 func TestEditorBackspaceDeletesManuallyFormedAndNestedPairs(t *testing.T) {
-	s, _ := newEditor(editorTestPairOpts("x.code"))
+	opts := editorTestPairOpts("x.code")
+	opts.KittyKeyboard = true // ctrl+h is the backspace alias, not ctrl+backspace
+	s, _ := newEditor(opts)
 	s.setContent("[]")
 	s.curX, s.wantX = 1, 1
 	s.key(nil, keyMsg("ctrl+h"))

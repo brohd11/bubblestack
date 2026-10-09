@@ -88,7 +88,7 @@ func TestEditorSelectionEditing(t *testing.T) {
 		{"backspace deletes", keyMsg("backspace"), "aef"},
 		{"delete deletes", keyMsg("delete"), "aef"},
 		{"word delete deletes", keyMsg("ctrl+w"), "aef"},
-		{"line-start delete deletes", keyMsg("ctrl+alt+backspace"), "aef"},
+		{"line-start delete deletes", keyMsg("ctrl+backspace"), "aef"},
 		{"line delete deletes", keyMsg("ctrl+k"), "aef"},
 	}
 	for _, tc := range tests {
@@ -871,12 +871,13 @@ func TestEditorWordDelete(t *testing.T) {
 	}
 }
 
-// TestEditorClearToLineStart covers the cmd+backspace gesture. ctrl+alt+backspace and
-// ctrl+u are the same action — the chord a terminal reports differs, the behavior does
+// TestEditorClearToLineStart covers the cmd+backspace gesture. ctrl+backspace, its legacy
+// ctrl+h form, the alt+shift fallback (ctrl+alt+h when legacy-encoded), ctrl+u and
+// ctrl+alt+backspace are the same action — the chord a terminal reports differs, the behavior does
 // not — so both drive every case. With nothing left of the caret there is only the
 // newline to take, which is the one place this departs from readline's ctrl+u.
 func TestEditorClearToLineStart(t *testing.T) {
-	for _, k := range []string{"ctrl+alt+backspace", "ctrl+u"} {
+	for _, k := range []string{"ctrl+backspace", "ctrl+h", "alt+shift+backspace", "ctrl+alt+h", "ctrl+u", "ctrl+alt+backspace"} {
 		t.Run(k, func(t *testing.T) {
 			s, _ := newEditor(Opts{})
 
@@ -1114,10 +1115,10 @@ func TestEditorWordNav(t *testing.T) {
 }
 
 // TestEditorCtrlAliases: the readline-style aliases textinput also honors — ctrl+h
-// backspaces (0x08-sending terminals), ctrl+d forward-deletes, ctrl+e is end. ctrl+a is
-// Select All, not home.
+// backspaces (under KittyKeyboard; legacy terminals send it for ctrl+backspace), ctrl+d
+// forward-deletes, ctrl+e is end. ctrl+a is Select All, not home.
 func TestEditorCtrlAliases(t *testing.T) {
-	s, _ := newEditor(Opts{})
+	s, _ := newEditor(Opts{KittyKeyboard: true})
 	s.setContent("abc")
 	s.curY, s.curX = 0, 2
 

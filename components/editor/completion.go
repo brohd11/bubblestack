@@ -192,8 +192,8 @@ func completionEditingKey(k string, m tea.KeyPressMsg) bool {
 		return true
 	}
 	switch k {
-	case "enter", "backspace", "ctrl+h", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
-		"alt+delete", "alt+d", "ctrl+u", "ctrl+alt+backspace", "ctrl+alt+h", "ctrl+k",
+	case "enter", "backspace", "delete", "ctrl+d", "alt+backspace", "ctrl+w",
+		"alt+delete", "alt+d", "ctrl+u", "ctrl+backspace", "ctrl+k",
 		"shift+tab":
 		return true
 	}
