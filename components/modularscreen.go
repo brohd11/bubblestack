@@ -775,6 +775,17 @@ func (s *ModularScreen) FocusSlot(i int) tea.Cmd {
 	return s.focusSlot(i)
 }
 
+// SlotRect is flat slot i's bounds in View's output, as last rendered (the allocation
+// before the first View), for a host that redraws over the composed view. ok is false
+// for an out-of-range slot or before SetSize.
+func (s *ModularScreen) SlotRect(i int) (x, y, w, h int, ok bool) {
+	if i < 0 || i >= len(s.flat) || len(s.rects) != len(s.flat) {
+		return 0, 0, 0, 0, false
+	}
+	r := s.slotRect(i)
+	return r.x, r.y, r.w, r.h, true
+}
+
 // slotRect is the rect used for hit-testing: the rendered layout once View has run, the
 // allocation before.
 func (s *ModularScreen) slotRect(i int) panelRect {
