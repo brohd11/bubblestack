@@ -3,7 +3,6 @@ module github.com/brohd11/bubblestack
 go 1.26.4
 
 require (
-	github.com/atotto/clipboard v0.1.4
 	github.com/brohd11/goutil v0.2.1
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/sahilm/fuzzy v0.1.3
@@ -12,6 +11,7 @@ require (
 )
 
 require (
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
